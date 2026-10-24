@@ -93,6 +93,38 @@ def draft_layout(source: SourceImage) -> Layout:
     )
 
 
+def remove_redundant_boundary_vertices(points):
+    """Keep the same perimeter, without artificial edge breaks at a doorway.
+
+    Apply only to new image observations, before assigning exterior edge IDs.
+    Never renumber edges of an existing editable layout. Preserve real corners,
+    concavities and backtracking/invalid geometry for normal validation.
+    """
+    tolerance = 1e-8  # metres; numerical cleanup, not architectural snapping
+    boundary = []
+    for point in points:
+        if not boundary or math.dist(point, boundary[-1]) > tolerance:
+            boundary.append(point)
+    if len(boundary) > 1 and math.dist(boundary[0], boundary[-1]) <= tolerance:
+        boundary.pop()
+    changed = True
+    while changed and len(boundary) > 3:
+        changed = False
+        for index, current in enumerate(boundary):
+            before, after = boundary[index-1], boundary[(index+1) % len(boundary)]
+            dx, dy = after[0]-before[0], after[1]-before[1]
+            length = math.hypot(dx, dy)
+            if length <= tolerance:
+                continue
+            along = ((current[0]-before[0])*dx + (current[1]-before[1])*dy) / length
+            perpendicular = abs((current[0]-before[0])*dy - (current[1]-before[1])*dx) / length
+            if perpendicular <= tolerance and 0 <= along <= length:
+                boundary.pop(index)
+                changed = True
+                break
+    return boundary
+
+
 def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: str,
                       info: ExtractionInfo, people_count: int, allow_review=False) -> Layout:
     info = info.model_copy(deep=True)
@@ -175,7 +207,8 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
             furniture = [item for item in furniture if item.id not in member_ids]
             furniture.append(Region(id=members[0].id, polygon=list(piece.exterior.coords)[:-1]))
             info.warnings.append("Joined touching furniture around an enclosed cavity into one solid editable barrier; open aisles were preserved.")
-    floors = [Region(id="floor", polygon=[position(point) for point in drawing.floor_outline])]
+    floors = [Region(id="floor", polygon=remove_redundant_boundary_vertices(
+        [position(point) for point in drawing.floor_outline]))]
     exits = []
     for item in drawing.exits:
         marker = region(item)
