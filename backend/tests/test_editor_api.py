@@ -66,6 +66,7 @@ class EditorAPITests(unittest.TestCase):
         status, page = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("Run simulation", page)
+        self.assertIn('<select id="provider"><option value="claude">Claude</option><option value="gemini">Gemini</option>', page)
         status, script = self.request("GET", "/editor-geometry.js")
         self.assertEqual(status, 200)
         self.assertIn("doorOffset", script)
@@ -191,6 +192,24 @@ class EditorAPITests(unittest.TestCase):
         self.assertTrue(configuration["gemini"]["configured"])
         self.assertFalse(configuration["claude"]["configured"])
         self.assertNotIn("fake-secret-value", json.dumps(configuration))
+
+    def test_omitted_extraction_provider_uses_claude_and_gemini_can_be_selected(self):
+        status, uploaded = self.request("POST", "/api/images", upload_fixture().model_dump())
+        self.assertEqual(status, 200)
+        payload = {"image_id": uploaded["layout"]["source_image"]["id"],
+                   "meters_per_pixel": .02, "scale_confirmed": True}
+
+        def fake_provider(provider, *args):
+            drawing = gemini_fixture() if provider == "gemini" else drawing_fixture()
+            return ExtractedDrawing.model_validate(drawing), f"fake-{provider}"
+
+        with patch("app.services.floorplans.images.extract_drawing", side_effect=fake_provider) as provider:
+            for selection, expected in (({}, "claude"), ({"provider": "gemini"}, "gemini")):
+                with self.subTest(provider=expected):
+                    status, extracted = self.request("POST", "/api/extract", {**payload, **selection})
+                    self.assertEqual(status, 200, extracted)
+                    self.assertEqual(provider.call_args.args[0], expected)
+                    self.assertEqual(extracted["results"][0]["layout"]["extraction"]["provider"], expected)
 
 
 if __name__ == "__main__":

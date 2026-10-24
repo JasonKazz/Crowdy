@@ -328,7 +328,7 @@ class FloorPlanImport(InputModel):
     editor_plan: EditorPlan | None = None
     filename: str | None = None
     image_base64: str | None = None
-    provider: Literal["gemini", "claude"] = "gemini"
+    provider: Literal["gemini", "claude"] = "claude"
     image_width_m: float | None = Field(default=None, gt=0, le=1000)
     extraction_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     manual_scale: ScaleReference | None = None

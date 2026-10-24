@@ -104,7 +104,7 @@ export default function Workspace({
   });
   const [modal, setModal] = useState<"upload" | "help" | "reset" | null>(null);
   const [error, setError] = useState("");
-  const [imageProvider, setImageProvider] = useState("gemini");
+  const [imageProvider, setImageProvider] = useState("claude");
   const [providerStatus, setProviderStatus] = useState<ProviderStatus>({});
   const [providerStatusError, setProviderStatusError] = useState("");
   const [pendingCalibration,setPendingCalibration]=useState<PendingCalibration|null>(null);
@@ -1685,8 +1685,8 @@ export default function Workspace({
             <select id="image-provider" value={imageProvider} disabled={busy}
               aria-describedby={`image-provider-status${providerStatus[imageProvider]?.model ? " image-provider-model" : ""}`}
               onChange={e=>setImageProvider(e.target.value)}>
-              <option value="gemini">{providerLabel("gemini", providerStatus.gemini?.model)}</option>
               <option value="claude">{providerLabel("claude", providerStatus.claude?.model)}</option>
+              <option value="gemini">{providerLabel("gemini", providerStatus.gemini?.model)}</option>
             </select>
             <p id="image-provider-status" className="muted" role="status">
               {providerStatusError || (providerStatus[imageProvider]?.busy

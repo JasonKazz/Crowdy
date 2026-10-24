@@ -50,7 +50,7 @@ class ImportJobTests(unittest.TestCase):
             status=self.wait_terminal(response.json()['job_id'])
         self.assertEqual(status['status'],'failed')
         self.assertIn('No complete layout',status['error'])
-        self.assertFalse(api.import_status()['gemini']['busy'])
+        self.assertFalse(api.import_status()['claude']['busy'])
 
     def test_late_import_result_is_not_reported_as_complete_and_releases_slot(self):
         def late_result(payload, progress):
@@ -64,7 +64,7 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual(status['status'], 'failed')
         self.assertIn('time limit', status['error'])
         self.assertNotIn('result', status)
-        self.assertFalse(api.import_status()['gemini']['busy'])
+        self.assertFalse(api.import_status()['claude']['busy'])
 
     def test_upload_storage_time_consumes_the_same_provider_budget(self):
         from test_images import source
@@ -80,7 +80,7 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual(status['status'], 'failed')
         self.assertIn('time limit', status['error'])
         provider.assert_not_called()
-        self.assertFalse(api.import_status()['gemini']['busy'])
+        self.assertFalse(api.import_status()['claude']['busy'])
 
     def test_vercel_async_upload_returns_the_synchronous_result_without_creating_a_job(self):
         image={'filename':'plan.png','image_base64':'fake','provider':'claude','async_import':True}
@@ -106,7 +106,7 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual(response.status_code,422,response.text)
         self.assertIn('No complete layout',response.json()['detail'])
         self.assertNotIn('job_id',response.json())
-        self.assertFalse(api.import_status()['gemini']['busy'])
+        self.assertFalse(api.import_status()['claude']['busy'])
         job.assert_not_called()
 
     def test_unknown_and_malformed_jobs_are_not_successful(self):
