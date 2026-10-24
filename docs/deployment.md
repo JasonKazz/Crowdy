@@ -33,6 +33,8 @@ Keep the existing Auth0 values in the frontend's **Production** environment and 
 | `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_SECRET` | Existing Auth0 application and session settings. |
 | `CROWDY_BACKEND_URL` | Azure backend URL from the Terraform `backend_url` output. |
 | `CROWDY_BACKEND_TOKEN` | Terraform's sensitive `backend_token` output. |
+| `CROWDY_CROWD_ESTIMATION_URL` | Separate YOLO service URL from `crowd_estimation_url`, when enabled. |
+| `CROWDY_CROWD_ESTIMATION_TOKEN` | Separate sensitive `crowd_estimation_token` output. |
 
 Set the same backend URL/token in `frontend/.env.local` for local frontend development against Azure, then restart Next.js. Retrieve the token privately and keep real environment files and Terraform state out of Git. Never use a `NEXT_PUBLIC_` prefix. Auth0's production callback remains `https://crowdy-calhacks13.vercel.app/auth/callback`, and its logout URL remains `https://crowdy-calhacks13.vercel.app/`. The backend origin needs no Auth0 callback registration.
 
@@ -66,6 +68,29 @@ npm run test:cloud-workspaces
 ```
 
 The auth checks use encrypted synthetic sessions without changing Auth0 users or tenant configuration. The cloud checks create isolated synthetic-account fixtures, exercise workspace CRUD, private source-image round trips, account isolation, mutation origin checks, revision conflicts, and tombstones, then delete the fixtures. No credentials or cookie values are logged. A real browser login/callback still needs a manual Auth0 check. After adding a provider key, separately verify extraction, overlay alignment, scale, and manual measurement.
+
+## Separate crowd-estimation deployment
+
+The still-image service lives in `services/crowd-estimation/` and deploys as a
+separate Container App sharing the registry/environment. It uses its own
+identity with registry-pull access, bearer token, image version, and replica
+settings. It has no workspace-storage access. The model weights are included
+in the image; `/readyz` succeeds after model loading and warmup, and `/healthz`
+supplies liveness.
+
+After the existing Azure foundation is available, use
+`./infra/scripts/deploy-crowd-estimation.sh plan` to review current intent, then
+`./infra/scripts/deploy-crowd-estimation.sh deploy` to build, push, plan, and
+deploy the service. Preserve both ignored deployment-intent files for future
+Terraform runs; see [the infrastructure guide](../infra/README.md). Configure
+the two crowd-estimation frontend values above and redeploy Next.js to connect
+it. The default scales to zero; keep one minimum replica for a warm demo if
+model cold starts exceed the proxy's 55-second deadline.
+
+See [the service guide](../services/crowd-estimation/README.md) for local
+startup, authenticated requests, upload limits, independent tests, and model
+accuracy limitations. Crowd images use multipart data through the frontend;
+they retain the browser's 3 MiB prepared-image budget. Video is not implemented.
 
 ## Persistence and request limits
 

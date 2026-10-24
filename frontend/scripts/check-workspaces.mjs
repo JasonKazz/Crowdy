@@ -119,6 +119,22 @@ assert.deepEqual(native.plan.native,nativePlan.native);
 assert.deepEqual(native.plan.items[0].polygon,nativePlan.items[0].polygon);
 assert.equal(native.scenario.bodyWidth,.6);
 
+// Small YOLO counts must survive the same create/autosave/reload flow as larger
+// populations. Zero remains a review result, outside the simulation contract.
+const smallCrowd = await createWorkspace(ownerA,{name:"Detected small crowd",plan,scenario:{...DEFAULT_SCENARIO,occupancy:1}});
+assert.equal(smallCrowd.scenario.occupancy,1);
+for (let occupancy = 1; occupancy <= 9; occupancy++) {
+  await updateWorkspace(ownerA,smallCrowd.id,{plan,scenario:{...DEFAULT_SCENARIO,occupancy}});
+  assert.equal((await getWorkspace(ownerA,smallCrowd.id)).scenario.occupancy,occupancy,
+    `A ${occupancy}-person estimate must remain valid after saving and reloading`);
+  assert.equal((await listWorkspaces(ownerA)).find(workspace => workspace.id === smallCrowd.id).scenario.occupancy,occupancy);
+}
+const beforeZero = requests.length;
+await assert.rejects(createWorkspace(ownerA,{name:"Invalid zero crowd",plan,scenario:{...DEFAULT_SCENARIO,occupancy:0}}),/scenario/);
+assert.throws(() => updateWorkspace(ownerA,smallCrowd.id,{plan,scenario:{...DEFAULT_SCENARIO,occupancy:0}}),/scenario/);
+assert.equal(requests.length,beforeZero,"Zero occupancy must fail before a cloud mutation");
+assert.equal(cloud.get(serverKey(ownerA,smallCrowd.id)).scenario.occupancy,9,"An invalid estimate must preserve the last saved occupancy");
+
 unavailable = true;
 await assert.rejects(createWorkspace(ownerA,{name:"Offline",plan,scenario:DEFAULT_SCENARIO}),/unavailable/);
 assert.equal(local.size,0,"Network failures must not silently fall back to local storage");
@@ -160,4 +176,4 @@ local.set(legacyKey(corruptOwner),"{bad-json");
 assert.deepEqual(await listWorkspaces(corruptOwner),[]);
 assert.equal(local.get(legacyKey(corruptOwner)),"{bad-json","Corrupt browser data must be kept for recovery without disabling the cloud");
 unsubscribe();
-console.log("Workspace checks passed: HTTP persistence, account isolation, validation, serialized autosaves, optimistic conflicts, cancellation, native drafts, offline errors, optional browser storage, and non-destructive legacy migration.");
+console.log("Workspace checks passed: HTTP persistence, 1–9-person crowd round trips and zero rejection, account isolation, validation, serialized autosaves, optimistic conflicts, cancellation, native drafts, offline errors, optional browser storage, and non-destructive legacy migration.");

@@ -11,3 +11,9 @@ budget_contact_emails = []
 # Pass optional LLM keys using TF_VAR_gemini_api_key and
 # TF_VAR_anthropic_api_key in the shell, rather than adding them here.
 # scripts/deploy.sh maintains deployment.auto.tfvars.json with the app image.
+
+# Optional independent YOLO crowd-estimation service. The deployment script
+# enables it and records its image in crowd-estimation.auto.tfvars.json.
+# Keep 0 to scale to zero; set 1 for a warm demo (additional compute cost).
+crowd_estimation_min_replicas = 0
+crowd_estimation_max_replicas = 2

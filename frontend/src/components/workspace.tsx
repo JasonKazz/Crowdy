@@ -893,7 +893,7 @@ export default function Workspace({
                   <input
                     aria-label="Number of people"
                     type="number"
-                    min="10"
+                    min="1"
                     max="200"
                     value={scenario.occupancy}
                     onChange={(e) => {
@@ -902,7 +902,7 @@ export default function Workspace({
                         setScenario({
                           ...scenario,
                           occupancy: Math.max(
-                            10,
+                            1,
                             Math.min(200, Math.round(value)),
                           ),
                         });
@@ -915,12 +915,12 @@ export default function Workspace({
                 id="occupancy"
                 className="range-input"
                 type="range"
-                min="10"
+                min="1"
                 max="200"
                 value={scenario.occupancy}
                 style={
                   {
-                    "--range-progress": `${((scenario.occupancy - 10) / 190) * 100}%`,
+                    "--range-progress": `${((scenario.occupancy - 1) / 199) * 100}%`,
                   } as React.CSSProperties
                 }
                 onChange={(e) =>
@@ -931,7 +931,7 @@ export default function Workspace({
                 }
               />
               <div className="range-labels">
-                <span>10 people</span>
+                <span>1 person</span>
                 <span>200 people</span>
               </div>
               <label className="field-label" htmlFor="population-seed">Placement seed</label>

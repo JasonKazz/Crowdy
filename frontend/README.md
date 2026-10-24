@@ -42,7 +42,7 @@ Identity scopes are limited to `openid profile email`, and the browser access-to
 
 The home page at `/` uses a single workspace grid. Berkeley studio appears in that grid with a **Sample** tag for everyone; signed-in users see their personal workspaces alongside it under **Your workspaces**. Guests can open the sample and sign in to create their own workspaces. Signed-in users can create an empty layout, copy the sample or an existing workspace, and delete personal workspaces with confirmation.
 
-Inside a workspace, the left sidebar has **Sources** and **Editing** tabs. Sources contains the current floor plan, floor-plan import, and venue-image uploads with previews and removal. Venue images currently return a fixed estimate of **80 people**, regardless of their contents or venue size, and apply that occupancy to the scenario. Personal venue images are stored in private Azure Blob Storage for that account and workspace; sample uploads are temporary. Images are normalized to at most 3 MiB before upload. Editing contains the layout tools and scenario settings, and opens automatically when an object is selected on the canvas.
+Inside a workspace, the left sidebar has **Sources** and **Editing** tabs. Sources contains the current floor plan, floor-plan import, and venue-image uploads with previews and removal. Venue images are sent through the same-origin `/api/crowd-estimates` route to the separate Ultralytics YOLO service. It counts visible detected people in each still image and uses the largest individual image count across all current views; overlapping views are never summed. Estimates from 1 to 200 people update scenario occupancy after all images finish successfully. Zero detections, counts above the simulation limit, or a failed upload/estimate keep the current occupancy and show manual-review guidance. Added images remain available after an estimation failure. Saved images can be estimated again using **Estimate crowd**. People hidden from view or too small may be missed; review occupancy before running. Personal venue images are stored in private Azure Blob Storage for that account and workspace; sample uploads are temporary. Images are normalized to at most 3 MiB before upload. Editing contains the layout tools and scenario settings, and opens automatically when an object is selected on the canvas.
 
 Berkeley studio is the shared sample at `/workspaces/berkeley-studio`, available to everyone. It always starts from the original plan and scenario. Edits in the sample are temporary and never overwrite that shared starting point. Use **Make a copy** while signed in to save a personal version, or export the current layout as JSON.
 
@@ -68,6 +68,15 @@ CROWDY_BACKEND_URL=http://127.0.0.1:8000
 CROWDY_BACKEND_TOKEN=
 ```
 
+The crowd estimator runs as a separate service. Its `POST /v1/estimates` endpoint accepts multipart field `image`; the browser sends the prepared image (at most 3 MiB) to Next.js, which forwards it with the server-only bearer token. Configure these values in `frontend/.env.local` or the frontend deployment environment:
+
+```dotenv
+CROWDY_CROWD_ESTIMATION_URL=http://127.0.0.1:8001
+CROWDY_CROWD_ESTIMATION_TOKEN=
+```
+
+The token is required in every environment, including local development, and must match the estimator. Missing credentials return `503` without forwarding an image. Development defaults to port 8001 when the URL is omitted; production requires an explicit URL. The proxy bounds request and response streams, enforces a 55-second deadline, rejects cross-site uploads, and preserves a busy service's `503` and `Retry-After`. The browser never receives the service token. Live video is not connected yet.
+
 `GET /api/simulations` checks the backend's `/health` endpoint through the same proxy. The browser never needs the backend token or a direct backend URL. A failed or cancelled request keeps the current setup available for another attempt.
 
 Personal layouts and scenarios autosave to the backend after 150 ms of inactivity. Writes are serialized per workspace and include the last acknowledged revision so older saves cannot overwrite newer edits. A conflicting edit in another tab requires reloading. If a save fails, the editor keeps the current changes visible, reports that they are unsaved, and offers retry and export. Navigation from the editor waits for saving; closing the page warns while changes are pending and attempts a bounded best-effort keepalive save. Runs and baselines remain for the current editor session.
@@ -91,6 +100,7 @@ npm run test:backend-simulation
 npm run test:backend-api
 npm run test:workspaces
 npm run test:workspace-sources
+npm run test:crowd-estimates
 npm run test:native-editor
 npm run test:image-upload
 npm run test:auth
@@ -99,13 +109,13 @@ npm run test:cloud-workspaces
 
 The workspace-store checks use isolated HTTP fixtures to verify account isolation, shared-sample protection, native draft preservation, immutable snapshots, ordered writes, optimistic conflicts, cancellation, offline errors, and safe legacy migration. The auth checks use local session fixtures and read-only requests against the running app, including public sample access and server authentication for personal workspace routes. They do not create Auth0 users or change tenant configuration.
 
-The source checks cover accepted image formats and sizes, the fixed crowd estimate, account/workspace scoping, cloud acknowledgement, blob round trips, cancellation, and offline errors without local storage or IndexedDB. Live cloud checks cover the authenticated Next-to-backend connection, session-derived ownership, mutation origin checks, private images, revision conflicts, and deletion tombstones.
+The source checks cover accepted image formats and sizes, account/workspace scoping, cloud acknowledgement, blob round trips, cancellation, and offline errors without local storage or IndexedDB. Crowd-estimation checks use isolated transport fixtures to cover multipart requests, zero counts, max across overlapping views, invalid results, streaming byte limits, origin rejection, bearer forwarding, cancellation, deadlines, unavailable/busy services, and required production configuration. Live cloud checks cover the authenticated Next-to-backend connection, session-derived ownership, mutation origin checks, private images, revision conflicts, and deletion tombstones.
 
 The backend adapter checks include recorded native completed and timed-out runs. HTTP checks exercise the full Next.js-to-Python connection, actual two-exit results, request limits, and invalid-layout recovery. Image-upload checks cover dimensions, the complete base64 request budget, PNG/JPEG fallback, and oversized/non-JSON error handling. Run `.venv/bin/python -m unittest discover -s tests -v` from `backend/` for the Python engine, API, and artifact-storage tests.
 
 ## Deploy to Vercel
 
-The `crowdy-calhacks13` frontend runs on Vercel in the `808-atoms` scope; the Python backend runs on Azure Container Apps. Configure the five Auth0 environment variables on the frontend, with production `APP_BASE_URL=https://crowdy-calhacks13.vercel.app`. Set `CROWDY_BACKEND_URL` to the Azure backend URL and `CROWDY_BACKEND_TOKEN` to the matching Terraform output. Keep these server-only values in Vercel environment settings, not tracked files.
+The `crowdy-calhacks13` frontend runs on Vercel in the `808-atoms` scope; the Python backend runs on Azure Container Apps. Configure the five Auth0 environment variables on the frontend, with production `APP_BASE_URL=https://crowdy-calhacks13.vercel.app`. Set `CROWDY_BACKEND_URL` to the Azure backend URL and `CROWDY_BACKEND_TOKEN` to the matching Terraform output. Set `CROWDY_CROWD_ESTIMATION_URL` to the separate Azure estimator URL and `CROWDY_CROWD_ESTIMATION_TOKEN` to its matching bearer token. Keep these server-only values in Vercel environment settings, not tracked files.
 
 The backend uses managed identity to access private Azure Blob Storage for workspaces and image artifacts. Provider keys and available model IDs belong on that backend; they are still needed before production image extraction. Environment changes require redeployment. See [deployment setup](../docs/deployment.md) for the complete environment matrix and backend-first deployment sequence. Production never falls back to localhost.
 

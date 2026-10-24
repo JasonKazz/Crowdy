@@ -167,7 +167,7 @@ function validScenario(value: unknown): value is Scenario {
     isObject(value) &&
     finite(value.occupancy) &&
     Number.isInteger(value.occupancy) &&
-    value.occupancy >= 10 &&
+    value.occupancy >= 1 &&
     value.occupancy <= 200 &&
     (value.mobility === "standard" || value.mobility === "mixed") &&
     (value.distribution === "uniform" || value.distribution === "workstations") &&

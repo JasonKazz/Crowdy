@@ -34,6 +34,7 @@ build/
 # Local uploads, databases, and generated simulation artifacts.
 /data/
 /backend/data/
+/services/crowd-estimation/models/
 uploads/
 outputs/
 *.sqlite

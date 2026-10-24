@@ -4,7 +4,6 @@ import {
   MAX_VENUE_IMAGE_BYTES,
   VENUE_IMAGE_TYPES,
   validateVenueImageSource,
-  estimateVenueCrowd,
   listVenueImages,
   saveVenueImage,
   deleteVenueImage,
@@ -51,22 +50,6 @@ for (const invalid of [
 ]) {
   assert.throws(() => validateVenueImageSource(invalid), /readable PNG, JPEG, or WebP/,
     "Invalid source metadata must be rejected before it reaches cloud storage");
-}
-
-for (const input of [
-  undefined,
-  null,
-  0,
-  50000,
-  { venueSize: 1, crowdSize: 0 },
-  { venueSize: 1000000, crowdSize: 12000 },
-  source("image/png"),
-  source("image/webp", MAX_VENUE_IMAGE_BYTES),
-  new Blob(["an empty venue"]),
-  new Blob(["a packed venue with hundreds of people"]),
-]) {
-  assert.equal(estimateVenueCrowd(input), 80,
-    "Every image, venue size, and crowd-size input must produce exactly 80");
 }
 
 await assert.rejects(listVenueImages("", "workspace-a"), /Sign in/);
@@ -212,4 +195,4 @@ assert.match(venueImageMigrationNotice("owner-a","workspace-batch"),/Reopen Sour
 assert.equal((await listVenueImages("owner-a","workspace-batch")).length,9);
 assert.equal(venueImageMigrationNotice("owner-a","workspace-batch"),"");
 delete globalThis.window;
-console.log("Workspace source checks passed: format/size validation, fixed 80 estimate, HTTP blob round trips, immutable metadata, cloud acknowledgement, account/workspace isolation, cancellation, offline errors, independence from browser storage, and bounded account-scoped legacy image migration with preserved originals, retry, and deletion tombstones.");
+console.log("Workspace source checks passed: format/size validation, HTTP blob round trips, immutable metadata, cloud acknowledgement, account/workspace isolation, cancellation, offline errors, independence from browser storage, and bounded account-scoped legacy image migration with preserved originals, retry, and deletion tombstones.");

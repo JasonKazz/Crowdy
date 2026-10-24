@@ -15,6 +15,7 @@ be retried after an interrupted deployment.
 | Resource group | `rg-crowdy-student` |
 | Region | `westus2`, allowed by this student subscription |
 | Backend | Container Apps Consumption profile, 0.5 vCPU, 1 GiB, one replica |
+| Optional crowd estimation | Separate Container App, 1 vCPU, 2 GiB per replica, scale 0–2 |
 | Images | Container Registry Basic, admin access disabled |
 | Persistence | StorageV2, Hot, Standard LRS, private `crowdy` blob container |
 | Credentials | User-assigned managed identity with scoped `AcrPull` and `Storage Blob Data Contributor` |
@@ -148,6 +149,84 @@ or print it. Retaining it ensures later plans do not silently remove API keys
 when a new terminal has no `TF_VAR_` exports. Environment exports supplied to the
 script update this saved configuration before the plan is created.
 
+## Deploy the independent crowd-estimation service
+
+`crowd_estimation.tf` adds the still-image YOLO service without changing the
+backend image or deployment flag. It is disabled by default. After the existing
+foundation has been deployed, explicitly build and enable it with:
+
+```bash
+./infra/scripts/check.sh
+./infra/scripts/deploy-crowd-estimation.sh deploy
+```
+
+The separate script uses `services/crowd-estimation/Dockerfile`, stages only its
+Dockerfile, dependency files, and Python application source, and builds Linux
+AMD64 image `crowdy-crowd-estimation:<timestamp>-<commit>` in the existing ACR.
+The current student subscription blocks ACR Tasks, so this script requires a
+running local Docker daemon, then logs into ACR using the signed-in Azure account
+and pushes the image. It does not build or replace the backend image. Terraform
+still reviews the full configuration, so retain the existing backend deployment
+and secrets files.
+
+The service reuses the Container Apps environment and registry. Its separate
+managed identity receives only `AcrPull`; it receives no workspace-storage role,
+volume, or Azure Blob configuration. It exposes HTTPS ingress to container port
+8001 and uses TCP startup, readiness, and liveness probes on that port to avoid
+Azure's HTTP probe scheme normalization. Uvicorn opens its listener only after
+the FastAPI startup lifespan has loaded and warmed the model, so TCP readiness
+still waits for usable inference. The startup probe allows approximately five
+minutes for this warmup. Anonymous HTTP `/healthz` and `/readyz` endpoints remain
+available for callers and manual checks. See [Azure's health probe guidance](https://learn.microsoft.com/en-us/azure/container-apps/health-probes).
+
+Each replica has 1 vCPU and 2 GiB of memory. The default minimum is zero, so the
+first estimate after idle time can wait for model startup. Set these in your
+ignored `infra/terraform.tfvars` to keep a model warm during a demo:
+
+```hcl
+crowd_estimation_min_replicas = 1
+crowd_estimation_max_replicas = 2
+```
+
+A warm minimum adds compute cost beyond the backend estimates above. The HTTP
+scaler targets one concurrent request per replica, with an explicit maximum of
+one or two replicas. The polling interval is 30 seconds and scale-down cooldown
+is 300 seconds. Terraform manages these scaling settings; only Azure's normalized
+Single-mode ingress traffic weights are ignored. Replica scaling is independent
+of the backend.
+
+Terraform sets the following service environment:
+
+```text
+CROWDY_CROWD_ESTIMATION_TOKEN=<separate Container Apps secret>
+CROWDY_YOLO_MODEL=/srv/crowdy/models/yolo26n.pt
+CROWDY_YOLO_DEVICE=cpu
+CROWDY_YOLO_THREADS=2
+```
+
+The model is baked into the image, so replicas do not need to download weights at
+startup. Use the `crowd_estimation_url` output as the service base URL and retrieve
+the sensitive `crowd_estimation_token` output privately for the trusted caller's
+`CROWDY_CROWD_ESTIMATION_TOKEN`. Submit an image to `POST /v1/estimates` as multipart
+field `image`, with `Authorization: Bearer <token>`. Keep the token on the server;
+it must never use a `NEXT_PUBLIC_` variable or be sent to the browser. The probes
+are anonymous. The `crowd_estimation_container_app_name` output identifies the
+separate app for logs and operations.
+
+`./infra/scripts/deploy-crowd-estimation.sh plan` creates a saved plan without
+building or applying; it is also the default when no argument is supplied. Before
+the first deployment, this plan reflects the default disabled service. The
+`deploy` command writes ignored `infra/crowd-estimation.auto.tfvars.json` only
+after the image build succeeds. This file preserves `deploy_crowd_estimation=true`
+and the independent `crowd_estimation_image` across later backend deployments.
+Keep both service deployment-intent files with the state and restore both before
+running either deployment script; otherwise a missing opt-in flag can cause
+Terraform to propose removing that service. The crowd-estimation script refuses
+to continue if a managed app's corresponding intent file is missing. The existing
+backend deployment script is maintained independently. No crowd-estimation
+resources are created by the normal backend workflow until the service is
+explicitly enabled.
+
 ## Connect the frontend
 
 Set these in the **frontend server** environment, then restart or redeploy it:
@@ -176,7 +255,7 @@ ANTHROPIC_API_KEY=<optional Container Apps secret>
 
 ## State, validation, and operations
 
-Terraform state and plan files contain the backend token and optional API keys.
+Terraform state and plan files contain the service tokens and optional API keys.
 Git ignores state, saved plans, provider caches, and local tfvars. The provider
 lockfile is committed for reproducibility. Keep state securely backed up; do not
 delete it after deployment. This initial setup uses local state so it does not

@@ -35,6 +35,21 @@ cd backend
 
 Reuse an existing working environment. Run the frontend in a second terminal; it defaults to this backend address in development. `backend/pyproject.toml` and `uv.lock` define the smaller Vercel API environment, excluding the unused JuPedSim desktop visualizer dependencies. The requirements and Dockerfile also build the Azure backend image.
 
+## Crowd-estimation service
+
+`services/crowd-estimation/` is a separate Python 3.12 / FastAPI service using
+Ultralytics YOLO to count visible people in PNG, JPEG, and WebP images. The
+frontend's Sources uploads call it through a server-only Next.js proxy; the
+largest individual photo count updates occupancy when it fits the simulator's
+1–200 range. Failed estimates keep the images and current occupancy. Counts
+outside that range remain visible for manual review.
+
+The service has an independent Docker image, warmed-model readiness checks,
+bearer token, locked CPU dependencies, and opt-in Azure Container Apps
+deployment. See [service setup and API](services/crowd-estimation/README.md)
+and [Azure infrastructure](infra/README.md). Video ingestion is a future step;
+the inference engine already accepts individual decoded frames.
+
 ## Backend structure
 
 ```text

@@ -3,9 +3,9 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { FloorPlan } from "@/lib/simulation";
 import { prepareImageUpload } from "@/lib/image-upload";
+import { estimateVenueCrowd, largestCrowdEstimate, type CrowdEstimate } from "@/lib/crowd-estimates";
 import {
   deleteVenueImage,
-  estimateVenueCrowd,
   listVenueImages,
   MAX_VENUE_IMAGE_BYTES,
   saveVenueImage,
@@ -80,6 +80,9 @@ export default function WorkspaceSources({
   const [images, setImages] = useState<ImagePreview[]>([]);
   const [loading, setLoading] = useState(!isSample && !!ownerId);
   const [uploading, setUploading] = useState(false);
+  const [estimating, setEstimating] = useState(false);
+  const [estimate, setEstimate] = useState<number | null>(null);
+  const [estimateWarnings, setEstimateWarnings] = useState<string[]>([]);
   const [removing, setRemoving] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
@@ -90,11 +93,14 @@ export default function WorkspaceSources({
   const operation = useRef(false);
   const objectUrls = useRef(new Set<string>());
   const dragDepth = useRef(0);
+  const latest = useRef({ busy, onUseCrowdEstimate });
   const headingId = useId();
   const descriptionId = useId();
-  const disabled = busy || loading || uploading || removing !== null;
+  const disabled = busy || loading || uploading || estimating || removing !== null;
   const hasFloorPlan = plan.walls.length > 0 || (plan.native?.floors.length ?? 0) > 0;
   const persistent = !isSample && ownerId !== null;
+
+  useEffect(() => { latest.current = { busy, onUseCrowdEstimate }; }, [busy, onUseCrowdEstimate]);
 
   useEffect(() => {
     const current = ++generation.current;
@@ -102,6 +108,17 @@ export default function WorkspaceSources({
     const controller = new AbortController();
     requests.current = controller;
     async function loadImages() {
+      await Promise.resolve();
+      if (generation.current !== current) return;
+      setImages([]);
+      setEstimate(null);
+      setEstimateWarnings([]);
+      setLoading(!isSample && !!ownerId);
+      setUploading(false);
+      setEstimating(false);
+      setRemoving(null);
+      setStatus("");
+      setError("");
       try {
         const sources = !isSample && ownerId ? await listVenueImages(ownerId, workspaceId, { signal: controller.signal, prepareLegacy: async (source) => {
           const prepared = await prepareImageUpload(new File([source.blob], source.name, { type: source.type }));
@@ -132,6 +149,53 @@ export default function WorkspaceSources({
       urls.clear();
     };
   }, [isSample, ownerId, workspaceId]);
+
+  async function estimateImages(sources: ImagePreview[], current: number, allImagesAdded = true) {
+    setEstimating(true);
+    setEstimate(null);
+    setEstimateWarnings([]);
+    const estimates: CrowdEstimate[] = [];
+    const failures: string[] = [];
+    for (const [index, image] of sources.entries()) {
+      if (generation.current !== current) return;
+      setStatus(`Estimating crowd from image ${index + 1} of ${sources.length}…`);
+      try {
+        estimates.push(await estimateVenueCrowd(image.blob, { signal: requests.current?.signal }));
+      } catch (cause) {
+        if (generation.current !== current) return;
+        failures.push(`${image.name}: ${cause instanceof Error ? cause.message : "Crowd estimation failed."}`);
+      }
+    }
+    if (generation.current !== current) return;
+    if (failures.length || !allImagesAdded) {
+      setError(previous => [previous, ...failures].filter(Boolean).join(" "));
+      setStatus("Added images kept. Not every selected image could be processed; your starting crowd is unchanged. Retry or review occupancy manually.");
+    } else {
+      const count = largestCrowdEstimate(estimates);
+      setEstimate(count);
+      setEstimateWarnings([...new Set(estimates.flatMap(result => result.warnings))]);
+      if (count === 0) {
+        setStatus("No people detected. Your starting crowd is unchanged; review the image and set occupancy manually.");
+      } else if (count !== null && count > 200) {
+        setStatus(`${count} people detected. This exceeds the simulation limit of 200; your starting crowd is unchanged. Review occupancy manually.`);
+      } else if (latest.current.busy) {
+        setStatus(`${count} people detected. Finish the current operation, then use this estimate to update the starting crowd.`);
+      } else if (count !== null) {
+        latest.current.onUseCrowdEstimate(count);
+        setStatus(`Crowd set to ${count} people${sources.length > 1 ? " using the largest individual image estimate" : ""}. Review the estimate before running.`);
+      }
+    }
+    setEstimating(false);
+  }
+
+  async function refreshEstimate() {
+    if (disabled || operation.current || !images.length) return;
+    operation.current = true;
+    setError("");
+    const current = generation.current;
+    try { await estimateImages(images, current); }
+    finally { if (generation.current === current) operation.current = false; }
+  }
 
   async function uploadImages(files: File[]) {
     if (disabled || operation.current || !files.length) return;
@@ -173,12 +237,13 @@ export default function WorkspaceSources({
     }
     if (generation.current !== current) return;
     if (accepted.length) {
-      setImages((previous) => [...accepted.reverse(), ...previous]);
-      const estimate = estimateVenueCrowd({ images: accepted, venueArea: plan.area });
-      onUseCrowdEstimate(estimate);
-      setStatus(`${accepted.length === 1 ? "Venue image added" : `${accepted.length} venue images added`}. Crowd set to ${estimate} people.`);
+      const sources = [...accepted.reverse(), ...images];
+      setImages(sources);
+      if (failures.length) setError(failures.join(" "));
+      await estimateImages(sources, current, failures.length === 0);
     } else setStatus("");
-    if (failures.length) setError(failures.join(" "));
+    if (generation.current !== current) return;
+    if (!accepted.length && failures.length) setError(failures.join(" "));
     operation.current = false;
     setUploading(false);
   }
@@ -193,6 +258,8 @@ export default function WorkspaceSources({
       if (persistent && ownerId) await deleteVenueImage(ownerId, workspaceId, source.id, { signal: requests.current?.signal });
       if (generation.current !== current) return;
       setImages((previous) => previous.filter((image) => image.id !== source.id));
+      setEstimate(null);
+      setEstimateWarnings([]);
       objectUrls.current.delete(source.url);
       URL.revokeObjectURL(source.url);
       setStatus(`${source.name} removed.`);
@@ -233,7 +300,7 @@ export default function WorkspaceSources({
         {children ? <div className={styles.scaleControls}>{children}</div> : null}
       </section>
 
-      <section className={styles.section} aria-labelledby={`${headingId}-venue`} aria-busy={loading || uploading}>
+      <section className={styles.section} aria-labelledby={`${headingId}-venue`} aria-busy={loading || uploading || estimating}>
         <div className={styles.sectionHeading}>
           <span className={styles.sectionIcon}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2" /><circle cx="8" cy="10" r="1.5" /><path d="m3 17 5-4 4 3 4-5 5 6M8 5l1-2h6l1 2" /></svg>
@@ -283,7 +350,7 @@ export default function WorkspaceSources({
         >
           <button type="button" className={styles.dropButton} disabled={disabled} aria-describedby={descriptionId} onClick={() => fileInput.current?.click()}>
             <span className={styles.uploadIcon}><Icon name="plus" size={18} /></span>
-            <span className={styles.dropLabel}>{uploading ? "Adding images…" : dragging ? "Drop your images here" : "Add venue images"}</span>
+            <span className={styles.dropLabel}>{estimating ? "Estimating crowd…" : uploading ? "Adding images…" : dragging ? "Drop your images here" : "Add venue images"}</span>
             <span className={styles.dropHint}>Choose files or drag them here</span>
           </button>
           <p className={styles.fileTypes} id={descriptionId}>PNG, JPG, WebP · up to 10 MB each</p>
@@ -309,14 +376,17 @@ export default function WorkspaceSources({
               ))}
             </ul>
             <div className={styles.estimateCard}>
-              <div className={styles.estimateTop}><span><Icon name="people" size={15} />Estimated crowd</span><span className={styles.previewBadge}>Preview</span></div>
-              <p className={styles.estimateNumber}>80 <span>people</span></p>
-              <p className={styles.estimateNote}>Fixed at 80 for now, for any venue image.</p>
-              <button type="button" className={styles.estimateButton} disabled={disabled} onClick={() => {
-                const estimate = estimateVenueCrowd({ images, venueArea: plan.area });
-                onUseCrowdEstimate(estimate);
-                setStatus(`Crowd set to ${estimate} people.`);
-              }}>Use 80 people<Icon name="arrow" size={14} /></button>
+              <div className={styles.estimateTop}><span><Icon name="people" size={15} />Estimated crowd</span><span className={styles.previewBadge}>YOLO</span></div>
+              <p className={styles.estimateNumber}>{estimate ?? "—"} <span>people</span></p>
+              <p className={styles.estimateNote}>{estimating ? "Counting visible people…" : estimate === null ? "Estimate your images to set the starting crowd." : images.length > 1 ? "Largest individual image count. Overlapping views are never added together." : "Visible people detected in this image."}</p>
+              <p className={styles.estimateNote}>{estimateWarnings.length ? estimateWarnings.join(" ") : "People hidden from view or too small may be missed. Review occupancy before running."}</p>
+              {estimate !== null && estimate > 0 && estimate <= 200 ? (
+                <button type="button" className={styles.estimateButton} disabled={disabled} onClick={() => {
+                  onUseCrowdEstimate(estimate);
+                  setStatus(`Crowd set to ${estimate} people. Review the estimate before running.`);
+                }}>Use {estimate} people<Icon name="arrow" size={14} /></button>
+              ) : null}
+              <button type="button" className={styles.estimateButton} disabled={disabled} onClick={() => void refreshEstimate()}>{estimating ? "Estimating…" : estimate === null ? "Estimate crowd" : "Estimate again"}<Icon name="arrow" size={14} /></button>
             </div>
           </>
         ) : null}

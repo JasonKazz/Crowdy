@@ -246,10 +246,3 @@ export async function deleteVenueImage(ownerId: string, workspaceId: string, sou
   if (!validText(sourceId, 128) || sourceId.trim() !== sourceId) throw sourceError("This venue image could not be found. Refresh this page and try again.");
   await requestSource(ownerId, workspaceId, `/${encodeURIComponent(sourceId)}`, { method: "DELETE", signal: options.signal });
 }
-
-// Placeholder until image-based crowd estimation is connected. Deliberately
-// ignore image contents, venue dimensions, and any supplied occupancy.
-export function estimateVenueCrowd(input?: unknown): number {
-  void input;
-  return 80;
-}
