@@ -27,6 +27,7 @@ export async function POST(request: Request) {
       scenario.occupancy > 200 ||
       !["standard", "mixed"].includes(scenario.mobility) ||
       !["uniform", "workstations"].includes(scenario.distribution) ||
+      (scenario.behaviorMode !== undefined && !["idealized", "behavioral"].includes(scenario.behaviorMode)) ||
       (scenario.seed !== undefined && (!Number.isInteger(scenario.seed) || scenario.seed < 0 || scenario.seed > 4294967295))
     )
       throw new Error("Choose 1–200 people and valid scenario settings.");
@@ -57,6 +58,7 @@ export async function POST(request: Request) {
         distribution: scenario.distribution,
         seed: scenario.seed ?? 42,
         blocked_exit_ids: blocked,
+        behavior_mode: scenario.behaviorMode ?? "idealized",
       },
     };
   } catch (error) {

@@ -222,6 +222,8 @@ def editor_to_scenario(plan: dict, settings: dict, starting_population=None) -> 
         layout, transform = editor_native_layout(plan)
         scenario = compile_layout(layout)
         scenario.settings.blocked_exit_ids = settings.get("blocked_exit_ids", [])
+        scenario.settings.behavior_mode = settings.get("behavior_mode", "idealized")
+        scenario.settings.behavior_seed = settings.get("seed", POPULATION_SEED)
         base_floor = unary_union([Polygon(r.polygon) for r in layout.walkable_areas])
         if starting_population is not None:
             return _reuse_people(scenario, starting_population, settings)
@@ -244,6 +246,8 @@ def editor_to_scenario(plan: dict, settings: dict, starting_population=None) -> 
         "population": {"count": settings["occupancy"], "seed": POPULATION_SEED, "spawn_area_ids": ["editor-floor"]},
         "agent_defaults": {"radius": AGENT_RADIUS, "desired_speed": 1.2},
         "settings": {"dt": 0.01, "sample_interval": 0.2, "max_time": 60.0,
+                     "behavior_mode": settings.get("behavior_mode", "idealized"),
+                     "behavior_seed": settings.get("seed", POPULATION_SEED),
                      "blocked_exit_ids": settings.get("blocked_exit_ids", [])},
     })
     try:

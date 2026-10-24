@@ -68,3 +68,19 @@ Run with all exits available, then choose **Pin current run as baseline**. Popul
 The frontend verifies identical starting IDs, positions, per-person speeds and radius before enabling comparison. Playback uses one shared clock. The comparison shows evacuated/trapped/still-moving counts, peak sampled density, per-exit totals, and clearance-time change only when both runs fully evacuate. Export includes both run snapshots and the matched initial population. Starts and baselines remain session-only; saved workspace setup retains exit selections.
 
 The simulation POST scenario accepts `blocked_exit_ids` (unique known exit IDs) and an optional `starting_population`. The native CLI comparison also supports all-exits-blocked cases and reports outcome-count changes.
+
+## Directional people and evacuation modes
+
+The integrated workspace draws shoulder ellipses facing the measured direction of travel. Their lateral semi-axis equals the native collision radius; front/back depth is 0.68 times that radius. The entire ellipse fits inside the circular collision body. Heading is smoothed with turns bounded to 180°/s, retains the previous direction during a stop, and is deterministic when seeking backward or replaying. This is a visual change; collision and route clearance still use circles, with no sideways squeezing or orientation-dependent doorway clearance.
+
+The selector offers **Idealized** (immediate response, unchanged base desired speeds) and **Behavioral** (individual response delays and speed factors). Both retain the same shortest-route exit assignment and native collision-free crowd interactions; neither globally optimizes evacuation or changes exit knowledge. Behavioral assumptions are illustrative, not empirically calibrated:
+
+- Response delay: triangular distribution, minimum 0 s, maximum 12 s, mode 3 s.
+- Desired-speed factor: triangular distribution, minimum 0.85, maximum 1.15, mode 1, multiplied by each person's base speed (including the selected mixed mobility profile).
+- SHA-256 of behavior version, seed and stable person ID seeds each person's independent random generator. The same seed/IDs repeat across processes, geometry edits and exit closures; changing person order does not change individual parameters.
+
+Waiting people remain stationary native collision bodies, then begin following their route on the first simulation step at or after their sampled delay. Additional measured frames record these release instants so interpolation does not start them early. Amber indicates a person still responding, ordinary colors indicate walking/queuing, and red indicates a trapped person. Hover shows delay and desired speed. Routed people still inside at the time limit include anyone still responding.
+
+Frontend `Scenario.behaviorMode` persists with the workspace and defaults to `idealized` for older workspaces. The same-origin proxy forwards backend `behavior_mode`; editor requests use the population seed for `behavior_seed`. Native JSON scenarios can set `settings.behavior_mode` and `settings.behavior_seed` directly (defaults `idealized`, 42). Results contain `behavior: {version: 1, mode, seed, agents: [{agent_id, response_delay, speed_factor, desired_speed}]}`. Original `scenario.occupants[].desired_speed` values remain the base abilities, so reused populations never compound variation. Export records mode, per-person response delay and desired speed.
+
+Pin a run, change evacuation mode, and run again to compare the same people and base speeds. Mode stays editable while placement/mobility controls freeze. Repeat Behavioral runs with the same seed to compare geometry or closures with identical individual behavior; use several seeds for a range of outcomes rather than treating one realization as a prediction.

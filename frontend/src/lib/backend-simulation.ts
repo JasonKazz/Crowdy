@@ -119,6 +119,32 @@ export function adaptBackendSimulation(
     invalid("occupant count does not match the requested scenario");
   const occupantsById = new Map(occupants.map((occupant) => [occupant.id, occupant]));
   if (occupantsById.size !== occupants.length) invalid("occupant IDs are duplicated");
+  const behaviorById = new Map<string, {delay: number; speed: number}>();
+  const requestedMode = inputScenario.behaviorMode ?? "idealized";
+  let behaviorVersion: number | undefined;
+  if (result.behavior !== undefined) {
+    const behavior = record(result.behavior, "behavior");
+    if (behavior.version !== 1 || behavior.mode !== requestedMode || behavior.seed !== (inputScenario.seed ?? 42))
+      invalid("behavior settings differ from the requested scenario");
+    behaviorVersion = 1;
+    for (const value of array(behavior.agents, "agent behaviors")) {
+      const person = record(value, "agent behavior");
+      const id = identifier(person.agent_id, "behavior agent ID");
+      const delay = finite(person.response_delay, "response delay", 0);
+      const factor = finite(person.speed_factor, "speed factor", 0);
+      const speed = finite(person.desired_speed, "desired speed", 0);
+      if (!occupantsById.has(id) || behaviorById.has(id) || !speed ||
+          delay > 12 || factor < .85 || factor > 1.15 ||
+          (requestedMode === "idealized" && (delay !== 0 || factor !== 1)))
+        invalid("agent behavior is inconsistent");
+      const original = record(array(backendScenario.occupants, "occupants").find(value => record(value,"occupant").id === id), "occupant");
+      const baseSpeed = original.desired_speed ?? defaults?.desired_speed;
+      if (baseSpeed !== undefined && Math.abs(finite(baseSpeed,"base walking speed",0)*factor-speed) > 1e-6)
+        invalid("behavior walking speed differs from its base speed");
+      behaviorById.set(id,{delay,speed});
+    }
+    if (behaviorById.size !== occupants.length) invalid("behavior must cover every occupant");
+  } else if (requestedMode !== "idealized") invalid("behavioral run has no recorded behavior");
   const knownExits = new Set(inputPlan.exits.map((exit) => exit.id));
   const agentId = (value: unknown) => {
     const id = identifier(value, "agent ID");
@@ -247,6 +273,11 @@ export function adaptBackendSimulation(
         if (Math.abs(agent.x-start[0]) > POSITION_TOLERANCE || Math.abs(agent.y-start[1]) > POSITION_TOLERANCE)
           invalid("a trapped agent moved from its recorded starting position");
       }
+      if (frame.time <= (behaviorById.get(agent.id)?.delay ?? 0)) {
+        const start = occupantsById.get(agent.id)!.position;
+        if (Math.abs(agent.x-start[0]) > POSITION_TOLERANCE || Math.abs(agent.y-start[1]) > POSITION_TOLERANCE)
+          invalid("an agent moved before its response delay");
+      }
       if (index === 0) {
         const original = occupantsById.get(agent.id)!.position;
         if (Math.abs(agent.x - original[0]) > POSITION_TOLERANCE || Math.abs(agent.y - original[1]) > POSITION_TOLERANCE)
@@ -286,7 +317,8 @@ export function adaptBackendSimulation(
       outcome: event ? "evacuated" : trappedIds.has(occupant.id) ? "trapped" : "moving",
       exitId: event?.exitId ?? null,
       duration: event?.time ?? totalTime,
-      delay: 0,
+      delay: behaviorById.get(occupant.id)?.delay ?? 0,
+      desiredSpeed: behaviorById.get(occupant.id)?.speed,
     };
   });
   return {
@@ -307,6 +339,7 @@ export function adaptBackendSimulation(
       return {id: person.id as string, position, desired_speed: person.desired_speed == null ? null : finite(person.desired_speed, "walking speed", 0)};
     }),
     reusedStarts: result.editor_metadata !== undefined && record(result.editor_metadata, "editor metadata").reused_starting_population === true,
+    ...(behaviorVersion === undefined ? {} : {behaviorVersion}),
     hotspot,
     createdAt,
     engine: "jupedsim",

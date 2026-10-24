@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
 import { positionAt } from "@/lib/simulation";
+import { headingAt } from "@/lib/person-heading";
 import type { FloorPlan, PlanItem, SimulationResult } from "@/lib/simulation";
 import GeometryEditorLayer from "./geometry-editor-layer";
 import type {GeometrySelection, GeometryTool} from "@/lib/native-editor";
@@ -779,13 +780,17 @@ export default function FloorPlanView({
             aria-label={`${visiblePeople.length} ${visiblePeople.length === 1 ? "person" : "people"} visible in this scenario`}
           >
             {visiblePeople.map(({ agent, point }) => (
-              <circle
+              <g
                 key={agent.id}
-                cx={point.x}
-                cy={point.y}
-                r={metre * personRadius}
+                transform={`translate(${point.x} ${point.y}) rotate(${headingAt(agent,time) * 180 / Math.PI})`}
+                data-person-state={result.engine !== "jupedsim" ? "preview" : agent.outcome === "trapped" ? "trapped" : time < agent.delay ? "responding" : "walking"}
+              >
+              <title>{result.engine !== "jupedsim" ? `${agent.id}: placement preview` : `${agent.sourceId ?? agent.id}${agent.outcome === "trapped" ? ": trapped, no available route" : time < agent.delay ? ": waiting to respond" : ": walking / queuing"} · response ${agent.delay.toFixed(1)} s${agent.desiredSpeed === undefined ? "" : ` · desired speed ${agent.desiredSpeed.toFixed(2)} m/s`}`}</title>
+              <ellipse
+                rx={metre * personRadius * .68}
+                ry={metre * personRadius}
                 fill={
-                  agent.outcome === "trapped" ? "#b64235" : agent.id % 7 === 0
+                  agent.outcome === "trapped" ? "#b64235" : result.engine === "jupedsim" && time < agent.delay ? "#b98a3e" : agent.id % 7 === 0
                     ? "#bb8e61"
                     : agent.id % 3 === 0
                       ? "#81978b"
@@ -794,7 +799,10 @@ export default function FloorPlanView({
                 stroke="#fff"
                 strokeWidth="1"
                 opacity="0.95"
-              ><title>{`${agent.sourceId ?? agent.id}${agent.outcome === "trapped" ? ": trapped, no available route" : ""}`}</title></circle>
+              />
+              <path d={`M ${metre*personRadius*.4} ${-metre*personRadius*.24} L ${metre*personRadius*.4} ${metre*personRadius*.24}`}
+                stroke="#fff" strokeWidth={Math.max(.6,metre*personRadius*.15)} strokeLinecap="round" opacity=".9"/>
+              </g>
             ))}
           </g>
         ) : null}

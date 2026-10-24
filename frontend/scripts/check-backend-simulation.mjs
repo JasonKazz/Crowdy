@@ -11,6 +11,7 @@ import {
   getEvacuatedCount,
   positionAt,
 } from "../src/lib/simulation.ts";
+import {headingAt} from "../src/lib/person-heading.ts";
 
 const scenario = { occupancy: 2, mobility: "mixed", distribution: "workstations" };
 const point = (id, x, y) => ({ id, x, y });
@@ -298,3 +299,49 @@ falseTrapped.summary.moving_remaining_count=1;
 assert.throws(()=>adaptBackendSimulation(falseTrapped,SAMPLE_PLAN,scenario),/remaining outcomes/);
 assert.throws(()=>adaptBackendSimulation(fixture,SAMPLE_PLAN,{...scenario,blockedExitIds:["exit-a"]}),/blocked exit/);
 console.log("Trapped playback, outcome totals, blocked assignments and matched-start comparison checks passed.");
+
+// Response metadata describes measured trajectories; it never shifts playback.
+const behavioralFixture = structuredClone(fixture);
+behavioralFixture.scenario.occupants.forEach(person=>person.desired_speed=1.2);
+behavioralFixture.behavior = {version:1,mode:"behavioral",seed:42,agents:[
+  {agent_id:"source-z",response_delay:1,speed_factor:1,desired_speed:1.2},
+  {agent_id:"source-a",response_delay:1,speed_factor:.9,desired_speed:1.08},
+]};
+const behavioral = adaptBackendSimulation(behavioralFixture,planInput,{...scenario,behaviorMode:"behavioral"});
+assert.equal(behavioral.agents[0].delay,1);
+assert.equal(behavioral.agents[1].desiredSpeed,1.08);
+assert.deepEqual(positionAt(behavioral.agents[0],1.5),positionAt(result.agents[0],1.5),"Measured movement must not be retimed by response metadata");
+assert.equal(behavioral.behaviorVersion,1);
+assert.ok(sameStartingPopulation(behavioral,{...behavioral,scenario:{...scenario,behaviorMode:"idealized"}}));
+for (const mutate of [
+  run=>delete run.behavior,
+  run=>run.behavior.agents[0].response_delay=3,
+  run=>run.behavior.agents[0].response_delay=Infinity,
+  run=>run.behavior.agents[0].speed_factor=.1,
+  run=>run.behavior.agents[0].desired_speed=2,
+  run=>run.behavior.agents[1].agent_id="source-z",
+  run=>run.behavior.agents.pop(),
+  run=>run.behavior.mode="idealized",
+  run=>run.behavior.seed=99,
+]) {
+  const invalid=structuredClone(behavioralFixture);mutate(invalid);
+  assert.throws(()=>adaptBackendSimulation(invalid,planInput,{...scenario,behaviorMode:"behavioral"}),/invalid results/);
+}
+assert.throws(()=>adaptBackendSimulation(behavioralFixture,planInput,scenario),/behavior settings/);
+
+const body = {id:99,points:[],delay:0,duration:20,exitId:null,samples:[
+  {time:0,point:{x:0,y:0}},{time:1,point:{x:1,y:0}},
+  {time:1.2,point:{x:1,y:1}},{time:1.4,point:{x:1,y:1}},
+  {time:2.4,point:{x:1,y:1}},
+]};
+assert.equal(headingAt(body,0),0,"Initial heading faces the first actual movement");
+const turn=headingAt(body,1.2);
+assert.ok(turn>0 && turn<=Math.PI*.2+1e-9,"Turning is bounded by 180 degrees per second");
+assert.equal(headingAt(body,2.4),turn,"A queue pause must retain heading");
+assert.equal(headingAt(body,.5),0,"Seeking backward does not inherit future rotation");
+assert.equal(headingAt(body,1.2),turn,"Seeking must reproduce the same heading");
+const west={...body,samples:[{time:0,point:{x:1,y:0}},{time:1,point:{x:0,y:0}}]};
+assert.equal(Math.abs(headingAt(west,0)),Math.PI,"Leftward walking faces left, not right");
+const wrap={...body,samples:[{time:0,point:{x:0,y:0}},{time:1,point:{x:-1,y:.01}},{time:2,point:{x:-2,y:0}}]};
+assert.ok(Math.abs(headingAt(wrap,2)-headingAt(wrap,1))<.03,"Crossing -pi/pi follows the short rotation");
+console.log("Behavior validation, measured-delay playback, stationary headings, smooth turns and deterministic seeking passed.");

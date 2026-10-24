@@ -41,6 +41,7 @@ try {
   await rejected("{", 400);
   await rejected("null", 400);
   await rejected({ ...input, scenario: { ...scenario, occupancy: 201 } }, 400);
+  await rejected({ ...input, scenario: { ...scenario, behaviorMode: "optimal" } }, 400);
   await rejected({ ...input, plan: { ...SAMPLE_PLAN, exits: [] } }, 400);
   await rejected(" ".repeat(1024 * 1024 + 1), 413);
 
@@ -106,6 +107,17 @@ try {
   assert.equal(closedResult.status,"trapped");
   assert.deepEqual(closedPayload.scenario.occupants,nativePayload.scenario.occupants);
   assert.ok(closedPayload.editor_metadata.reused_starting_population);
+  const behavioralScenario = {...seededScenario,behaviorMode:"behavioral"};
+  const behavioralResponse=await post({plan:nativePlan,scenario:behavioralScenario,starting_population:reference});
+  assert.equal(behavioralResponse.status,200);
+  const behavioralPayload=await behavioralResponse.json();
+  const behavioralResult=adaptBackendSimulation(behavioralPayload,nativePlan,behavioralScenario);
+  assert.equal(behavioralResult.exited,20);
+  assert.deepEqual(behavioralResult.startingOccupants,nativeResult.startingOccupants);
+  assert.ok(behavioralResult.reusedStarts);
+  assert.ok(behavioralResult.agents.every(agent=>agent.delay>0 && agent.desiredSpeed>0));
+  assert.ok(new Set(behavioralResult.agents.map(agent=>agent.desiredSpeed)).size>1);
+  passed++;
   await rejected({plan:nativePlan,scenario:{...seededScenario,blocked_exit_ids:["unknown"]}},400);
   passed+=3;
   console.log(`Backend integration checks passed: ${passed} HTTP checks, real JuPedSim playback, two exit summaries, validation, and blocked-geometry recovery.`);

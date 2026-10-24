@@ -41,6 +41,7 @@ export type Scenario = {
   distribution: "uniform" | "workstations";
   seed?: number;
   blockedExitIds?: string[];
+  behaviorMode?: "idealized" | "behavioral";
 };
 export type AgentPath = {
   id: number;
@@ -55,6 +56,7 @@ export type AgentPath = {
   duration: number;
   /** Initial reaction time, before walking begins. */
   delay: number;
+  desiredSpeed?: number;
   travelTime?: number;
   /** Measured positions at their original simulation timestamps. */
   samples?: { time: number; point: Point }[];
@@ -80,6 +82,7 @@ export type SimulationResult = {
   movingRemaining?: number;
   startingOccupants?: {id: string; position: [number, number]; desired_speed?: number | null}[];
   reusedStarts?: boolean;
+  behaviorVersion?: number;
   modelSettings?: {
     dt: number;
     sampleInterval: number;

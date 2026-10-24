@@ -110,7 +110,7 @@ changedPlan.items[0].x = 350;
 const updated = updateWorkspace(ownerA, first.id, {
   name: "Renamed",
   plan: changedPlan,
-  scenario: { ...DEFAULT_SCENARIO, occupancy: 120 },
+  scenario: { ...DEFAULT_SCENARIO, occupancy: 120, behaviorMode:"behavioral" },
 });
 assert.equal(updated.createdAt, first.createdAt);
 assert.ok(updated.updatedAt > first.updatedAt);
@@ -121,6 +121,8 @@ assert.equal(
 );
 assert.equal(getWorkspace(ownerA, first.id).name, "Renamed");
 assert.equal(getWorkspace(ownerA, first.id).scenario.occupancy, 120);
+assert.equal(getWorkspace(ownerA, first.id).scenario.behaviorMode,"behavioral","Saved workspaces retain evacuation mode");
+assert.throws(()=>updateWorkspace(ownerA,first.id,{plan,scenario:{...DEFAULT_SCENARIO,behaviorMode:"optimal"}}),/scenario/i);
 changedPlan.items[0].x = 400;
 updated.scenario.occupancy = 150;
 assert.equal(getWorkspace(ownerA, first.id).plan.items[0].x, 350);
