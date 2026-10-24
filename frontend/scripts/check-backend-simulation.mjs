@@ -368,3 +368,25 @@ for(const mutate of [
   assert.throws(()=>adaptBackendSimulation(invalid,planInput,{...scenario,bodyWidth:.5}),/invalid results/);
 }
 console.log("Physical body-width agreement, measured doorway widths and compiled exit-strip projection checks passed.");
+
+// New Natural responses preserve initial/final exit identity and measured motion.
+const naturalFixture=structuredClone(behavioralFixture);
+naturalFixture.behavior.version=2;
+naturalFixture.behavior.agents.forEach(agent=>agent.response_delay=0);
+naturalFixture.assignments.find(a=>a.agent_id==='source-a').final_exit_id='exit-a';
+naturalFixture.routing={version:1,mode:'adaptive',exit_changes:[{agent_id:'source-a',from_exit_id:'exit-b',to_exit_id:'exit-a',time:0,estimated_seconds_saved:2,reason:'congestion'}]};
+const natural=adaptBackendSimulation(naturalFixture,planInput,{...scenario,behaviorMode:'behavioral'});
+assert.equal(natural.behaviorVersion,2);
+assert.ok(natural.agents.every(agent=>agent.delay===0));
+assert.equal(natural.agents[1].initialAssignedExitId,'exit-b');
+assert.equal(natural.agents[1].assignedExitId,'exit-a');
+assert.equal(natural.exitChanges.length,1);
+assert.deepEqual(natural.agents[1].samples,behavioral.agents[1].samples);
+for(const mutate of [
+  run=>run.behavior.agents[0].response_delay=1,
+  run=>run.routing.exit_changes[0].from_exit_id='exit-a',
+  run=>run.routing.exit_changes[0].time=99,
+  run=>run.routing.exit_changes=[],
+  run=>run.routing.exit_changes[0].estimated_seconds_saved=-1,
+]){const invalid=structuredClone(naturalFixture);mutate(invalid);assert.throws(()=>adaptBackendSimulation(invalid,planInput,{...scenario,behaviorMode:'behavioral'}),/invalid results/);}
+console.log('Natural routing contracts passed: immediate response, exit-switch chains, final assignments and unchanged measured samples.');

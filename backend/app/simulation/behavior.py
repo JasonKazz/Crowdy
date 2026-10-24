@@ -19,7 +19,7 @@ def agent_behaviors(scenario: Scenario) -> list[dict]:
             # Stable across process restarts, input order, geometry and closures.
             digest = hashlib.sha256(f"crowdy-behavior-v1:{scenario.settings.behavior_seed}:{person.id}".encode()).digest()
             rng = random.Random(int.from_bytes(digest, "big"))
-            delay = round(rng.triangular(0, 12, 3), 4)
+            delay = 0.0  # Alarm response is immediate; natural mode adapts exit choice.
             factor = round(rng.triangular(.85, 1.15, 1), 6)
         behaviors.append({"agent_id": person.id, "response_delay": delay,
                           "speed_factor": factor, "desired_speed": round(base_speed * factor, 6)})

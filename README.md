@@ -12,7 +12,7 @@ Live demo: https://crowdy-calhacks13.vercel.app
 
 The Next.js app lives in `frontend/` and uses TypeScript, Tailwind CSS, ESLint, and the App Router. Use Node.js 22 or newer for development and the regression scripts.
 
-The workspace includes furniture and wall/door editing, scenario controls, playback, density overlays, and baseline comparisons. Runs use the Python JuPedSim service through a same-origin API. PNG/JPEG/WebP extraction uses a configured Gemini or Claude account, with automatic scale detection and a manual measurement fallback. PDF import is not implemented. Auth0 supplies sign-in; personal layouts, scenario settings, floor plans, and venue images persist in private Azure Blob Storage under the authenticated account.
+The workspace includes furniture and wall/door editing, Random/Normal furniture-based placement, optional per-room counts, live placement previews, congestion-aware exit choices, playback, density overlays, and baseline comparisons. See [room-aware placement](docs/room-population.md) for automatic inference, count overrides and current limits. Runs use the Python JuPedSim service through a same-origin API. PNG/JPEG/WebP extraction uses a configured Gemini or Claude account, with automatic scale detection and a manual measurement fallback. PDF import is not implemented. Auth0 supplies sign-in; personal layouts, scenario settings, floor plans, and venue images persist in private Azure Blob Storage under the authenticated account.
 
 ```sh
 cd frontend

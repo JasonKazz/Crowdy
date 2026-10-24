@@ -76,7 +76,16 @@ assert.equal(first.ownerId,ownerA);
 assert.equal(notifications,1);
 assert.equal(local.size,0,"New workspaces must never be persisted to browser storage");
 first.plan.items[0].x = 800;
-assert.equal((await getWorkspace(ownerA,first.id)).plan.items[0].x,200);
+plan.items[0].x = 300;
+DEFAULT_SCENARIO.occupancy = 100;
+assert.equal((await getWorkspace(ownerA,first.id)).plan.items[0].x,200,
+  "Returned and supplied plans must not mutate storage");
+assert.equal((await getWorkspace(ownerA,first.id)).scenario.occupancy,24,
+  "A supplied scenario is cloned");
+DEFAULT_SCENARIO.occupancy = 24;
+const listed = await listWorkspaces(ownerA);
+listed[0].plan.items[0].label = "Changed outside the store";
+assert.equal((await getWorkspace(ownerA,first.id)).plan.items[0].label,"Desk");
 session = ownerB;
 assert.deepEqual(await listWorkspaces(ownerB),[]);
 assert.equal(await getWorkspace(ownerB,first.id),null);
@@ -176,4 +185,91 @@ local.set(legacyKey(corruptOwner),"{bad-json");
 assert.deepEqual(await listWorkspaces(corruptOwner),[]);
 assert.equal(local.get(legacyKey(corruptOwner)),"{bad-json","Corrupt browser data must be kept for recovery without disabling the cloud");
 unsubscribe();
-console.log("Workspace checks passed: HTTP persistence, 1–9-person crowd round trips and zero rejection, account isolation, validation, serialized autosaves, optimistic conflicts, cancellation, native drafts, offline errors, optional browser storage, and non-destructive legacy migration.");
+const stoppedAt = notifications;
+session = ownerB;
+const previousLayout = '{"previous":"layout"}';
+local.set("crowdy-workspace-v1",previousLayout);
+await createWorkspace(ownerB, {
+  name: "Unsubscribed",
+  plan,
+  scenario: DEFAULT_SCENARIO,
+});
+assert.equal(notifications, stoppedAt);
+assert.equal(
+  local.get("crowdy-workspace-v1"),
+  previousLayout,
+  "The original browser layout must remain untouched",
+);
+
+const polygonPlan = structuredClone(plan);
+polygonPlan.items[0].polygon = [{x:0,y:0},{x:1,y:0},{x:.5,y:1}];
+polygonPlan.native = {layout:{name:"Source geometry"},transform:{pixels_per_metre:20,offset_x:0,offset_y:600},
+  floors:[[{x:0,y:0},{x:900,y:0},{x:900,y:600}]],walls:[],exit_zones:[]};
+const calibrated = await createWorkspace(ownerB,{name:"Calibrated geometry",plan:polygonPlan,scenario:{...DEFAULT_SCENARIO,seed:7}});
+polygonPlan.native.layout.name="Changed outside saved workspace";
+polygonPlan.items[0].polygon[0].x=.2;
+const restored = await getWorkspace(ownerB,calibrated.id);
+assert.equal(restored.scenario.seed,7);
+assert.equal(restored.plan.native.layout.name,"Source geometry");
+assert.equal(restored.plan.items[0].polygon[0].x,0,"Saving must preserve and clone furniture polygons");
+
+const draftPlan = structuredClone(restored.plan);
+draftPlan.exits = [];
+draftPlan.native.layout.exits = [];
+const savedDraft = await updateWorkspace(ownerB, calibrated.id, {
+  plan: draftPlan,
+  scenario: restored.scenario,
+});
+assert.equal((await getWorkspace(ownerB, calibrated.id)).plan.exits.length, 0,
+  "A native draft must remain saved while its exterior exits are being edited");
+const draftCopy = await createWorkspace(ownerB, {
+  name: "Draft copy",
+  plan: savedDraft.plan,
+  scenario: savedDraft.scenario,
+});
+assert.deepEqual((await getWorkspace(ownerB, draftCopy.id)).plan, savedDraft.plan,
+  "Copying an unfinished native layout must preserve its geometry");
+for (const id of [plan.id, SAMPLE_WORKSPACE_ID]) {
+  await assert.rejects(createWorkspace(ownerB, {
+    name: "Invalid pixel plan",
+    plan: {...plan, id, exits: []},
+    scenario: DEFAULT_SCENARIO,
+  }), /geometry/, "Pixel plans still require an exit before saving");
+}
+
+const densePlan = structuredClone(restored.plan);
+densePlan.items = Array.from({length:300},(_,index)=>({...densePlan.items[0],id:`table-${index}`}));
+const denseRecord = await createWorkspace(ownerB,{name:"Dense venue extraction",plan:densePlan,scenario:restored.scenario});
+assert.equal((await getWorkspace(ownerB,denseRecord.id)).plan.items.length,300,
+  "Dense extracted furniture must survive persistence above the old 100-item limit");
+
+const largeVenue = await createWorkspace(ownerB, {
+  name: "Large venue",
+  plan: {...plan,area:14813.587936797483},
+  scenario: DEFAULT_SCENARIO,
+});
+assert.equal((await getWorkspace(ownerB,largeVenue.id)).plan.area,14813.587936797483,
+  "Large venues must survive saving and reopening");
+await updateWorkspace(ownerB,largeVenue.id,{plan:{...plan,area:40000},scenario:DEFAULT_SCENARIO});
+assert.equal((await getWorkspace(ownerB,largeVenue.id)).plan.area,40000,
+  "Editing a saved venue must not reinstate an area cap");
+
+session = ownerA;
+const roomPlan={...plan,rooms:[{id:"office",label:"Office",room_type:"office",polygon:[{x:80,y:90},{x:820,y:90},{x:820,y:510},{x:80,y:510}]}]};
+const roomScenario={...DEFAULT_SCENARIO,distribution:"rooms",population:{buildingType:"office",activity:"lunch",roomCounts:{office:12},roomTypes:{office:"meeting"}}};
+const roomRecord=await createWorkspace(ownerA,{name:"Room settings",plan:roomPlan,scenario:roomScenario});
+assert.deepEqual((await getWorkspace(ownerA,roomRecord.id)).scenario.population,roomScenario.population);
+assert.deepEqual((await getWorkspace(ownerA,roomRecord.id)).plan.rooms,roomPlan.rooms);
+roomScenario.population.roomCounts.office=99;
+roomPlan.rooms[0].label="Changed outside storage";
+assert.equal((await getWorkspace(ownerA,roomRecord.id)).scenario.population.roomCounts.office,12);
+assert.equal((await getWorkspace(ownerA,roomRecord.id)).plan.rooms[0].label,"Office");
+const roomUpdate = {...roomRecord.scenario,population:{...roomRecord.scenario.population,
+  activity:"meeting",roomCounts:{office:7}}};
+await updateWorkspace(ownerA,roomRecord.id,{plan:roomRecord.plan,scenario:roomUpdate});
+const savedRoom = (await listWorkspaces(ownerA)).find(workspace => workspace.id === roomRecord.id);
+assert.deepEqual(savedRoom.scenario.population,roomUpdate.population,
+  "Room settings must also survive autosave and library reload");
+assert.deepEqual(savedRoom.plan.rooms,roomRecord.plan.rooms);
+
+console.log("Workspace checks passed: HTTP persistence, 1–9-person crowd round trips and zero rejection, account isolation, validation, cloned inputs, serialized autosaves, optimistic conflicts, cancellation, native drafts, dense and large venues, offline errors, optional browser storage, non-destructive legacy migration, and room labels/types/activity/fixed-count persistence.");

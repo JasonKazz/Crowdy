@@ -9,6 +9,8 @@ import { validatePlan } from "@/lib/plan-validation";
 import { runBackendSimulation, sameStartingPopulation } from "@/lib/backend-simulation";
 import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
 import FloorPlanView from "./floor-plan";
+import RoomPopulationPanel from "./room-population-panel";
+import {adaptPopulationPreview, placementKey, startingPopulation, type PopulationPreview} from "@/lib/room-population";
 import Icon, { type IconName } from "./icon";
 import ScaleCalibrator, {type PendingCalibration} from "./scale-calibrator";
 import GeometryPanel from "./geometry-panel";
@@ -18,7 +20,6 @@ import {nativeLayout, type GeometrySelection, type GeometryTool} from "@/lib/nat
 import { IMAGE_UPLOAD_SIZE_ERROR, prepareImageUpload } from "@/lib/image-upload";
 import {
   SAMPLE_PLAN,
-  runSimulation,
   getEvacuatedCount,
   type FloorPlan,
   type PlanItem,
@@ -72,17 +73,18 @@ export default function Workspace({
   const [plan, setPlan] = useState<FloorPlan>(() => clonePlan(initialPlan));
   const [scenario, setScenario] = useState<Scenario>(() => ({
     ...initialScenario,
+    distribution: initialScenario.distribution === "rooms" || initialScenario.distribution === "workstations" ? "normal" : initialScenario.distribution,
   }));
   const [mode, setMode] = useState<Mode>("layout");
   const [sidebarTab, setSidebarTab] = useState<"sources" | "editing">("sources");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [history, setHistory] = useState<FloorPlan[]>([]);
   const [result, setResult] = useState<SimulationResult | null>(null);
-  const preview = useMemo(
-    () => plan.native ? null : runSimulation(plan, scenario),
-    [plan, scenario],
-  );
   const [baseline, setBaseline] = useState<SimulationResult | null>(null);
+  const [populationPreview, setPopulationPreview] = useState<PopulationPreview | null>(null);
+  const [placementStatus, setPlacementStatus] = useState({key:"",loading:false,error:""});
+  const populationKey = useMemo(()=>placementKey(plan,scenario,baseline),[plan,scenario,baseline]);
+  const currentPopulation = populationPreview?.key === populationKey ? populationPreview : null;
   const [runCount, setRunCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState(false);
@@ -205,6 +207,30 @@ export default function Workspace({
     [],
   );
 
+  useEffect(() => {
+    if (mode !== "layout") return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setPlacementStatus({key:populationKey,loading:true,error:""});
+      try {
+        const response = await fetch("/api/populations", {method:"POST",headers:{"Content-Type":"application/json"},
+          signal:controller.signal, body:JSON.stringify({plan,scenario:{...scenario,blocked_exit_ids:scenario.blockedExitIds ?? []},
+            ...(baseline ? {starting_population:startingPopulation(baseline)} : {})})});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Could not place people in this layout.");
+        const next = adaptPopulationPreview(payload,plan,populationKey);
+        if (next.people.length !== scenario.occupancy) throw new Error("The placement service returned a different crowd size.");
+        if (controller.signal.aborted) return;
+        setPopulationPreview(next);
+        setPlacementStatus({key:populationKey,loading:false,error:""});
+      } catch (cause) {
+        if (controller.signal.aborted) return;
+        setPlacementStatus({key:populationKey,loading:false,error:cause instanceof Error ? cause.message : "Placement failed."});
+      }
+    }, 350);
+    return () => {clearTimeout(timer);controller.abort();};
+  }, [plan, scenario, baseline, populationKey, mode]);
+
   async function saveCopy() {
     const controller = accountController.current;
     if (!ownerId || copying || !controller || controller.signal.aborted) return;
@@ -308,7 +334,7 @@ export default function Workspace({
       JSON.stringify(baseline.scenario) === JSON.stringify(result.scenario),
   );
   const shownPlan = mode === "layout" ? plan : (result?.plan ?? plan);
-  const shownResult = mode === "layout" ? (!stale && result ? result : preview) : result;
+  const shownResult = mode === "layout" ? (!stale && result ? result : null) : result;
   const evacuated = result ? getEvacuatedCount(result, time) : 0;
   const responding = result?.agents.filter(agent => agent.outcome !== "trapped" && time < agent.delay).length ?? 0;
   const duration = Math.max(
@@ -399,7 +425,7 @@ export default function Workspace({
   }
   function acceptImport(data: {plan: unknown;warnings?:string[]}) {
     const next=validatePlan(data.plan);
-    editPlan(next);setBaseline(null);setResult(null);setScenario({...scenario,blockedExitIds:[]});setSelectedId(null);setGeometrySelection(null);setGeometryTool("select");
+    editPlan(next);setBaseline(null);setResult(null);setPopulationPreview(null);setScenario({...scenario,blockedExitIds:[],distribution:"normal",population:{}});setSelectedId(null);setGeometrySelection(null);setGeometryTool("select");
     setMode("layout");setModal(null);setPendingCalibration(null);setCalibratingExisting(false);setError("");setRunError("");
     const calibration=next.native?nativeLayout(next).source_image?.calibration:null;
     setNotice((calibration?.method==="automatic"?`Scale detected from ${calibration.label}. `:
@@ -577,6 +603,7 @@ export default function Workspace({
               movingRemaining: result.movingRemaining,
               startingOccupants: result.startingOccupants,
               behaviorVersion: result.behaviorVersion,
+              exitChanges: result.exitChanges,
               individualBehavior: result.agents.map(agent => ({id:agent.sourceId, responseDelay:agent.delay, desiredSpeed:agent.desiredSpeed})),
               status: result.status,
               plan: result.plan,
@@ -613,6 +640,7 @@ export default function Workspace({
     referenceOpacity,
     geometrySelection,
     blockedExitIds: scenario.blockedExitIds,
+    placement: mode === "layout" ? currentPopulation : null,
     geometryTool,
     onGeometrySelect:(selection:GeometrySelection)=>{
       setGeometrySelection(selection);
@@ -723,13 +751,14 @@ export default function Workspace({
                 setError("");
               }}
               onUseCrowdEstimate={(occupancy) => {
-                const clearingBaseline = Boolean(baseline && scenario.occupancy !== occupancy);
+                const clearingBaseline = Boolean(baseline && (scenario.occupancy !== occupancy ||
+                  ((scenario.distribution === "rooms" || scenario.distribution === "normal") && Object.keys(scenario.population?.roomCounts ?? {}).length > 0)));
                 if (clearingBaseline) {
                   setBaseline(null);
                 }
                 if (scenario.occupancy !== occupancy) setMode("layout");
                 setPlaying(false);
-                setScenario((current) => ({ ...current, occupancy }));
+                setScenario((current) => ({ ...current, occupancy, population:{...current.population,roomCounts:{}} }));
                 setNotice(`Venue crowd estimate applied: ${occupancy} people.${clearingBaseline ? " Baseline cleared because the starting crowd changed." : ""}`);
               }}
             >
@@ -950,11 +979,15 @@ export default function Workspace({
                     })
                   }
                 >
-                  <option value="uniform">Across the floor plan</option>
-                  <option value="workstations">Around workstations</option>
+                  <option value="uniform">Random · anywhere walkable</option>
+                  <option value="normal">Normal · seated / at desks</option>
                 </select>
                 <Icon name="chevron" size={13} />
               </div>
+              {(scenario.distribution === "rooms" || scenario.distribution === "normal") && <RoomPopulationPanel plan={plan} scenario={scenario}
+                preview={currentPopulation ?? populationPreview} loading={placementStatus.key !== populationKey || placementStatus.loading}
+                error={placementStatus.key === populationKey ? placementStatus.error : ""}
+                onChange={next=>{setScenario(next);setMode("layout");setPlaying(false);}} />}
               <label className="field-label" htmlFor="body-width">Body width (cm)</label>
               <input id="body-width" type="number" min="40" max="70" step="1" value={Math.round((scenario.bodyWidth ?? .46)*100)}
                 onChange={event => {const width=Number(event.target.value);if(Number.isInteger(width)&&width>=40&&width<=70)
@@ -992,16 +1025,18 @@ export default function Workspace({
               <div className="select-wrap">
                 <select id="behavior-mode" value={scenario.behaviorMode ?? "idealized"}
                   onChange={event => setScenario({...scenario,behaviorMode:event.target.value as Scenario["behaviorMode"]})}>
-                  <option value="idealized">Idealized · immediate response</option>
-                  <option value="behavioral">Behavioral · varied response</option>
+                  <option value="idealized">Direct · nearest exit</option>
+                  <option value="behavioral">Natural · avoids crowded exits</option>
                 </select>
                 <Icon name="chevron" size={13}/>
               </div>
               <p className="field-note">{scenario.behaviorMode === "behavioral"
-                ? "Response delays: 0–12 s, most likely 3 s. Desired speeds vary ±15% around each person’s base speed. Amber people are still responding."
-                : "Everyone responds immediately and uses their base walking speed. This is not a globally optimal evacuation."}</p>
-              <p className="field-note">Behavioral assumptions are illustrative. The seed repeats the same individual differences.</p>
+                ? "Everyone starts immediately. People reconsider crowded exits and switch when another reachable exit offers a clearly better estimated arrival time."
+                : "Everyone starts immediately and keeps their initially nearest reachable exit. This is not a globally optimal evacuation."}</p>
+              <p className="field-note">Natural mode uses queue estimates and a cooldown to avoid constant back-and-forth switching. Sideways squeezing is not modeled.</p>
             </fieldset>
+            {(scenario.distribution !== "rooms" && scenario.distribution !== "normal") && placementStatus.key === populationKey && placementStatus.error &&
+              <p className="room-placement-error" role="alert">{placementStatus.error}</p>}
             <fieldset disabled={busy} className="exit-availability">
               <legend>Blocked exits</legend>
               <p className="helper">Unavailable for the entire run. Blocking every exit is allowed. Doorway geometry stays unchanged.</p>
@@ -1080,7 +1115,7 @@ export default function Workspace({
                 {busy
                   ? "Computing crowd movement"
                   : mode === "layout"
-                    ? plan.native ? "Editing imported geometry · run to place people" : "Editing layout · placement preview"
+                    ? "Editing layout · live placement preview"
                     : playing
                       ? "Playing simulation"
                       : "Simulation paused"}
@@ -1101,7 +1136,7 @@ export default function Workspace({
               <div className="compare-plans">
                 <div>
                   <div className="compare-label">
-                    <span>BASELINE · {baseline.scenario.behaviorMode === "behavioral" ? "BEHAVIORAL" : "IDEALIZED"}</span>
+                    <span>BASELINE · {baseline.scenario.behaviorMode === "behavioral" ? "NATURAL" : "DIRECT"}</span>
                     <strong>{clearanceLabel(baseline)}</strong>
                   </div>
                   <FloorPlanView
@@ -1113,7 +1148,7 @@ export default function Workspace({
                 </div>
                 <div>
                   <div className="compare-label">
-                    <span>PROPOSED · {result.scenario.behaviorMode === "behavioral" ? "BEHAVIORAL" : "IDEALIZED"}</span>
+                    <span>PROPOSED · {result.scenario.behaviorMode === "behavioral" ? "NATURAL" : "DIRECT"}</span>
                     <strong>{clearanceLabel(result)}</strong>
                   </div>
                   <FloorPlanView
@@ -1218,7 +1253,7 @@ export default function Workspace({
                 <>
                   <span className="legend-person" />
                   Person
-                  {(result?.scenario.behaviorMode === "behavioral" || (mode === "compare" && baseline?.scenario.behaviorMode === "behavioral")) && <>
+                  {(result?.agents.some(agent=>agent.delay>0) || (mode === "compare" && baseline?.agents.some(agent=>agent.delay>0))) && <>
                     <span className="legend-person" style={{background:"#b98a3e"}}/>Responding
                   </>}
                   {Boolean(result?.trapped || (mode === "compare" && baseline?.trapped)) && <>
@@ -1235,16 +1270,16 @@ export default function Workspace({
               <div className="playback-title">
                 <Icon name="clock" size={15} />
                 <strong>
-                  {mode === "layout" ? "Simulation playback" : "Playback"}
+                  {mode === "layout" ? "Starting placement" : "Playback"}
                 </strong>
                 <span>
-                  {result
-                    ? `${evacuated} / ${result.scenario.occupancy} exited${mode !== "layout" && responding ? ` · ${responding} responding` : ""}`
+                  {mode === "layout" ? currentPopulation ? `${currentPopulation.people.length} people placed${result ? " · Play shows the recorded run" : ""}` : "Run a scenario to inspect movement" : result
+                    ? `${evacuated} / ${result.scenario.occupancy} exited${responding ? ` · ${responding} responding` : ""}`
                     : "Run a scenario to inspect movement"}
                 </span>
               </div>
               <span className="playback-time mono">
-                {time.toFixed(1)} <span>/ {duration.toFixed(1)} s</span>
+                {(mode === "layout" ? 0 : time).toFixed(1)} <span>/ {duration.toFixed(1)} s</span>
               </span>
             </div>
             <div className="playback-bottom">
@@ -1253,7 +1288,7 @@ export default function Workspace({
                 aria-label={playing ? "Pause simulation" : "Play simulation"}
                 disabled={!result || busy || duration <= 0}
                 onClick={() => {
-                  if (time >= duration) setTime(0);
+                  if (mode === "layout" || time >= duration) setTime(0);
                   setMode(mode === "layout" ? "simulation" : mode);
                   setPlaying(!playing);
                 }}
@@ -1278,7 +1313,7 @@ export default function Workspace({
                 max={Math.max(0.1, duration)}
                 step="0.1"
                 disabled={!result || duration <= 0}
-                value={time}
+                value={mode === "layout" ? 0 : time}
                 onChange={(e) => {
                   setTime(Number(e.target.value));
                   setPlaying(false);
@@ -1325,9 +1360,10 @@ export default function Workspace({
             <p className="scale-estimate-note">Automatic placement excluded {result.placementExcludedArea!.toFixed(1)} m² with no body-clear route to an exit. These areas had no starting occupants; review narrow gaps and enclosed rooms before interpreting the results.</p>}
           {result && (
             <p className="results-subtitle">
-              {`${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.behaviorMode === "behavioral" ? "Behavioral" : "Idealized"} · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`}
+              {`${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.behaviorMode === "behavioral" ? "Natural" : "Direct"} · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`}
             </p>
           )}
+          {result?.exitChanges && result.exitChanges.length>0 && <p className="results-subtitle">{new Set(result.exitChanges.map(change=>change.agentId)).size} people changed exits to avoid congestion ({result.exitChanges.length} changes).</p>}
           {stale && (
             <div className="result-stale">Inputs changed since this run</div>
           )}
@@ -1512,7 +1548,7 @@ export default function Workspace({
                     : "Change evacuation mode, block exits or edit the layout, then run again."}
                 </p>
                 {canCompare && result && <dl className="comparison-outcomes">
-                  <div><dt>Mode · before → after</dt><dd>{baseline.scenario.behaviorMode === "behavioral" ? "Behavioral" : "Idealized"} → {result.scenario.behaviorMode === "behavioral" ? "Behavioral" : "Idealized"}</dd></div>
+                  <div><dt>Mode · before → after</dt><dd>{baseline.scenario.behaviorMode === "behavioral" ? "Natural" : "Direct"} → {result.scenario.behaviorMode === "behavioral" ? "Natural" : "Direct"}</dd></div>
                   <div><dt>Evacuated · before → after</dt><dd>{baseline.exited} → {result.exited}</dd></div>
                   <div><dt>Trapped · before → after</dt><dd>{baseline.trapped ?? 0} → {result.trapped ?? 0}</dd></div>
                   <div><dt>With a route · before → after</dt><dd>{baseline.movingRemaining ?? baseline.remaining} → {result.movingRemaining ?? result.remaining}</dd></div>
@@ -1731,13 +1767,10 @@ export default function Workspace({
               <div>
                 <dt>Movement</dt>
                 <dd>
-                  JuPedSim uses a collision-free speed model. People choose an
-                  exit once using the shortest routed distance around obstacles;
-                  they do not switch destinations to avoid congestion.
-                  Idealized mode starts everyone immediately at their base desired speed.
-                  Behavioral mode samples response delays from a triangular 0–12 s distribution (mode 3 s)
-                  and speed multipliers from a triangular 0.85–1.15 distribution (mode 1).
-                  These are illustrative assumptions, not calibrated predictions. Waiting people remain physical obstacles.
+                  JuPedSim uses a collision-free speed model with body-clear routes around obstacles.
+                  Both modes start immediately.
+                  Natural mode starts immediately, varies desired speeds slightly, and periodically compares estimated travel plus doorway queue time. Exit changes require a clear benefit and a cooldown. Direct mode keeps the initial nearest exit.
+                  These are illustrative assumptions, not calibrated predictions.
                 </dd>
               </div>
               <div>
@@ -1757,7 +1790,7 @@ export default function Workspace({
                   timestamps. 1× advances one simulated second per real second.
                   Reduced motion starts runs paused.
                   Shoulder ellipses face the measured walking direction with smoothed turns;
-                  collision and route clearance still use circular bodies. Amber means waiting to respond; red means trapped.
+                  collision and route clearance still use circular bodies, with no sideways squeezing. Red means trapped.
                   Body width defaults to 46 cm (a 23 cm radius), is adjustable from 40–70 cm, and sets both the shoulder span and collision diameter.
                   Door widths come from the floor geometry; wide exits can support people abreast. Estimated drawing scale affects their measured width.
                 </dd>
@@ -1772,8 +1805,7 @@ export default function Workspace({
               </div>
             </dl>
             <p className="dialog-note">
-              Runs are computed by the simulation service. Layout people are
-              placement previews for the sample. Image extraction uses the selected provider and scale; imported layouts use the native geometry. Export PDF pages as images first.
+              Runs and placement previews are computed by the simulation service. Normal layout previews show seated poses; evacuation starts at adjacent clear standing positions without a sit-to-stand animation. Small individual chairs are movable seating assumptions; major furniture stays solid. Image extraction uses the selected provider and scale. Export PDF pages as images first.
             </p>
           </>
         )}

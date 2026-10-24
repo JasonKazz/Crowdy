@@ -107,10 +107,16 @@ def run_simulation(scenario: Scenario) -> dict:
     crossed = set()
     boundaries = {boundary.id: boundary for boundary in scenario.exit_boundaries}
     steering_interval = max(1, round(.1 / settings.dt))
+    from app.simulation.adaptive import AdaptiveExitChoices
+    adaptive = AdaptiveExitChoices(scenario,planner,exit_shapes,behavior_by_id) if settings.behavior_mode == "behavioral" else None
+    decision_interval = max(1,round(1 / settings.dt))
 
     steps_to_run = 0 if len(trapped) == len(ids) else max_steps
     for step in range(1, steps_to_run + 1):
         any_released = False
+        if adaptive is not None and (step == 1 or step % decision_interval == 0):
+            adaptive.reconsider(list(simulation.agents()),agent_ids,agent_exits,agent_paths,cursors,
+                                simulation.elapsed_time(),crossed | waiting)
         for agent in simulation.agents():
             if agent_ids[agent.id] in trapped:
                 continue
@@ -156,6 +162,9 @@ def run_simulation(scenario: Scenario) -> dict:
         if finished:
             break
 
+    for assignment in assignments:
+        engine_id=next(key for key,value in agent_ids.items() if value==assignment["agent_id"])
+        assignment["final_exit_id"] = agent_exits[engine_id]
     completed = simulation.agent_count() == 0
     moving_remaining = simulation.agent_count() - len(trapped)
     return {
@@ -165,8 +174,10 @@ def run_simulation(scenario: Scenario) -> dict:
             population_config.model_dump(mode="json") if population_config else None
         ),
         "assignments": assignments,
-        "behavior": {"version": 1, "mode": settings.behavior_mode, "seed": settings.behavior_seed,
+        "behavior": {"version": 2, "mode": settings.behavior_mode, "seed": settings.behavior_seed,
                      "agents": behaviors},
+        "routing": {"version":1,"mode":"adaptive" if adaptive else "fixed",
+                    "exit_changes":adaptive.events if adaptive else []},
         "trapped": [{"agent_id": identifier, "reason": "No body-clear route to an available exit"}
                     for identifier in sorted(trapped)],
         "frames": frames,

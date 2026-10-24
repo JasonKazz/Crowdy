@@ -119,7 +119,7 @@ try {
   assert.equal(behavioralResult.exited,20);
   assert.deepEqual(behavioralResult.startingOccupants,nativeResult.startingOccupants);
   assert.ok(behavioralResult.reusedStarts);
-  assert.ok(behavioralResult.agents.every(agent=>agent.delay>0 && agent.desiredSpeed>0));
+  assert.ok(behavioralResult.agents.every(agent=>agent.delay===0 && agent.desiredSpeed>0));
   assert.ok(new Set(behavioralResult.agents.map(agent=>agent.desiredSpeed)).size>1);
   passed++;
   await rejected({plan:nativePlan,scenario:{...seededScenario,bodyWidth:.6},starting_population:reference},422);

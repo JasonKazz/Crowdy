@@ -29,7 +29,7 @@ class BehaviorTests(unittest.TestCase):
         reversed_scenario = scenario.model_copy(update={"occupants": list(reversed(scenario.occupants))})
         self.assertEqual(first, list(reversed(agent_behaviors(reversed_scenario))))
         for person, behavior in zip(scenario.occupants, first):
-            self.assertTrue(0 <= behavior["response_delay"] <= 12)
+            self.assertEqual(behavior["response_delay"], 0)
             self.assertTrue(.85 <= behavior["speed_factor"] <= 1.15)
             self.assertAlmostEqual(behavior["desired_speed"], person.desired_speed * behavior["speed_factor"], places=6)
         self.assertGreater(len({b["desired_speed"] for b in first}), 3)
@@ -37,29 +37,19 @@ class BehaviorTests(unittest.TestCase):
         scenario.settings.behavior_seed += 1
         self.assertNotEqual(first, agent_behaviors(scenario))
 
-    def test_native_waiting_is_stationary_until_delay_and_then_evacuates(self):
+    def test_natural_starts_immediately_and_remains_deterministic(self):
         scenario = self.scenario()
         result = run_simulation(scenario)
         repeated = run_simulation(scenario)
         self.assertEqual(result["frames"], repeated["frames"])
+        self.assertEqual(result["routing"], repeated["routing"])
         self.assertEqual(result["status"], "completed")
-        behavior = {p["agent_id"]: p for p in result["behavior"]["agents"]}
-        starts = {p.id: p.position for p in scenario.occupants}
-        for frame in result["frames"]:
-            for person in frame["agents"]:
-                if frame["time"] <= behavior[person["id"]]["response_delay"]:
-                    self.assertEqual((person["x"],person["y"]), starts[person["id"]])
-        for event in result["evacuations"]:
-            self.assertGreater(event["time"],behavior[event["agent_id"]]["response_delay"])
-        for identifier, settings in behavior.items():
-            # A release-step sample prevents interpolation before the response.
-            release = next(frame for frame in result["frames"] if frame["time"] >= settings["response_delay"])
-            person = next(p for p in release["agents"] if p["id"] == identifier)
-            self.assertLessEqual(release["time"]-settings["response_delay"],scenario.settings.dt+1e-8)
-            self.assertEqual((person["x"],person["y"]),starts[identifier])
+        self.assertEqual(result["behavior"]["version"], 2)
+        self.assertTrue(all(p["response_delay"] == 0 for p in result["behavior"]["agents"]))
+        self.assertNotEqual(result["frames"][0]["agents"], result["frames"][1]["agents"])
         self.assertEqual(result["scenario"]["occupants"], scenario.model_dump(mode="json")["occupants"])
 
-    def test_waiting_counts_as_remaining_at_timeout(self):
+    def test_short_run_keeps_remaining_people_without_artificial_waits(self):
         scenario = self.scenario()
         scenario.settings.max_time = .02
         result = run_simulation(scenario)
@@ -67,7 +57,7 @@ class BehaviorTests(unittest.TestCase):
         self.assertEqual(result["summary"]["remaining_count"], 12)
         self.assertEqual(result["summary"]["trapped_count"], 0)
         self.assertIsNone(result["summary"]["clearance_time"])
-        self.assertEqual(result["frames"][0]["agents"],result["frames"][-1]["agents"])
+        self.assertNotEqual(result["frames"][0]["agents"],result["frames"][-1]["agents"])
 
     def test_all_closed_still_reports_trapped_without_waiting(self):
         scenario = self.scenario()

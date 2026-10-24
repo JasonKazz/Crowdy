@@ -52,8 +52,16 @@ class WorkspaceInput(InputModel):
         from app.api import EditorPlan, EditorSettings
         try:
             EditorPlan.model_validate(self.plan)
-            aliases = {"blockedExitIds": "blocked_exit_ids", "behaviorMode": "behavior_mode", "bodyWidth": "body_width"}
-            EditorSettings.model_validate({aliases.get(key, key): value for key, value in self.scenario.items()})
+            aliases = {"blockedExitIds": "blocked_exit_ids", "behaviorMode": "behavior_mode", "bodyWidth": "body_width",
+                       "population": "population_config"}
+            settings = {aliases.get(key, key): value for key, value in self.scenario.items()}
+            # Workspaces store the frontend's editor representation verbatim;
+            # normalize room placement settings only for API schema validation.
+            population = settings.get("population_config")
+            if isinstance(population, dict):
+                population_aliases = {"buildingType": "building_type", "roomCounts": "room_counts", "roomTypes": "room_types"}
+                settings["population_config"] = {population_aliases.get(key, key): value for key, value in population.items()}
+            EditorSettings.model_validate(settings)
         except ValidationError:
             raise ValueError("Choose a valid floor plan and scenario") from None
         return self

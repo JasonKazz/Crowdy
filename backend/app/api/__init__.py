@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.schemas.scenario import InputModel, Occupant
 from app.schemas.layout import Layout
+from app.schemas.rooms import PopulationConfig, RoomType
 from app.schemas.extraction import ImageUpload, ExtractionRequest, ScaleReference
 from app.services.floorplans.images import save_image, extract_image, finish_calibration, load_image_bytes, image_preview
 from app.services.floorplans.storage import editor_storage_root
@@ -133,7 +134,7 @@ class NativeView(InputModel):
 class EditorItem(InputModel):
     id: str = Field(min_length=1, max_length=128)
     label: str = Field(min_length=1, max_length=80)
-    kind: Literal["desk", "table", "shelf", "sofa", "plant", "obstacle"]
+    kind: Literal["desk", "table", "shelf", "sofa", "plant", "obstacle", "chair"]
     x: float = Field(ge=0, le=900)
     y: float = Field(ge=0, le=600)
     width: float = Field(gt=0, le=900)
@@ -161,6 +162,19 @@ class EditorExit(InputModel):
     y: float = Field(ge=0, le=600)
 
 
+class CanvasPoint(InputModel):
+    x: float = Field(ge=0, le=900)
+    y: float = Field(ge=0, le=600)
+
+
+class EditorRoom(InputModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=80)
+    room_type: RoomType = "unknown"
+    polygon: list[CanvasPoint] = Field(min_length=3, max_length=1200)
+
+
 class EditorPlan(InputModel):
     id: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=80)
@@ -170,11 +184,12 @@ class EditorPlan(InputModel):
     items: list[EditorItem] = Field(max_length=1200)
     walls: list[EditorWall] = Field(max_length=1200)
     exits: list[EditorExit] = Field(max_length=30)
+    rooms: list[EditorRoom] = Field(default_factory=list, max_length=100)
     native: NativeView | None = None
 
     @model_validator(mode="after")
     def unique_ids(self):
-        for name in ("items", "exits"):
+        for name in ("items", "exits", "rooms"):
             values = [item.id for item in getattr(self, name)]
             if len(values) != len(set(values)):
                 raise ValueError(f"{name} IDs must be unique")
@@ -184,19 +199,21 @@ class EditorPlan(InputModel):
 class EditorSettings(InputModel):
     occupancy: int = Field(ge=1, le=200)
     mobility: Literal["standard", "mixed"]
-    distribution: Literal["uniform", "workstations"]
+    distribution: Literal["uniform", "workstations", "rooms", "normal"]
     seed: int = Field(default=42, ge=0, le=2**32 - 1)
     blocked_exit_ids: list[str] = Field(default_factory=list, max_length=30)
     behavior_mode: Literal["idealized", "behavioral"] = "idealized"
     body_width: float = Field(default=.46, ge=.4, le=.7)
+    population_config: PopulationConfig = Field(default_factory=PopulationConfig)
 
 
 class StartingPopulation(InputModel):
     occupants: list[Occupant] = Field(min_length=1, max_length=200)
     radius: float = Field(gt=0)
     mobility: Literal["standard", "mixed"]
-    distribution: Literal["uniform", "workstations"]
+    distribution: Literal["uniform", "workstations", "rooms", "normal"]
     seed: int = Field(ge=0, le=2**32 - 1)
+    population_config: PopulationConfig | None = None
 
 
 class SimulationRequest(InputModel):
@@ -238,7 +255,8 @@ def health(response: Response):
 def run_editor_simulation(payload: SimulationRequest):
     plan = payload.plan.model_dump()
     settings = payload.scenario.model_dump()
-    scenario = editor_to_scenario(plan, settings, payload.starting_population)
+    room_population = {}
+    scenario = editor_to_scenario(plan, settings, payload.starting_population, room_population)
     result = run_simulation(scenario)
     from app.simulation.geometry import build_geometry
     _, excluded_area = placement_access(build_geometry(scenario), scenario.exits, scenario.agent_defaults.radius)
@@ -253,7 +271,8 @@ def run_editor_simulation(payload: SimulationRequest):
     result["editor_metadata"] = {"seed": settings.get("seed", POPULATION_SEED), "walking_profile": settings["mobility"],
         "excluded_spawn_area_m2": 0 if payload.starting_population is not None else round(excluded_area, 4),
         "reused_starting_population": payload.starting_population is not None,
-        "distribution": settings["distribution"], "pixels_per_metre": plan["native"]["transform"]["pixels_per_metre"] if plan.get("native") else 32}
+        "distribution": settings["distribution"], "room_population": room_population or None,
+        "pixels_per_metre": plan["native"]["transform"]["pixels_per_metre"] if plan.get("native") else 32}
     return result
 
 
@@ -263,6 +282,21 @@ def require_backend_token(authorization):
         scheme, _, supplied_token = (authorization or "").partition(" ")
         if scheme.lower() != "bearer" or not secrets.compare_digest(supplied_token.encode(), expected_token.encode()):
             raise HTTPException(status_code=401, detail="Backend authorization is required", headers={"WWW-Authenticate": "Bearer", "Cache-Control": "private, no-store"})
+
+
+@app.post("/api/populations/preview")
+def population_preview(payload: SimulationRequest, response: Response, authorization: str | None = Header(default=None)):
+    """Use the exact same placement path as Run, without advancing the engine."""
+    require_backend_token(authorization)
+    metadata = {}
+    try:
+        scenario = editor_to_scenario(payload.plan.model_dump(), payload.scenario.model_dump(),
+                                      payload.starting_population, metadata)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)[:600]) from exc
+    response.headers["Cache-Control"] = "private, no-store"
+    return {"occupants": [person.model_dump(mode="json") for person in scenario.occupants],
+            "radius": scenario.agent_defaults.radius, "room_population": metadata or None}
 
 
 @app.post("/api/simulations")

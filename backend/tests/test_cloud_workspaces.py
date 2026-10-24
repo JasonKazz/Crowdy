@@ -145,6 +145,43 @@ class WorkspaceContract:
         if self.cloud:
             self.assertTrue(all("auth0" not in name and "alice" not in name for name in self.blobs.objects))
 
+    def test_room_population_settings_survive_create_update_and_worker_reload(self):
+        value = payload()
+        layout = json.loads((Path(__file__).resolve().parents[2] / "examples/room_aware_office.json").read_text())
+        value["plan"] = native_to_editor(layout)
+        value["scenario"].update(
+            distribution="normal", occupancy=40, bodyWidth=.6, behaviorMode="behavioral", seed=14,
+            population={"buildingType": "office", "activity": "workday", "roomCounts": {"workspace": 24},
+                        "roomTypes": {"lunch-room": "cafeteria"}},
+        )
+        original = self.create(value)
+        self.assertEqual(original["plan"], value["plan"])
+        self.assertEqual(original["scenario"], value["scenario"])
+
+        update = {key: copy.deepcopy(value[key]) for key in ("plan", "scenario")}
+        update["expectedUpdatedAt"] = original["updatedAt"]
+        update["scenario"]["distribution"] = "rooms"
+        update["scenario"]["population"].update(activity="lunch", roomCounts={"lunch-room": 13})
+        response = self.client.put(self.url, headers=self.alice, json=update)
+        self.assertEqual(response.status_code, 200, response.text)
+        latest = response.json()
+        self.assertEqual(latest["scenario"], update["scenario"])
+        self.assertEqual(latest["plan"], value["plan"])
+        with TestClient(api.app) as another_worker:
+            self.assertEqual(another_worker.get(self.url, headers=self.alice).json(), latest)
+
+    def test_invalid_population_settings_cannot_replace_a_saved_workspace(self):
+        original = self.create()
+        for population in ([], None, {"activity": "invalid"}, {"roomCounts": {"workspace": -1}},
+                           {"roomCounts": {"workspace": True}}, {"roomTypes": {"workspace": "invalid"}}):
+            with self.subTest(population=population):
+                update = {key: copy.deepcopy(original[key]) for key in ("plan", "scenario")}
+                update["expectedUpdatedAt"] = original["updatedAt"]
+                update["scenario"].update(distribution="rooms", population=population)
+                response = self.client.put(self.url, headers=self.alice, json=update)
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertEqual(self.client.get(self.url, headers=self.alice).json(), original)
+
     def test_other_account_cannot_read_mutate_or_delete_anything(self):
         self.create()
         self.assertEqual(self.upload().status_code, 201)
