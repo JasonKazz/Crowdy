@@ -31,6 +31,7 @@ from app.simulation.editor_adapter import POPULATION_SEED, editor_to_scenario, p
 from app.simulation.engine import run_simulation
 
 MAX_BODY_BYTES = 1_048_576
+MAX_WORKSPACE_BODY_BYTES = 2 * 1_048_576
 ENGINE_VERSION = version("jupedsim")
 _simulation_lock = threading.Lock()
 logger = logging.getLogger(__name__)
@@ -64,7 +65,10 @@ class BodyLimitMiddleware:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         headers = dict(scope.get("headers", []))
-        limit = 14 * 1024 * 1024 if scope.get("path") == "/api/floorplans" else self.limit
+        path = scope.get("path", "")
+        image_request = path == "/api/floorplans" or (path.startswith("/api/workspaces/") and path.endswith("/sources"))
+        workspace_request = path == "/api/workspaces" or path.startswith("/api/workspaces/")
+        limit = 14 * 1024 * 1024 if image_request else MAX_WORKSPACE_BODY_BYTES if workspace_request else self.limit
         try:
             declared = int(headers.get(b"content-length", b"0"))
         except ValueError:
@@ -100,7 +104,9 @@ class BodyLimitMiddleware:
     async def too_large(self, scope, receive, send):
         response = JSONResponse(
             {"detail": "Image request exceeds the 14 MB encoded limit. Choose an image up to 10 MB."
-             if scope.get("path") == "/api/floorplans" else
+             if scope.get("path") == "/api/floorplans" or (scope.get("path", "").startswith("/api/workspaces/") and scope.get("path", "").endswith("/sources")) else
+             "Workspace request exceeds the 2 MiB limit. Reduce the layout size and try again."
+             if scope.get("path") == "/api/workspaces" or scope.get("path", "").startswith("/api/workspaces/") else
              "Floor-plan request exceeds the 1 MB limit. Reduce the layout size and try again."},
             status_code=413,
             headers={"Cache-Control": "private, no-store"},
@@ -218,6 +224,9 @@ class SimulationRequest(InputModel):
 
 app = FastAPI(title="Crowdy JuPedSim service", version="1.0.0")
 app.add_middleware(BodyLimitMiddleware)
+
+from app.api.workspaces import router as workspace_router
+app.include_router(workspace_router)
 
 
 @app.exception_handler(RequestValidationError)

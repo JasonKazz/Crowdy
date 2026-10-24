@@ -132,7 +132,7 @@ export default function AuthControls() {
             {email && <span>{email}</span>}
           </div>
           <p className={styles.storageNote} role="presentation">
-            Workspaces are saved on this device.
+            Workspaces are saved to your account.
           </p>
           <a
             ref={signOutRef}

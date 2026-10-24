@@ -112,6 +112,9 @@ export default function Workspace({
   const [runError, setRunError] = useState("");
   const [saveError, setSaveError] = useState("");
   const [copyError, setCopyError] = useState("");
+  const [copying, setCopying] = useState(false);
+  const accountController = useRef<AbortController | null>(null);
+  const saveOperation = useRef<Promise<boolean> | null>(null);
   const [savedSetup, setSavedSetup] = useState(() =>
     signature(initialPlan, initialScenario),
   );
@@ -127,30 +130,46 @@ export default function Workspace({
   const uploadRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
-  const persistWorkspace = useCallback(() => {
+  useEffect(() => {
+    const controller = new AbortController();
+    accountController.current = controller;
+    return () => controller.abort();
+  }, [ownerId, workspaceId]);
+
+  const persistWorkspace = useCallback(async (): Promise<boolean> => {
     if (isSample || !ownerId) return true;
-    const currentSignature = signature(plan, scenario);
-    if (currentSignature === savedSignature.current) return true;
-    try {
-      updateWorkspace(ownerId, workspaceId, { plan, scenario });
-      savedSignature.current = currentSignature;
-      setSavedSetup(currentSignature);
-      setSaveError("");
-      return true;
-    } catch (error) {
-      setSaveError(
-        error instanceof Error
-          ? error.message
-          : "This workspace could not be saved. Export a copy before leaving.",
-      );
-      return false;
-    }
-  }, [isSample, ownerId, workspaceId, plan, scenario]);
+    const controller = accountController.current;
+    if (!controller || controller.signal.aborted) return false;
+    if (saveOperation.current) return saveOperation.current;
+    const operation = (async () => {
+      try {
+        // Coalesce edits made while a save is pending. The store also serializes
+        // mutations and sends the last acknowledged revision to the server.
+        while (!controller.signal.aborted) {
+          const pending = pendingSetup.current;
+          const currentSignature = signature(pending.plan, pending.scenario);
+          if (currentSignature === savedSignature.current) return true;
+          await updateWorkspace(ownerId, workspaceId, pending, { signal: controller.signal });
+          if (controller.signal.aborted) return false;
+          savedSignature.current = currentSignature;
+          setSavedSetup(currentSignature);
+          setSaveError("");
+        }
+        return false;
+      } catch (error) {
+        if (!controller.signal.aborted) setSaveError(error instanceof Error ? error.message : "This workspace could not be saved. Try again before leaving.");
+        return false;
+      }
+    })();
+    saveOperation.current = operation;
+    void operation.finally(() => { if (saveOperation.current === operation) saveOperation.current = null; });
+    return operation;
+  }, [isSample, ownerId, workspaceId]);
 
   useEffect(() => {
     pendingSetup.current = { plan, scenario };
     if (isSample || signature(plan, scenario) === savedSetup) return;
-    const timer = setTimeout(persistWorkspace, 150);
+    const timer = setTimeout(() => { void persistWorkspace(); }, 150);
     return () => clearTimeout(timer);
   }, [isSample, plan, scenario, savedSetup, persistWorkspace]);
 
@@ -158,18 +177,14 @@ export default function Workspace({
     if (isSample || !ownerId) return;
     function flush() {
       const pending = pendingSetup.current;
-      const currentSignature = signature(pending.plan, pending.scenario);
-      if (currentSignature === savedSignature.current) return true;
-      try {
-        updateWorkspace(ownerId!, workspaceId, pending);
-        savedSignature.current = currentSignature;
-        return true;
-      } catch {
-        return false;
-      }
+      if (signature(pending.plan, pending.scenario) === savedSignature.current || saveOperation.current) return;
+      // Page shutdown is best effort: do not claim a save until its response.
+      // Large snapshots cannot use the browser's 64 KiB keepalive allowance.
+      if (new TextEncoder().encode(JSON.stringify(pending)).byteLength >= 59 * 1024) return;
+      void updateWorkspace(ownerId!, workspaceId, pending, { keepalive: true }).catch(() => undefined);
     }
     function beforeUnload(event: BeforeUnloadEvent) {
-      if (!flush()) {
+      if (signature(pendingSetup.current.plan, pendingSetup.current.scenario) !== savedSignature.current) {
         event.preventDefault();
         event.returnValue = "";
       }
@@ -179,7 +194,6 @@ export default function Workspace({
     return () => {
       window.removeEventListener("pagehide", flush);
       window.removeEventListener("beforeunload", beforeUnload);
-      flush();
     };
   }, [isSample, ownerId, workspaceId]);
 
@@ -217,21 +231,27 @@ export default function Workspace({
     return () => {clearTimeout(timer);controller.abort();};
   }, [plan, scenario, baseline, populationKey, mode]);
 
-  function saveCopy() {
-    if (!ownerId) return;
+  async function saveCopy() {
+    const controller = accountController.current;
+    if (!ownerId || copying || !controller || controller.signal.aborted) return;
+    setCopying(true);
     try {
-      const record = createWorkspace(ownerId, {
+      const record = await createWorkspace(ownerId, {
         name: `${workspaceName} copy`.slice(0, 80),
         plan,
         scenario,
-      });
+      }, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       router.push(`/workspaces/${record.id}`);
     } catch (error) {
+      if (controller.signal.aborted) return;
       setCopyError(
         error instanceof Error
           ? error.message
           : "The copy could not be saved. Export this workspace to keep your work.",
       );
+    } finally {
+      if (!controller.signal.aborted) setCopying(false);
     }
   }
 
@@ -507,7 +527,8 @@ export default function Workspace({
     try {
       let data;
       if (image) {
-        data = {...await prepareImageUpload(file),provider:imageProvider,async_import:true};
+        const prepared = await prepareImageUpload(file);
+        data = {filename: prepared.filename, image_base64: prepared.image_base64, provider:imageProvider,async_import:true};
       } else data = JSON.parse(await file.text());
       controller.signal.throwIfAborted();
       const raw = data.plan ?? data;
@@ -648,7 +669,7 @@ export default function Workspace({
                 ? "Changes not saved"
                 : savedSetup !== signature(plan, scenario)
                   ? "Saving changes…"
-                  : "Saved on this device"}
+                  : "Saved to your account"}
             <span className="text-separator">/</span>Ground floor
           </p>
         </div>
@@ -673,9 +694,9 @@ export default function Workspace({
             This sample is available to everyone. Changes here are temporary.
           </p>
           {ownerId ? (
-            <button className="button secondary" onClick={saveCopy}>
+            <button className="button secondary" onClick={saveCopy} disabled={copying}>
               <Icon name="plus" size={15} />
-              Make a copy
+              {copying ? "Creating copy…" : "Make a copy"}
             </button>
           ) : (
             <a className="button secondary" href="/auth/login?returnTo=/">
@@ -1779,7 +1800,7 @@ export default function Workspace({
                 <dd>
                   {isSample
                     ? "Sample edits are temporary. Make a personal copy to keep them, or export this layout."
-                    : "This workspace is saved for your account on this device. Runs and baselines last for this session; export to keep a separate copy."}
+                    : "This workspace is saved to your account. Runs and baselines last for this session; export to keep a separate copy."}
                 </dd>
               </div>
             </dl>

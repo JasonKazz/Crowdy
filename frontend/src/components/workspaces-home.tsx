@@ -240,6 +240,8 @@ export default function WorkspacesHome() {
   const [name, setName] = useState("");
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
+  const accountRequests = useRef<AbortController | null>(null);
+  const libraryRequest = useRef<AbortController | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const dialogTitleId = useId();
@@ -254,34 +256,31 @@ export default function WorkspacesHome() {
       ? dialog
       : null;
 
-  const refreshLibrary = useCallback(() => {
+  const refreshLibrary = useCallback(async () => {
+    libraryRequest.current?.abort();
+    const controller = new AbortController();
+    libraryRequest.current = controller;
     if (!ownerId) {
       setLibrary({ ownerId: null, records: [], error: "" });
       return;
     }
     try {
-      setLibrary({ ownerId, records: listWorkspaces(ownerId), error: "" });
+      const records = await listWorkspaces(ownerId, { signal: controller.signal });
+      if (!controller.signal.aborted) setLibrary({ ownerId, records, error: "" });
     } catch (cause) {
-      setLibrary({
-        ownerId,
-        records: [],
-        error:
-          cause instanceof Error
-            ? cause.message
-            : "Your workspaces could not be loaded. Browser storage may be unavailable.",
-      });
+      if (!controller.signal.aborted) setLibrary({ ownerId, records: [], error:
+        cause instanceof Error ? cause.message : "Your workspaces could not be loaded. Try again." });
     }
   }, [ownerId]);
 
   useEffect(() => {
-    let active = true;
-    const refresh = () => {
-      if (active) refreshLibrary();
-    };
-    queueMicrotask(refresh);
-    const unsubscribe = subscribeWorkspaces(refresh);
+    const controller = new AbortController();
+    accountRequests.current = controller;
+    queueMicrotask(() => { if (!controller.signal.aborted) void refreshLibrary(); });
+    const unsubscribe = subscribeWorkspaces(() => { if (!controller.signal.aborted) void refreshLibrary(); });
     return () => {
-      active = false;
+      controller.abort();
+      libraryRequest.current?.abort();
       unsubscribe();
     };
   }, [refreshLibrary]);
@@ -324,7 +323,7 @@ export default function WorkspacesHome() {
     setDialog({ ownerId, type: "create", template, source });
   }
 
-  function submitCreate(event: React.FormEvent<HTMLFormElement>) {
+  async function submitCreate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (
       !ownerId ||
@@ -344,6 +343,8 @@ export default function WorkspacesHome() {
       nameRef.current?.focus();
       return;
     }
+    const controller = accountRequests.current;
+    if (!controller || controller.signal.aborted || busy) return;
     setBusy(true);
     try {
       const plan = structuredClone(activeDialog.source?.plan ?? SAMPLE_PLAN);
@@ -353,27 +354,29 @@ export default function WorkspacesHome() {
         plan.items = [];
         plan.walls = plan.walls.slice(0, 6);
       }
-      const created = createWorkspace(ownerId, {
+      const created = await createWorkspace(ownerId, {
         name: trimmedName,
         plan,
         scenario: structuredClone(
           activeDialog.source?.scenario ?? DEFAULT_SCENARIO,
         ),
-      });
+      }, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       setDialog(null);
       router.push(`/workspaces/${created.id}`);
     } catch (cause) {
+      if (controller.signal.aborted) return;
       setFormError(
         cause instanceof Error
           ? cause.message
-          : "This workspace could not be saved. Check browser storage and try again.",
+          : "This workspace could not be saved to your account. Try again.",
       );
     } finally {
-      setBusy(false);
+      if (!controller.signal.aborted) setBusy(false);
     }
   }
 
-  function confirmDelete() {
+  async function confirmDelete() {
     if (
       !ownerId ||
       isLoading ||
@@ -382,19 +385,23 @@ export default function WorkspacesHome() {
       activeDialog.workspace.ownerId !== ownerId
     )
       return;
+    const controller = accountRequests.current;
+    if (!controller || controller.signal.aborted || busy) return;
     setBusy(true);
     try {
-      deleteWorkspace(ownerId, activeDialog.workspace.id);
+      await deleteWorkspace(ownerId, activeDialog.workspace.id, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       setDialog(null);
       refreshLibrary();
     } catch (cause) {
+      if (controller.signal.aborted) return;
       setFormError(
         cause instanceof Error
           ? cause.message
           : "This workspace could not be deleted. Try again.",
       );
     } finally {
-      setBusy(false);
+      if (!controller.signal.aborted) setBusy(false);
     }
   }
 
@@ -650,7 +657,7 @@ export default function WorkspacesHome() {
               </p>
             )}
             <p className={styles.localNote}>
-              This workspace is saved under your account in this browser.
+              This workspace is saved to your account.
             </p>
             {formError && (
               <div className={styles.formError} role="alert">
@@ -680,7 +687,7 @@ export default function WorkspacesHome() {
           <>
             <p className={styles.deleteCopy}>
               This removes <strong>{activeDialog.workspace.name}</strong> from
-              the workspaces saved under your account on this device. This
+              your account, including its saved sources. This
               action can’t be undone.
             </p>
             {formError && (

@@ -12,36 +12,111 @@ export type VenueImageSource = {
 export const MAX_VENUE_IMAGE_BYTES = 10 * 1024 * 1024;
 export const VENUE_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
 
-const DATABASE = "crowdy-workspace-sources-v1";
-const STORE = "venue-images";
-const WORKSPACE_INDEX = "workspace";
-const STORAGE_ERROR =
-  "Venue images could not be saved in this browser. Enable site storage and try again.";
-
-type StoredVenueImage = VenueImageSource & {
-  ownerId: string;
-  workspaceId: string;
+const MAX_CLOUD_IMAGE_BYTES = 3 * 1024 * 1024;
+const LEGACY_DATABASE = "crowdy-workspace-sources-v1";
+const LEGACY_STORE = "venue-images";
+const migrationRuns = new Map<string, Promise<void>>();
+const migrationNotices = new Map<string, string>();
+const MIGRATION_NOTICE = "Some images saved on this device still need to transfer. Your originals have been kept. Reopen Sources to retry.";
+type SourceOptions = {
+  signal?: AbortSignal;
+  prepareLegacy?: (source: VenueImageSource) => Promise<VenueImageSource>;
 };
+type LegacySource = VenueImageSource & { ownerId: string; workspaceId: string };
+class SourceRequestError extends Error {
+  status: number;
+  constructor(message: string, status: number) { super(message); this.name = "WorkspaceSourceError"; this.status = status; }
+}
+
+export function venueImageMigrationNotice(ownerId: string, workspaceId: string) {
+  return migrationNotices.get(`${ownerId}:${workspaceId}`) ?? "";
+}
+
+// IndexedDB is read only for legacy recovery. New data always uses the cloud.
+async function legacyDatabase(): Promise<IDBDatabase | null> {
+  try {
+    if (typeof window === "undefined" || !window.indexedDB) return null;
+    const factory = window.indexedDB;
+    if (factory.databases && !(await factory.databases()).some(database => database.name === LEGACY_DATABASE)) return null;
+    return await new Promise(resolve => {
+      const request = factory.open(LEGACY_DATABASE);
+      let settled = false;
+      const finish = (database: IDBDatabase | null) => {
+        if (settled) { database?.close(); return; }
+        settled = true; clearTimeout(timer); resolve(database);
+      };
+      const timer = setTimeout(() => finish(null), 1500);
+      request.onupgradeneeded = () => { request.transaction?.abort(); finish(null); };
+      request.onerror = () => finish(null);
+      request.onblocked = () => finish(null);
+      request.onsuccess = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(LEGACY_STORE)) { database.close(); finish(null); return; }
+        database.onversionchange = () => database.close();
+        finish(database);
+      };
+    });
+  } catch { return null; }
+}
+
+async function legacyRequest<T>(database: IDBDatabase, mode: IDBTransactionMode, action: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let transaction: IDBTransaction;
+    let request: IDBRequest<T>;
+    try { transaction = database.transaction(LEGACY_STORE, mode); request = action(transaction.objectStore(LEGACY_STORE)); }
+    catch (error) { reject(error); return; }
+    let result: T;
+    const timer = setTimeout(() => { transaction.abort(); reject(new Error("Legacy storage is busy")); }, 1500);
+    request.onsuccess = () => { result = request.result; };
+    transaction.oncomplete = () => { clearTimeout(timer); resolve(result); };
+    transaction.onabort = () => { clearTimeout(timer); reject(new Error("Legacy storage is unavailable")); };
+    transaction.onerror = () => {};
+  });
+}
+
+async function migrateLegacySources(ownerId: string, workspaceId: string, existing: {id: string}[], options: SourceOptions) {
+  const scope = `${ownerId}:${workspaceId}`;
+  const database = await legacyDatabase();
+  if (!database) return;
+  const timeout = AbortSignal.timeout(20_000);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  try {
+    const records = await legacyRequest<LegacySource[]>(database, "readonly", store => store.index("workspace").getAll([ownerId, workspaceId], 9));
+    if (!records.length) { migrationNotices.delete(scope); return; }
+    let incomplete = records.length > 8;
+    for (const legacy of records.slice(0, 8)) {
+      if (signal.aborted) { incomplete = true; break; }
+      if (legacy.ownerId !== ownerId || legacy.workspaceId !== workspaceId || !validSource(legacy)) { incomplete = true; continue; }
+      try {
+        if (!existing.some(source => source.id === legacy.id)) {
+          const prepared = options.prepareLegacy ? await options.prepareLegacy(copySource(legacy)) : copySource(legacy);
+          if (signal.aborted) { incomplete = true; break; }
+          try { await saveVenueImage(ownerId, workspaceId, prepared, { signal }); }
+          catch (error) {
+            if (!(error instanceof SourceRequestError) || ![409,410].includes(error.status)) throw error;
+            if (error.status === 409) {
+              const response = await requestSource(ownerId, workspaceId, "", { signal });
+              const current = await response.json();
+              if (!Array.isArray(current.sources) || !current.sources.some((source: {id: string}) => source.id === legacy.id)) throw error;
+            }
+          }
+        }
+        // Remove this original only after a cloud acknowledgement, confirmed
+        // existing source, or durable deletion tombstone. Never clear a store.
+        await legacyRequest(database, "readwrite", store => store.delete([ownerId, workspaceId, legacy.id]));
+      } catch { incomplete = true; }
+    }
+    if (incomplete) migrationNotices.set(scope, MIGRATION_NOTICE);
+    else migrationNotices.delete(scope);
+  } catch { migrationNotices.set(scope, MIGRATION_NOTICE); }
+  finally { database.close(); }
+}
+
 
 function sourceError(message: string): Error {
   const error = new Error(message);
   error.name = "WorkspaceSourceError";
   return error;
-}
-
-function storageError(error: unknown): Error {
-  const name = error && typeof error === "object" && "name" in error ? error.name : "";
-  if (name === "QuotaExceededError") {
-    return sourceError(
-      "This browser has no space left for venue images. Remove an image or free some browser storage and try again.",
-    );
-  }
-  if (name === "SecurityError" || name === "NotAllowedError") {
-    return sourceError(
-      "Browser storage is unavailable. Enable site storage to save venue images and try again.",
-    );
-  }
-  return sourceError(STORAGE_ERROR);
 }
 
 function validText(value: unknown, maximum: number): value is string {
@@ -100,98 +175,46 @@ function copySource(source: VenueImageSource): VenueImageSource {
   };
 }
 
-function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    let factory: IDBFactory;
-    try {
-      if (typeof window === "undefined" || !window.indexedDB) {
-        reject(sourceError("Browser storage is unavailable. Enable site storage to save venue images and try again."));
-        return;
-      }
-      factory = window.indexedDB;
-    } catch (error) {
-      reject(storageError(error));
-      return;
-    }
-    let request: IDBOpenDBRequest;
-    try {
-      request = factory.open(DATABASE, 1);
-    } catch (error) {
-      reject(storageError(error));
-      return;
-    }
-    let blocked = false;
-    request.onupgradeneeded = () => {
-      const store = request.result.createObjectStore(STORE, {
-        keyPath: ["ownerId", "workspaceId", "id"],
-      });
-      store.createIndex(WORKSPACE_INDEX, ["ownerId", "workspaceId"]);
-    };
-    request.onerror = () => reject(storageError(request.error));
-    request.onblocked = () => {
-      blocked = true;
-      reject(sourceError("Venue image storage is busy in another tab. Close other Crowdy tabs and try again."));
-    };
-    request.onsuccess = () => {
-      const database = request.result;
-      if (blocked) {
-        database.close();
-        return;
-      }
-      database.onversionchange = () => database.close();
-      resolve(database);
-    };
-  });
-}
-
-async function storeRequest<T>(
-  mode: IDBTransactionMode,
-  createRequest: (store: IDBObjectStore) => IDBRequest<T>,
-): Promise<T> {
-  const database = await openDatabase();
-  return new Promise((resolve, reject) => {
-    let transaction: IDBTransaction;
-    let request: IDBRequest<T>;
-    try {
-      transaction = database.transaction(STORE, mode);
-      request = createRequest(transaction.objectStore(STORE));
-    } catch (error) {
-      database.close();
-      reject(storageError(error));
-      return;
-    }
-    let result: T;
-    request.onsuccess = () => {
-      result = request.result;
-    };
-    // Request success only means the operation was queued; the transaction can
-    // still fail (for example, when committing a Blob exceeds the quota).
-    transaction.oncomplete = () => {
-      database.close();
-      resolve(result);
-    };
-    transaction.onabort = () => {
-      database.close();
-      reject(storageError(transaction.error ?? request.error));
-    };
-    transaction.onerror = () => {
-      // IndexedDB aborts after an unhandled request error; onabort reports the
-      // final failure, so callers never mistake request success for persistence.
-    };
-  });
-}
-
-export async function listVenueImages(ownerId: string, workspaceId: string): Promise<VenueImageSource[]> {
+async function requestSource(ownerId: string, workspaceId: string, suffix = "", init: RequestInit = {}) {
   validateScope(ownerId, workspaceId);
-  const records = await storeRequest<StoredVenueImage[]>("readonly", (store) =>
-    store.index(WORKSPACE_INDEX).getAll([ownerId, workspaceId]),
-  );
-  if (!Array.isArray(records) || records.some((record) =>
-    !validSource(record) || record.ownerId !== ownerId || record.workspaceId !== workspaceId,
-  )) {
-    throw sourceError("Saved venue images could not be read. Existing images have been kept. Try refreshing this page.");
+  const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/sources${suffix}`, {
+    ...init, credentials: "same-origin", cache: "no-store",
+    headers: { "Content-Type": "application/json", "X-Crowdy-Account": ownerId },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new SourceRequestError(typeof data?.error === "string" ? data.error : "Your venue images could not be saved to your account. Try again.", response.status);
   }
-  return records.map(copySource).sort((a, b) => b.addedAt - a.addedAt || a.id.localeCompare(b.id));
+  return response;
+}
+
+export async function listVenueImages(ownerId: string, workspaceId: string, options: SourceOptions = {}): Promise<VenueImageSource[]> {
+  validateScope(ownerId, workspaceId);
+  const response = await requestSource(ownerId, workspaceId, "", { signal: options.signal });
+  let data = await response.json();
+  if (!Array.isArray(data?.sources)) throw sourceError("Saved venue images could not be read. Try again.");
+  const scope = `${ownerId}:${workspaceId}`;
+  let migration = migrationRuns.get(scope);
+  if (!migration) {
+    migration = migrateLegacySources(ownerId, workspaceId, data.sources, options);
+    migrationRuns.set(scope, migration);
+    void migration.finally(() => { if (migrationRuns.get(scope) === migration) migrationRuns.delete(scope); }).catch(() => undefined);
+  }
+  await migration;
+  options.signal?.throwIfAborted();
+  // Read canonical metadata again after any successful legacy uploads.
+  data = await (await requestSource(ownerId, workspaceId, "", { signal: options.signal })).json();
+  if (!Array.isArray(data?.sources)) throw sourceError("Saved venue images could not be read. Try again.");
+  const records = await Promise.all(data.sources.map(async (metadata: Omit<VenueImageSource, "blob">) => {
+    if (!validText(metadata?.id, 128) || !VENUE_IMAGE_TYPES.some(type => type === metadata.type) || !Number.isSafeInteger(metadata.size) || metadata.size < 1 || metadata.size > MAX_CLOUD_IMAGE_BYTES)
+      throw sourceError("Saved venue image metadata could not be read.");
+    const response = await requestSource(ownerId, workspaceId, `/${encodeURIComponent(metadata.id)}/image`, { signal: options.signal });
+    const blob = await response.blob();
+    const source = { ...metadata, blob };
+    if (!validSource(source)) throw sourceError("Saved venue images could not be read. Try again.");
+    return copySource(source);
+  }));
+  return records.sort((a, b) => b.addedAt - a.addedAt || a.id.localeCompare(b.id));
 }
 
 export function validateVenueImageSource(source: unknown): asserts source is VenueImageSource {
@@ -205,24 +228,21 @@ export function validateVenueImageSource(source: unknown): asserts source is Ven
   }
 }
 
-export async function saveVenueImage(ownerId: string, workspaceId: string, source: VenueImageSource): Promise<void> {
+export async function saveVenueImage(ownerId: string, workspaceId: string, source: VenueImageSource, options: { signal?: AbortSignal } = {}): Promise<void> {
   validateScope(ownerId, workspaceId);
   validateVenueImageSource(source);
-  const record: StoredVenueImage = { ...copySource(source), ownerId, workspaceId };
-  await storeRequest("readwrite", (store) => store.put(record));
+  const snapshot = copySource(source);
+  if (snapshot.size > MAX_CLOUD_IMAGE_BYTES) throw sourceError("Prepare an image under 3 MB before saving it to your account.");
+  const bytes = new Uint8Array(await snapshot.blob.arrayBuffer());
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 8192)
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  await requestSource(ownerId, workspaceId, "", { method: "POST", signal: options.signal,
+    body: JSON.stringify({ id: snapshot.id, name: snapshot.name, image_base64: btoa(binary) }) });
 }
 
-export async function deleteVenueImage(ownerId: string, workspaceId: string, sourceId: string): Promise<void> {
+export async function deleteVenueImage(ownerId: string, workspaceId: string, sourceId: string, options: { signal?: AbortSignal } = {}): Promise<void> {
   validateScope(ownerId, workspaceId);
-  if (!validText(sourceId, 128) || sourceId.trim() !== sourceId) {
-    throw sourceError("This venue image could not be found. Refresh this page and try again.");
-  }
-  await storeRequest("readwrite", (store) => store.delete([ownerId, workspaceId, sourceId]));
-}
-
-// Placeholder until image-based crowd estimation is connected. Deliberately
-// ignore image contents, venue dimensions, and any supplied occupancy.
-export function estimateVenueCrowd(input?: unknown): number {
-  void input;
-  return 80;
+  if (!validText(sourceId, 128) || sourceId.trim() !== sourceId) throw sourceError("This venue image could not be found. Refresh this page and try again.");
+  await requestSource(ownerId, workspaceId, `/${encodeURIComponent(sourceId)}`, { method: "DELETE", signal: options.signal });
 }

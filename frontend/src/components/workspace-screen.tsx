@@ -55,20 +55,26 @@ export default function WorkspaceScreen({
   useEffect(() => {
     if (sample || !ownerId || isLoading || subject !== ownerId) return;
     let active = true;
-    function load() {
+    let controller: AbortController | null = null;
+    async function load() {
       if (!active) return;
+      controller?.abort();
+      const request = new AbortController();
+      controller = request;
       try {
-        const record = getWorkspace(ownerId!, workspaceId);
+        const record = await getWorkspace(ownerId!, workspaceId, { signal: request.signal });
+        if (!active || request.signal.aborted) return;
         if (record) record.plan = validatePlan(record.plan);
         setLoaded({ scope: `${ownerId}:${workspaceId}`, record, error: "" });
       } catch (error) {
+        if (!active || request.signal.aborted) return;
         setLoaded({
           scope: `${ownerId}:${workspaceId}`,
           record: null,
           error:
             error instanceof Error
               ? error.message
-              : "This workspace could not be read from this browser.",
+              : "This workspace could not be loaded from your account.",
         });
       }
     }
@@ -76,6 +82,7 @@ export default function WorkspaceScreen({
     const unsubscribe = subscribeWorkspaces(load);
     return () => {
       active = false;
+      controller?.abort();
       unsubscribe();
     };
   }, [sample, ownerId, workspaceId, isLoading, subject, retry]);
@@ -103,8 +110,7 @@ export default function WorkspaceScreen({
     return (
       <WorkspaceMessage title="Sign in to open this workspace">
         <p>
-          Personal workspaces are available to the account that created them on
-          this device.
+          Personal workspaces are available to the account that created them.
         </p>
         <a
           className="button primary"
@@ -141,10 +147,9 @@ export default function WorkspaceScreen({
     );
   if (!loaded.record)
     return (
-      <WorkspaceMessage title="Workspace not found on this device">
+      <WorkspaceMessage title="Workspace not found">
         <p>
-          This workspace may have been removed, or it belongs to another account
-          or browser. Berkeley studio is always available as a sample.
+          This workspace may have been removed, or it belongs to another account. Berkeley studio is always available as a sample.
         </p>
         <Link className="button primary" href="/">
           Back to workspaces

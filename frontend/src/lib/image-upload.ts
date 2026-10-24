@@ -69,7 +69,7 @@ export async function prepareImageUpload(file: File) {
     if (encoded.length !== imageBase64Length(blob.size) || encoded.length > imageBase64Length(MAX_UPLOAD_IMAGE_BYTES))
       throw new Error(IMAGE_UPLOAD_SIZE_ERROR);
     const base = file.name.replace(/\.[^.]*$/, "").slice(0, 200) || "floor-plan";
-    return { filename: `${base}.${blob.type === "image/png" ? "png" : "jpg"}`, image_base64: encoded };
+    return { filename: `${base}.${blob.type === "image/png" ? "png" : "jpg"}`, image_base64: encoded, blob, width, height };
   } finally {
     image.close();
   }

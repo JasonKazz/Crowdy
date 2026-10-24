@@ -3,6 +3,9 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PATH="/srv/crowdy/.venv/bin:$PATH" \
     PORT=8000
 
 WORKDIR /srv/crowdy
@@ -12,8 +15,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
-RUN python -m pip install --no-cache-dir --only-binary=:all: -r requirements.txt
+COPY --from=ghcr.io/astral-sh/uv:0.9.22 /uv /uvx /bin/
+COPY pyproject.toml uv.lock ./
+# The lock excludes JuPedSim's desktop-only Qt/VTK dependencies.
+RUN uv sync --frozen --no-dev --no-install-project
 
 COPY app ./app
 RUN useradd --create-home --uid 10001 crowdy \
