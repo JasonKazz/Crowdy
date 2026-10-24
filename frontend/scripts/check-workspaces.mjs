@@ -298,6 +298,17 @@ const denseRecord = createWorkspace(ownerB,{name:"Dense venue extraction",plan:d
 assert.equal(getWorkspace(ownerB,denseRecord.id).plan.items.length,300,
   "Dense extracted furniture must survive persistence above the old 100-item limit");
 
+const largeVenue = createWorkspace(ownerB, {
+  name: "Large venue",
+  plan: {...plan,area:14813.587936797483},
+  scenario: DEFAULT_SCENARIO,
+});
+assert.equal(getWorkspace(ownerB,largeVenue.id).plan.area,14813.587936797483,
+  "Large venues must survive saving and reopening");
+updateWorkspace(ownerB,largeVenue.id,{plan:{...plan,area:40000},scenario:DEFAULT_SCENARIO});
+assert.equal(getWorkspace(ownerB,largeVenue.id).plan.area,40000,
+  "Editing a saved venue must not reinstate an area cap");
+
 console.log(
   "Workspace checks passed: account isolation, sample protection, cloned inputs, update ordering, corruption preservation, storage failures, change notifications, and native draft persistence.",
 );

@@ -125,8 +125,7 @@ function validPlan(value: unknown): value is FloorPlan {
     value.width !== 900 ||
     value.height !== 600 ||
     !finite(value.area) ||
-    value.area <= 0 ||
-    value.area > 10000
+    value.area <= 0
   )
     return false;
   if (

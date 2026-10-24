@@ -160,7 +160,7 @@ class EditorPlan(InputModel):
     name: str = Field(min_length=1, max_length=80)
     width: Literal[900]
     height: Literal[600]
-    area: float = Field(gt=0, le=10000)
+    area: float = Field(gt=0)
     items: list[EditorItem] = Field(max_length=1200)
     walls: list[EditorWall] = Field(max_length=1200)
     exits: list[EditorExit] = Field(max_length=30)
@@ -206,11 +206,15 @@ app.add_middleware(BodyLimitMiddleware)
 @app.exception_handler(RequestValidationError)
 async def invalid_request(_request, exception):
     # Return useful field locations without reflecting a full uploaded layout.
+    errors = [
+        {"field": ".".join(str(part) for part in error["loc"] if part != "body"), "message": error["msg"]}
+        for error in exception.errors()[:12]
+    ]
+    detail = "Invalid floor plan or scenario: " + "; ".join(
+        f"{error['field']}: {error['message']}" for error in errors[:3]
+    )
     return JSONResponse(
-        {"detail": "Invalid floor plan or scenario", "errors": [
-            {"field": ".".join(str(part) for part in error["loc"]), "message": error["msg"]}
-            for error in exception.errors()[:12]
-        ]},
+        {"detail": detail, "errors": errors},
         status_code=422,
         headers={"Cache-Control": "private, no-store"},
     )

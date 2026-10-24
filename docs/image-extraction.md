@@ -118,3 +118,5 @@ The standalone editor endpoints remain:
 | POST | `/api/extract` | Image ID, provider (`gemini`, `claude`, `both`), meters-per-pixel, scale-confirmed flag, and population count. |
 
 Image-upload JSON has a 14 MiB request limit to accommodate base64; individual source files are limited to 10 MiB. Other JSON endpoints retain their 2 MiB limit. A second extraction returns 409 while one is active. Individual provider failures are returned in the comparison results so the other provider's successful candidate remains usable. No comparison declares a winner without reference geometry or human review.
+
+Floor area has no fixed upper limit. Import, simulation requests and saved workspaces accept any finite positive area in square metres. The 900 × 600 editor canvas is independent of the building’s physical dimensions. Validation reports the failing name, canvas, area or collection field rather than a combined template error.
