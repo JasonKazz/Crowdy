@@ -34,35 +34,34 @@ function validNativeLayout(value: unknown): boolean {
 }
 
 export function validatePlan(value: unknown): FloorPlan {
-  if (!value || typeof value !== "object")
+  if (!record(value))
     throw new Error(
       "Choose a Crowdy JSON floor plan. Download the sample to see the format.",
     );
   const plan = value as FloorPlan;
   const finite = (...numbers: number[]) => numbers.every(Number.isFinite);
-  if (
-    typeof plan.id !== "string" ||
-    !plan.id.trim() ||
-    plan.id.length > 80 ||
-    typeof plan.name !== "string" ||
-    !plan.name.trim() ||
-    plan.name.length > 80 ||
-    plan.width !== 900 ||
-    plan.height !== 600 ||
-    !Number.isFinite(plan.area) ||
-    plan.area <= 0 ||
-    plan.area > 10000 ||
-    !Array.isArray(plan.items) ||
-    plan.items.length > 100 ||
-    !Array.isArray(plan.walls) ||
-    plan.walls.length > 100 ||
-    !Array.isArray(plan.exits) ||
-    (!plan.native && plan.exits.length < 1) ||
-    plan.exits.length > 12
-  )
-    throw new Error(
-      "This plan needs a name, a 900 × 600 canvas, valid area, and at least one exit. Use the sample JSON as a template.",
-    );
+  if (typeof plan.id !== "string" || !plan.id.trim() || plan.id.length > 80)
+    throw new Error("The floor plan needs an ID between 1 and 80 characters.");
+  if (typeof plan.name !== "string" || !plan.name.trim() || plan.name.length > 80)
+    throw new Error("The floor plan needs a name between 1 and 80 characters.");
+  if (plan.width !== 900 || plan.height !== 600)
+    throw new Error("The editor canvas must be 900 × 600. Building dimensions are stored separately in the floor plan geometry and scale.");
+  if (!Number.isFinite(plan.area) || plan.area <= 0)
+    throw new Error("Floor area must be a finite number greater than 0 m². Check the floor outline and image scale.");
+  if (!Array.isArray(plan.items))
+    throw new Error("The floor plan is missing its furniture list (items). Use an empty list if there is no furniture.");
+  if (plan.items.length > 1200)
+    throw new Error(`This plan has ${plan.items.length} furniture items; the editor supports up to 1,200.`);
+  if (!Array.isArray(plan.walls))
+    throw new Error("The floor plan is missing its walls list. Use an empty list if there are no wall segments.");
+  if (plan.walls.length > 1200)
+    throw new Error(`This plan has ${plan.walls.length} wall segments; the editor supports up to 1,200.`);
+  if (!Array.isArray(plan.exits))
+    throw new Error("The floor plan is missing its exits list. Add exterior exits before running a simulation.");
+  if (!plan.native && plan.exits.length < 1)
+    throw new Error("This floor plan has no exits. Add at least one exterior exit before running a simulation.");
+  if (plan.exits.length > 30)
+    throw new Error(`This plan has ${plan.exits.length} exits; the editor supports up to 30.`);
   const ids = new Set<string>();
   for (const item of plan.items) {
     if (

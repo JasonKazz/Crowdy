@@ -76,14 +76,15 @@ class EditorAdapterTests(unittest.TestCase):
         scenario = editor_to_scenario(payload["plan"], payload["scenario"])
         self.assertEqual(pixel_to_metres(320, 280), (10, 10))
         self.assertEqual(payload, original)
-        self.assertEqual(scenario.settings.model_dump(), {"dt": .01, "sample_interval": .2, "max_time": 60, "blocked_exit_ids": []})
-        self.assertEqual(scenario.agent_defaults.radius, .2)
+        self.assertEqual(scenario.settings.model_dump(), {"dt": .01, "sample_interval": .2, "max_time": 60, "blocked_exit_ids": [],
+                                                       "behavior_mode": "idealized", "behavior_seed": 42})
+        self.assertEqual(scenario.agent_defaults.radius, .23)
         self.assertEqual({exit.id for exit in scenario.exits}, {"west", "east"})
         self.assertTrue(any(region.id.startswith("editor-wall-") for region in scenario.obstacles))
         walkable = build_geometry(scenario)
         for occupant in scenario.occupants:
             point = Point(occupant.position)
-            self.assertGreaterEqual(point.distance(walkable.boundary), .25 - 1e-9)
+            self.assertGreaterEqual(point.distance(walkable.boundary), .28 - 1e-9)
             self.assertGreaterEqual(occupant.position[0], 100 / 32)
             self.assertLessEqual(occupant.position[0], 420 / 32)
 
@@ -185,10 +186,30 @@ class EditorApiTests(unittest.TestCase):
         self.assertTrue(all(count > 0 for count in result["summary"]["per_exit_counts"].values()))
         self.assertLess(len(response.content), 4_000_000)
 
+    def test_large_floor_area_does_not_block_simulation(self):
+        payload = room_request(count=1)
+        payload["plan"]["area"] = 14813.587936797483
+        response = self.client.post("/api/simulations", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["summary"]["evacuated_count"], 1)
+
+    def test_invalid_area_error_identifies_the_field_without_reflecting_input(self):
+        payload = room_request()
+        payload["plan"].update(area=0, name="private floor plan name")
+        with patch("app.api.run_editor_simulation") as run:
+            response = self.client.post("/api/simulations", json=payload)
+            self.assertEqual(response.status_code, 422)
+            self.assertIn("plan.area", response.json()["detail"])
+            self.assertIn("greater than 0", response.json()["detail"])
+            self.assertNotIn("private floor plan name", response.text)
+            run.assert_not_called()
+
     def test_invalid_parameters_are_422_without_engine_run(self):
         mutations = [
             lambda p: p["scenario"].update(occupancy=201),
             lambda p: p["scenario"].update(mobility="flying"),
+            lambda p: p["scenario"].update(behavior_mode="optimal"),
+            lambda p: p["scenario"].update(body_width=.39),
             lambda p: p["plan"].update(width=901),
             lambda p: p["plan"]["walls"][0].update(x1=-1),
             lambda p: p["plan"]["exits"].append(p["plan"]["exits"][0]),

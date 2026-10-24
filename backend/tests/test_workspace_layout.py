@@ -19,6 +19,32 @@ EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
 
 class WorkspaceLayoutTests(unittest.TestCase):
+    def test_automatic_placement_excludes_and_reports_body_inaccessible_pocket(self):
+        from test_exterior_exits import room
+        from app.schemas.scenario import Region
+        from app.services.floorplans.layout import compile_layout
+        from app.simulation.engine import run_simulation
+        layout = room()
+        layout.furniture = [Region(id=name, polygon=points) for name,points in (
+            ("left", [(2,2),(2.2,2),(2.2,4),(2,4)]),
+            ("top", [(2.2,3.8),(4,3.8),(4,4),(2.2,4)]),
+            ("bottom", [(2.2,2),(4,2),(4,2.2),(2.2,2.2)]),
+            ("right_lower", [(3.8,2.2),(4,2.2),(4,2.85),(3.8,2.85)]),
+            ("right_upper", [(3.8,3.15),(4,3.15),(4,3.8),(3.8,3.8)]))]
+        plan = native_to_editor(layout.model_dump(mode="json"))
+        response = self.client.post("/api/simulations", json={"plan": plan, "scenario": self.settings})
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertGreater(result["editor_metadata"]["excluded_spawn_area_m2"], .5)
+        self.assertEqual(result["summary"]["evacuated_count"], self.settings["occupancy"])
+        self.assertFalse(any(2.2 < p["position"][0] < 3.8 and 2.2 < p["position"][1] < 3.8
+                             for p in result["scenario"]["occupants"]))
+        # Explicitly trapped people are counted and retain their positions.
+        layout.occupants[0].position = (3,3)
+        result = run_simulation(compile_layout(layout))
+        self.assertEqual(result["summary"]["trapped_count"],1)
+        self.assertEqual(result["frames"][0]["agents"][0]["x"],3)
+
     def setUp(self):
         self.source = json.loads((EXAMPLES / "narrow_table_regression.json").read_text())
         self.plan = native_to_editor(self.source)
@@ -41,6 +67,38 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertTrue(plan["native"]["walls"])
         self.assertEqual(len(plan["native"]["exit_zones"]), 2)
         self.assertEqual(len(self.source["occupants"]), 40)
+
+    def test_editor_comparison_preserves_people_and_allows_all_exits_blocked(self):
+        settings = {**self.settings,"mobility":"mixed"}
+        before = self.client.post("/api/simulations", json={"plan":self.plan,"scenario":settings}).json()
+        reference = {"occupants":before["scenario"]["occupants"],"radius":before["scenario"]["agent_defaults"]["radius"],
+                     "mobility":"mixed","distribution":"uniform","seed":7}
+        self.assertEqual(sum(person["desired_speed"] == .72 for person in reference["occupants"]),5)
+        blocked = [e["id"] for e in self.plan["exits"]]
+        response = self.client.post("/api/simulations", json={"plan":self.plan,
+            "scenario":{**settings,"blocked_exit_ids":blocked},"starting_population":reference})
+        self.assertEqual(response.status_code,200,response.text)
+        after = response.json()
+        self.assertEqual(before["scenario"]["occupants"],after["scenario"]["occupants"])
+        self.assertEqual(before["frames"][0],after["frames"][0])
+        self.assertEqual(after["summary"]["trapped_count"],20)
+        self.assertTrue(after["editor_metadata"]["reused_starting_population"])
+        self.assertEqual(after["status"],"trapped")
+        bad = self.client.post("/api/simulations", json={"plan":self.plan,
+            "scenario":{**settings,"seed":8},"starting_population":reference})
+        self.assertEqual(bad.status_code,422)
+        changed = copy.deepcopy(self.plan)
+        # A new obstacle cannot cause a baseline person to be silently moved.
+        x,y=reference["occupants"][0]["position"]
+        # Native layout coordinates are retained; a furniture polygon around a
+        # preserved start must fail geometry validation before simulation.
+        changed["native"]["layout"]["furniture"].append({"id":"new-block","polygon":[[x-.3,y-.3],[x+.3,y-.3],[x+.3,y+.3],[x-.3,y+.3]]})
+        # Use canonical native conversion to keep editor item metadata aligned.
+        changed = native_to_editor(changed["native"]["layout"])
+        bad = self.client.post("/api/simulations", json={"plan":changed,
+            "scenario":settings,"starting_population":reference})
+        self.assertEqual(bad.status_code,422)
+        self.assertIn("No people were relocated",bad.json()["detail"])
 
     def test_moved_polygon_is_the_exact_obstacle_used_by_simulation(self):
         plan = copy.deepcopy(self.plan)

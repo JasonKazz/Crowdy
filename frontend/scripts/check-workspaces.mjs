@@ -110,7 +110,7 @@ changedPlan.items[0].x = 350;
 const updated = updateWorkspace(ownerA, first.id, {
   name: "Renamed",
   plan: changedPlan,
-  scenario: { ...DEFAULT_SCENARIO, occupancy: 120 },
+  scenario: { ...DEFAULT_SCENARIO, occupancy: 120, behaviorMode:"behavioral", bodyWidth:.6 },
 });
 assert.equal(updated.createdAt, first.createdAt);
 assert.ok(updated.updatedAt > first.updatedAt);
@@ -121,6 +121,10 @@ assert.equal(
 );
 assert.equal(getWorkspace(ownerA, first.id).name, "Renamed");
 assert.equal(getWorkspace(ownerA, first.id).scenario.occupancy, 120);
+assert.equal(getWorkspace(ownerA, first.id).scenario.behaviorMode,"behavioral","Saved workspaces retain evacuation mode");
+assert.equal(getWorkspace(ownerA, first.id).scenario.bodyWidth,.6,"Saved workspaces retain physical body width");
+assert.throws(()=>updateWorkspace(ownerA,first.id,{plan,scenario:{...DEFAULT_SCENARIO,bodyWidth:.1}}),/scenario/i);
+assert.throws(()=>updateWorkspace(ownerA,first.id,{plan,scenario:{...DEFAULT_SCENARIO,behaviorMode:"optimal"}}),/scenario/i);
 changedPlan.items[0].x = 400;
 updated.scenario.occupancy = 150;
 assert.equal(getWorkspace(ownerA, first.id).plan.items[0].x, 350);
@@ -287,6 +291,23 @@ for (const id of [plan.id, SAMPLE_WORKSPACE_ID]) {
     scenario: DEFAULT_SCENARIO,
   }), /geometry/, "Pixel plans still require an exit before saving");
 }
+
+const densePlan = structuredClone(restored.plan);
+densePlan.items = Array.from({length:300},(_,index)=>({...densePlan.items[0],id:`table-${index}`}));
+const denseRecord = createWorkspace(ownerB,{name:"Dense venue extraction",plan:densePlan,scenario:restored.scenario});
+assert.equal(getWorkspace(ownerB,denseRecord.id).plan.items.length,300,
+  "Dense extracted furniture must survive persistence above the old 100-item limit");
+
+const largeVenue = createWorkspace(ownerB, {
+  name: "Large venue",
+  plan: {...plan,area:14813.587936797483},
+  scenario: DEFAULT_SCENARIO,
+});
+assert.equal(getWorkspace(ownerB,largeVenue.id).plan.area,14813.587936797483,
+  "Large venues must survive saving and reopening");
+updateWorkspace(ownerB,largeVenue.id,{plan:{...plan,area:40000},scenario:DEFAULT_SCENARIO});
+assert.equal(getWorkspace(ownerB,largeVenue.id).plan.area,40000,
+  "Editing a saved venue must not reinstate an area cap");
 
 console.log(
   "Workspace checks passed: account isolation, sample protection, cloned inputs, update ordering, corruption preservation, storage failures, change notifications, and native draft persistence.",

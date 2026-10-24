@@ -1,6 +1,6 @@
 // Keep the base64 JSON request below the hosting service's request limit.
-// The server uses the same 1092px maximum for extraction and its source overlay.
-export const MAX_IMAGE_DIMENSION = 1092;
+// Preserve the canonical image size used by staged extraction and its overlay.
+export const MAX_IMAGE_DIMENSION = 3072;
 export const MAX_UPLOAD_IMAGE_BYTES = 3 * 1024 * 1024;
 export const IMAGE_UPLOAD_SIZE_ERROR =
   "This image is too large to upload. Crop to one floor plan or export a smaller PNG or JPEG, then try again.";

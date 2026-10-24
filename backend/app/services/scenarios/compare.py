@@ -42,6 +42,9 @@ def compare_exit_availability(scenario: Scenario, blocked_exit_ids: list[str]) -
         "baseline": {"status": baseline["status"], **a},
         "blocked": {"status": blocked["status"], **b},
         "clearance_time_change_s": delta,
+        "trapped_count_change": b["trapped_count"] - a["trapped_count"],
+        "evacuated_count_change": b["evacuated_count"] - a["evacuated_count"],
+        "moving_remaining_count_change": b["moving_remaining_count"] - a["moving_remaining_count"],
         "per_exit_count_changes": {
             exit_id: b["per_exit_counts"][exit_id] - count
             for exit_id, count in a["per_exit_counts"].items()

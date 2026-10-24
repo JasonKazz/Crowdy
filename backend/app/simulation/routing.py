@@ -3,6 +3,7 @@
 import hashlib
 import heapq
 import math
+import jupedsim
 
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import nearest_points
@@ -65,6 +66,34 @@ class VisibilityGraph:
         return None
 
 
+class MeshGraph:
+    """Use the installed engine's navmesh for plans with many table vertices.
+
+    Building an all-pairs visibility graph is quadratic in obstacle corners.
+    The mesh uses the same already-eroded, body-clear polygon as the small-plan
+    planner, so choosing it does not change physical body clearance.
+    """
+    def __init__(self, polygon):
+        self.polygon = polygon
+        self.engine = jupedsim.RoutingEngine(polygon.buffer(1e-8))
+
+    def path(self, start, goal):
+        if not self.engine.is_routable(start) or not self.engine.is_routable(goal):
+            return None
+        return self.engine.compute_waypoints(start, goal)
+
+
+def routing_graph(component):
+    vertices = len(component.exterior.coords) + sum(len(ring.coords) for ring in component.interiors)
+    return MeshGraph(component) if vertices > 160 else VisibilityGraph(component)
+
+
+def body_clear_components(geometry, radius):
+    """The same passable floor components for placement and route planning."""
+    safe = geometry.buffer(-(radius + 0.02), quad_segs=3)
+    return [safe] if isinstance(safe, Polygon) else list(getattr(safe, "geoms", []))
+
+
 class RoutePlanner:
     def __init__(self, geometry: Polygon, radius: float):
         self.radius = radius
@@ -72,9 +101,8 @@ class RoutePlanner:
         self.visible_body_space = prep(self.body_space.buffer(1e-7, join_style="mitre"))
         # Round offsets represent circular bodies at sharp door jambs. Mitre
         # offsets can create artificial spikes that close a perfectly usable door.
-        safe = geometry.buffer(-(radius + 0.02), quad_segs=3)
-        self.components = [safe] if isinstance(safe, Polygon) else list(getattr(safe, "geoms", []))
-        self.graphs = [VisibilityGraph(component) for component in self.components if not component.is_empty]
+        self.components = body_clear_components(geometry, radius)
+        self.graphs = [routing_graph(component) for component in self.components if not component.is_empty]
 
     def route(self, start, exit_polygon, preferred=None):
         start_point = Point(start)
@@ -128,7 +156,7 @@ class RoutePlanner:
         return target, path, index
 
 
-def plan_routes(scenario, geometry=None, planner=None):
+def plan_routes(scenario, geometry=None, planner=None, allow_trapped=False):
     planner = planner or RoutePlanner(geometry if geometry is not None else build_geometry(scenario), scenario.agent_defaults.radius)
     blocked = set(scenario.settings.blocked_exit_ids)
     boundaries = {boundary.id: boundary for boundary in scenario.exit_boundaries}
@@ -143,13 +171,25 @@ def plan_routes(scenario, geometry=None, planner=None):
             if boundary:
                 digest = hashlib.sha256(f"{person.id}:{region.id}".encode()).digest()
                 fraction = .12 + .76 * int.from_bytes(digest[:4], "big") / (2**32 - 1)
-                a, b = region.polygon[:2]
-                preferred = tuple(a[i] + (b[i] - a[i]) * fraction + boundary.outward[i] * .08 for i in range(2))
+                # Fitting an outside target around a concave footprint may
+                # reorder/add polygon vertices. Door lanes follow the actual
+                # threshold, never whichever polygon edge happens to come first.
+                a,b=boundary.start,boundary.end
+                width=math.dist(a,b)
+                along=.01+(width-.02)*fraction
+                depth=min(sum((p[i]-a[i])*boundary.outward[i] for i in range(2))
+                          for p in region.polygon)+.08
+                preferred=tuple(a[i]+(b[i]-a[i])*along/width+boundary.outward[i]*depth for i in range(2))
             planned = planner.route(person.position, polygon, preferred)
             if planned:
                 distance, points = planned
                 choices.append((distance, region.id, points))
         if not choices:
+            if allow_trapped:
+                routes.append({"agent_id": person.id, "exit_id": None, "route_length": None,
+                               "path": [person.position], "status": "trapped",
+                               "reason": "No body-clear route to an available exit"})
+                continue
             raise ValueError(f"No body-clear route to an available exit for occupant '{person.id}' "
                              f"(radius {scenario.agent_defaults.radius:g} m). Move furniture, widen the passage, or choose another exit.")
         distance, exit_id, points = min(choices, key=lambda choice: (choice[0], choice[1]))

@@ -47,6 +47,7 @@ def drawing_fixture():
         "exits": [region("exit-west", 50, 70, 80, 130), region("exit-east", 920, 370, 950, 430)],
         "warnings": [],
         "scale_references": [],
+        "scale_objects": [],
     }
 
 
@@ -87,18 +88,53 @@ def source():
 
 
 class ImageTests(unittest.TestCase):
+    def test_enclosed_counter_cavity_is_one_solid_editable_barrier(self):
+        from shapely.geometry import Polygon
+        drawing = drawing_fixture()
+        drawing["furniture"] = [region("top", 150, 150, 350, 175),
+            region("left", 150, 175, 175, 350), region("right", 325, 175, 350, 350),
+            region("bottom", 175, 325, 325, 350)]
+        layout = drawing_to_layout(ExtractedDrawing.model_validate(drawing), source(), "claude", info(), 12)
+        self.assertEqual(len(layout.furniture), 1)
+        self.assertTrue(Polygon(layout.furniture[0].polygon).covers(Point(5, 5)))
+        compile_layout(layout)
+        self.assertTrue(any("enclosed cavity" in note for note in layout.extraction.warnings))
+        # Moving the joined object cannot leave a hidden filler at its old site.
+        layout.furniture[0].polygon = [(x+1, y) for x,y in layout.furniture[0].polygon]
+        self.assertTrue(build_geometry(compile_layout(layout)).contains(Point(3.5, 5)))
+
+    def test_open_u_counter_preserves_its_accessible_work_area(self):
+        drawing = drawing_fixture()
+        drawing["furniture"] = [region("top", 150, 150, 350, 175),
+            region("left", 150, 175, 175, 350), region("right", 325, 175, 350, 350)]
+        layout = drawing_to_layout(ExtractedDrawing.model_validate(drawing), source(), "claude", info(), 12)
+        self.assertEqual(len(layout.furniture), 3)
+        self.assertTrue(build_geometry(compile_layout(layout)).contains(Point(5, 5)))
+        self.assertFalse(any("enclosed cavity" in note for note in layout.extraction.warnings))
+
+    def test_small_plan_uses_one_larger_frame_for_overlay_and_provider(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upload = ImageUpload(filename="small.png", image_base64=base64.b64encode(image_bytes((500, 375))).decode())
+            saved = save_image(upload, root)
+            self.assertEqual((saved.width_px, saved.height_px), (1000, 750))
+            loaded, raw = load_image(root, saved.id)
+            self.assertEqual(saved, loaded)
+            with Image.open(io.BytesIO(raw)) as image:
+                self.assertEqual(image.size, (saved.width_px, saved.height_px))
+
     def test_upload_decodes_resizes_and_persists_a_known_image(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            upload = ImageUpload(filename="large.jpg", image_base64=base64.b64encode(image_bytes((2200, 1100), "JPEG")).decode())
+            upload = ImageUpload(filename="large.jpg", image_base64=base64.b64encode(image_bytes((6144, 3072), "JPEG")).decode())
             saved = save_image(upload, root)
-            self.assertEqual((saved.width_px, saved.height_px), (1092, 546))
+            self.assertEqual((saved.width_px, saved.height_px), (3072, 1536))
             self.assertFalse(saved.scale_confirmed)
             loaded, raw = load_image(root, saved.id)
             self.assertEqual(saved, loaded)
             with Image.open(io.BytesIO(raw)) as image:
                 self.assertEqual(image.format, "PNG")
-                self.assertEqual(image.size, (1092, 546))
+                self.assertEqual(image.size, (3072, 1536))
 
     def test_invalid_images_and_large_dimensions_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

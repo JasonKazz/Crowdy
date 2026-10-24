@@ -3,7 +3,13 @@ import {failure, forwardBackend, forwardBackendImage, readBackendBody} from "@/l
 export const maxDuration = 200;
 
 export async function GET(request: Request) {
-  const imageId = new URL(request.url).searchParams.get("image_id");
+  const params = new URL(request.url).searchParams;
+  const jobId = params.get("job_id");
+  if (jobId !== null) {
+    if (!/^[a-f0-9]{32}$/.test(jobId)) return failure("Invalid import job reference.", 400);
+    return forwardBackend(request, `/api/floorplans/jobs/${jobId}`);
+  }
+  const imageId = params.get("image_id");
   if (imageId !== null) return forwardBackendImage(request, imageId);
   return forwardBackend(request, "/api/floorplans");
 }

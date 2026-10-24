@@ -17,15 +17,16 @@ from fastapi.responses import JSONResponse
 from pydantic import ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
-from app.schemas.scenario import InputModel
+from app.schemas.scenario import InputModel, Occupant
 from app.schemas.layout import Layout
 from app.schemas.extraction import ImageUpload, ExtractionRequest, ScaleReference
-from app.services.floorplans.images import save_image, extract_image, finish_calibration, load_image_bytes
+from app.services.floorplans.images import save_image, extract_image, finish_calibration, load_image_bytes, image_preview
 from app.services.floorplans.storage import editor_storage_root
 from app.services.floorplans.providers import load_environment, provider_status
 from app.services.floorplans.calibration import recalibrate_layout
+from app.services.floorplans.import_jobs import create_job, update_job, job_status
 from app.simulation.workspace_layout import editor_native_layout, native_to_editor
-from app.simulation.editor_adapter import POPULATION_SEED, editor_to_scenario
+from app.simulation.editor_adapter import POPULATION_SEED, editor_to_scenario, placement_access
 from app.simulation.engine import run_simulation
 
 MAX_BODY_BYTES = 1_048_576
@@ -44,10 +45,10 @@ def import_status():
                 if provider in _active_imports else 0} for provider in ("gemini", "claude")}
 
 
-def import_with_slot(payload):
+def import_with_slot(payload, progress=None):
     # The worker owns the slot until it actually stops, even if the browser disconnects.
     try:
-        return import_floorplan(payload)
+        return import_floorplan(payload, progress) if progress else import_floorplan(payload)
     finally:
         with _import_guard:
             _active_imports.pop(payload.provider, None)
@@ -159,10 +160,10 @@ class EditorPlan(InputModel):
     name: str = Field(min_length=1, max_length=80)
     width: Literal[900]
     height: Literal[600]
-    area: float = Field(gt=0, le=10000)
-    items: list[EditorItem] = Field(max_length=200)
-    walls: list[EditorWall] = Field(max_length=300)
-    exits: list[EditorExit] = Field(max_length=20)
+    area: float = Field(gt=0)
+    items: list[EditorItem] = Field(max_length=1200)
+    walls: list[EditorWall] = Field(max_length=1200)
+    exits: list[EditorExit] = Field(max_length=30)
     native: NativeView | None = None
 
     @model_validator(mode="after")
@@ -179,11 +180,23 @@ class EditorSettings(InputModel):
     mobility: Literal["standard", "mixed"]
     distribution: Literal["uniform", "workstations"]
     seed: int = Field(default=42, ge=0, le=2**32 - 1)
+    blocked_exit_ids: list[str] = Field(default_factory=list, max_length=30)
+    behavior_mode: Literal["idealized", "behavioral"] = "idealized"
+    body_width: float = Field(default=.46, ge=.4, le=.7)
+
+
+class StartingPopulation(InputModel):
+    occupants: list[Occupant] = Field(min_length=1, max_length=200)
+    radius: float = Field(gt=0)
+    mobility: Literal["standard", "mixed"]
+    distribution: Literal["uniform", "workstations"]
+    seed: int = Field(ge=0, le=2**32 - 1)
 
 
 class SimulationRequest(InputModel):
     plan: EditorPlan
     scenario: EditorSettings
+    starting_population: StartingPopulation | None = None
 
 
 app = FastAPI(title="Crowdy JuPedSim service", version="1.0.0")
@@ -193,11 +206,15 @@ app.add_middleware(BodyLimitMiddleware)
 @app.exception_handler(RequestValidationError)
 async def invalid_request(_request, exception):
     # Return useful field locations without reflecting a full uploaded layout.
+    errors = [
+        {"field": ".".join(str(part) for part in error["loc"] if part != "body"), "message": error["msg"]}
+        for error in exception.errors()[:12]
+    ]
+    detail = "Invalid floor plan or scenario: " + "; ".join(
+        f"{error['field']}: {error['message']}" for error in errors[:3]
+    )
     return JSONResponse(
-        {"detail": "Invalid floor plan or scenario", "errors": [
-            {"field": ".".join(str(part) for part in error["loc"]), "message": error["msg"]}
-            for error in exception.errors()[:12]
-        ]},
+        {"detail": detail, "errors": errors},
         status_code=422,
         headers={"Cache-Control": "private, no-store"},
     )
@@ -212,8 +229,10 @@ def health(response: Response):
 def run_editor_simulation(payload: SimulationRequest):
     plan = payload.plan.model_dump()
     settings = payload.scenario.model_dump()
-    scenario = editor_to_scenario(plan, settings)
+    scenario = editor_to_scenario(plan, settings, payload.starting_population)
     result = run_simulation(scenario)
+    from app.simulation.geometry import build_geometry
+    _, excluded_area = placement_access(build_geometry(scenario), scenario.exits, scenario.agent_defaults.radius)
     # Preserve native simulation timestamps and outcomes. Micrometre coordinate
     # precision keeps maximum-size results small enough for the Next.js proxy.
     for frame in result["frames"]:
@@ -223,6 +242,8 @@ def run_editor_simulation(payload: SimulationRequest):
     result["engine"] = "jupedsim"
     result["engine_version"] = ENGINE_VERSION
     result["editor_metadata"] = {"seed": settings.get("seed", POPULATION_SEED), "walking_profile": settings["mobility"],
+        "excluded_spawn_area_m2": 0 if payload.starting_population is not None else round(excluded_area, 4),
+        "reused_starting_population": payload.starting_population is not None,
         "distribution": settings["distribution"], "pixels_per_metre": plan["native"]["transform"]["pixels_per_metre"] if plan.get("native") else 32}
     return result
 
@@ -262,6 +283,7 @@ class FloorPlanImport(InputModel):
     image_width_m: float | None = Field(default=None, gt=0, le=1000)
     extraction_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     manual_scale: ScaleReference | None = None
+    async_import: bool = False
 
 
 @app.get("/api/floorplans")
@@ -271,7 +293,7 @@ def floorplan_providers(response: Response):
     return {provider: {**info, **status[provider]} for provider, info in provider_status().items()}
 
 
-def import_floorplan(payload):
+def import_floorplan(payload, progress=None):
     if payload.editor_plan is not None:
         if payload.editor_plan.native is None:
             raise ValueError("Import an image or native layout JSON to edit walls and doors")
@@ -292,7 +314,7 @@ def import_floorplan(payload):
         source = save_image(ImageUpload(filename=payload.filename, image_base64=payload.image_base64), root)
         result = extract_image(ExtractionRequest(image_id=source.id, provider=payload.provider,
             meters_per_pixel=payload.image_width_m / source.width_px if payload.image_width_m else None,
-            scale_confirmed=bool(payload.image_width_m)), root)["results"][0]
+            scale_confirmed=bool(payload.image_width_m)), root, progress=progress)["results"][0]
     if result.get("needs_scale"):
         return result
     if "error" in result:
@@ -300,19 +322,43 @@ def import_floorplan(payload):
     return {"plan": native_to_editor(result["layout"], strict=False), "warnings": result.get("warnings", [])}
 
 
+def run_import_job(identifier, payload):
+    try:
+        result = import_with_slot(payload, lambda message: update_job(identifier, progress=message))
+        update_job(identifier, status="complete", progress="Import complete", result=result)
+    except (ValueError, RuntimeError) as exc:
+        update_job(identifier, status="failed", error=str(exc)[:600])
+    except Exception:
+        logger.exception("Floor plan import job failed")
+        update_job(identifier, status="failed", error="Image import failed. Check backend storage and retry.")
+
+
+@app.get("/api/floorplans/jobs/{identifier}")
+def floorplan_job(identifier: str, response: Response, authorization: str | None = Header(default=None)):
+    require_backend_token(authorization)
+    if len(identifier) != 32 or any(c not in "0123456789abcdef" for c in identifier):
+        raise HTTPException(status_code=400, detail="Invalid import job ID")
+    result = job_status(identifier)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Import job expired or the backend restarted. Upload the image again.")
+    response.headers["Cache-Control"] = "private, no-store"
+    return result
+
+
 @app.get("/api/floorplans/images/{image_id}")
 def floorplan_image(image_id: str, authorization: str | None = Header(default=None)):
     require_backend_token(authorization)
     root = editor_storage_root()
     try:
-        image = load_image_bytes(root, image_id)
+        image, media_type = image_preview(load_image_bytes(root, image_id))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid image ID") from None
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Source image unavailable on this server") from None
     except OSError:
         raise HTTPException(status_code=503, detail="Source image storage is unavailable") from None
-    return Response(image, media_type="image/png", headers={"Cache-Control": "private, no-store"})
+    return Response(image, media_type=media_type, headers={"Cache-Control": "private, no-store",
+                                                        "X-Content-Type-Options": "nosniff"})
 
 
 @app.post("/api/floorplans")
@@ -332,6 +378,22 @@ async def floorplan_import(payload: FloorPlanImport, response: Response, authori
                     headers={"Retry-After": "3"})
             _active_imports[payload.provider] = time.monotonic()
     try:
+        # Vercel workers are request-scoped and may serve polling elsewhere.
+        # Finish within this request instead of returning a process-local job.
+        if extraction and payload.async_import and not os.environ.get("VERCEL"):
+            identifier = None
+            try:
+                identifier = create_job()
+                threading.Thread(target=run_import_job, args=(identifier, payload), daemon=True).start()
+            except Exception:
+                if identifier is not None:
+                    update_job(identifier, status="failed", error="Could not start the import worker. Retry the upload.")
+                with _import_guard:
+                    _active_imports.pop(payload.provider, None)
+                raise
+            response.status_code = 202
+            response.headers["Cache-Control"] = "private, no-store"
+            return {"job_id": identifier, "status": "running"}
         result = await run_in_threadpool(import_with_slot if extraction else import_floorplan, payload)
         response.headers["Cache-Control"] = "private, no-store"
         return result

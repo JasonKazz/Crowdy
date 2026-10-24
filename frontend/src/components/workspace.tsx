@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppHeader from "./app-header";
 import AppFooter from "./app-footer";
+import { awaitFloorPlanImport } from "@/lib/floorplan-import";
 import { validatePlan } from "@/lib/plan-validation";
-import { runBackendSimulation } from "@/lib/backend-simulation";
+import { runBackendSimulation, sameStartingPopulation } from "@/lib/backend-simulation";
 import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
 import FloorPlanView from "./floor-plan";
 import Icon, { type IconName } from "./icon";
@@ -84,6 +85,7 @@ export default function Workspace({
   const [baseline, setBaseline] = useState<SimulationResult | null>(null);
   const [runCount, setRunCount] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [running, setRunning] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [speed, setSpeed] = useState(1);
@@ -118,6 +120,7 @@ export default function Workspace({
     scenario: { ...initialScenario },
   });
   const runController = useRef<AbortController | null>(null);
+  const importController = useRef<AbortController | null>(null);
   const currentTime = useRef(0);
   const uploadRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -182,6 +185,8 @@ export default function Workspace({
     () => () => {
       runController.current?.abort();
       runController.current = null;
+      importController.current?.abort();
+      importController.current = null;
     },
     [],
   );
@@ -210,7 +215,7 @@ export default function Workspace({
   }, [modal]);
 
   useEffect(() => {
-    if (modal !== "upload") return;
+    if (modal !== "upload" || calibratingExisting) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     async function refresh() {
@@ -233,7 +238,7 @@ export default function Workspace({
     }
     void refresh();
     return () => {controller.abort(); clearTimeout(timer);};
-  }, [modal]);
+  }, [modal, calibratingExisting]);
 
   useEffect(() => {
     if (!notice) return;
@@ -275,7 +280,7 @@ export default function Workspace({
     baseline.engineVersion === result.engineVersion,
   );
   const canCompare = Boolean(
-    baseline && result && baseline.id !== result.id && sameEngine,
+    baseline && result && baseline.id !== result.id && sameEngine && sameStartingPopulation(baseline, result),
   );
   const sameScenario = Boolean(
     baseline &&
@@ -285,6 +290,7 @@ export default function Workspace({
   const shownPlan = mode === "layout" ? plan : (result?.plan ?? plan);
   const shownResult = mode === "layout" ? (!stale && result ? result : preview) : result;
   const evacuated = result ? getEvacuatedCount(result, time) : 0;
+  const responding = result?.agents.filter(agent => agent.outcome !== "trapped" && time < agent.delay).length ?? 0;
   const duration = Math.max(
     result?.totalTime ?? 60,
     mode === "compare" ? (baseline?.totalTime ?? 0) : 0,
@@ -324,6 +330,8 @@ export default function Workspace({
     if (busy) return;
     setHistory((previous) => [...previous.slice(-19), clonePlan(plan)]);
     setPlan(next);
+    if ((scenario.blockedExitIds ?? []).some(id => !next.exits.some(exit=>exit.id===id)))
+      setScenario({...scenario,blockedExitIds:(scenario.blockedExitIds ?? []).filter(id=>next.exits.some(exit=>exit.id===id))});
   }
   function moveItem(id: string, x: number, y: number) {
     const item = plan.items.find((item) => item.id === id);
@@ -371,11 +379,13 @@ export default function Workspace({
   }
   function acceptImport(data: {plan: unknown;warnings?:string[]}) {
     const next=validatePlan(data.plan);
-    editPlan(next);setSelectedId(null);setGeometrySelection(null);setGeometryTool("select");
-    setMode("layout");setModal(null);setPendingCalibration(null);setError("");setRunError("");
+    editPlan(next);setBaseline(null);setResult(null);setScenario({...scenario,blockedExitIds:[]});setSelectedId(null);setGeometrySelection(null);setGeometryTool("select");
+    setMode("layout");setModal(null);setPendingCalibration(null);setCalibratingExisting(false);setError("");setRunError("");
     const calibration=next.native?nativeLayout(next).source_image?.calibration:null;
-    setNotice((calibration?.method==="automatic"?`Scale detected from ${calibration.label}. `:"")+
-      "Floor plan imported. Review walls, doors, and exits before running."+(data.warnings?.length?" "+data.warnings.join(" "):""));
+    setNotice((calibration?.method==="automatic"?`Scale detected from ${calibration.label}. `:
+      calibration?.method==="estimated"?"Scale estimated from doors and furniture. Edit scale to adjust it. ":"")+
+      "Floor plan imported. Review walls, doors, and exits before running."+(data.warnings?.length?
+        " "+data.warnings.slice(0,2).join(" ")+" See Extraction notes under Walls & doors for all observations.":""));
   }
   async function finishScale(reference: Parameters<React.ComponentProps<typeof ScaleCalibrator>["onApply"]>[0]) {
     if(!pendingCalibration||busy)return;
@@ -401,10 +411,12 @@ export default function Workspace({
     finally{setBusy(false);}
   }
   async function run() {
+    if (busy && !running) return;
     if (runController.current) {
       runController.current.abort();
       runController.current = null;
       setBusy(false);
+      setRunning(false);
       setRunError("");
       setNotice("Run cancelled. Your setup is unchanged.");
       return;
@@ -414,11 +426,13 @@ export default function Workspace({
     const submittedPlan = clonePlan(plan);
     const submittedScenario = { ...scenario };
     setBusy(true);
+    setRunning(true);
     setRunError("");
     setPlaying(false);
     try {
       const next = await runBackendSimulation(submittedPlan, submittedScenario, {
         signal: controller.signal,
+        baseline: baseline ?? undefined,
       });
       if (runController.current !== controller || controller.signal.aborted) return;
       setResult(next);
@@ -427,8 +441,10 @@ export default function Workspace({
       setRunCount((count) => count + 1);
       setPlaying(next.totalTime > 0 && !reducedMotion());
       setNotice(
-        next.remaining
-          ? `Time limit reached with ${next.remaining} ${next.remaining === 1 ? "person" : "people"} remaining. Inspect the recorded movement and exits.`
+        next.trapped && !next.movingRemaining
+          ? `${next.exited} evacuated; ${next.trapped} trapped with no available route. Trapped people remain visible in red.`
+          : next.remaining
+          ? `Time limit reached: ${next.trapped ?? 0} trapped and ${next.movingRemaining ?? next.remaining} with a route still inside; ${next.remaining} ${next.remaining === 1 ? "person" : "people"} remaining. Inspect the recorded movement and exits.`
           : "Run complete. Inspect playback or pin this run as your baseline.",
       );
     } catch (error) {
@@ -442,6 +458,7 @@ export default function Workspace({
       if (runController.current === controller) {
         runController.current = null;
         setBusy(false);
+        setRunning(false);
       }
     }
   }
@@ -454,6 +471,8 @@ export default function Workspace({
       );
       return;
     }
+    const controller = new AbortController();
+    importController.current = controller;
     setBusy(true);
     setError("");
     setPendingCalibration(null);
@@ -462,22 +481,26 @@ export default function Workspace({
     try {
       let data;
       if (image) {
-        data = {...await prepareImageUpload(file),provider:imageProvider};
+        data = {...await prepareImageUpload(file),provider:imageProvider,async_import:true};
       } else data = JSON.parse(await file.text());
+      controller.signal.throwIfAborted();
       const raw = data.plan ?? data;
       let warnings: string[] = [];
       if (image || raw.walkable_areas) {
         const response = await fetch("/api/floorplans",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify(image ? data : {layout:raw})});
+          body:JSON.stringify(image ? data : {layout:raw}), signal:controller.signal});
         if (response.status === 413) throw new Error(IMAGE_UPLOAD_SIZE_ERROR);
-        const imported = await response.json().catch(() => null);
+        let imported = await response.json().catch(() => null);
         if (!imported || typeof imported !== "object") throw new Error("The floor plan service returned an unreadable response. Try again shortly.");
         if(!response.ok) throw new Error(imported.error || "The floor plan could not be imported.");
+        if (imported.job_id) imported = await awaitFloorPlanImport(imported.job_id, setNotice, controller.signal);
+        controller.signal.throwIfAborted();
         if(imported.needs_scale){setPendingCalibration(imported);setNotice("");return;}
         data = imported; warnings=imported.warnings ?? [];
       }
       acceptImport({plan:data.plan??data,warnings});
     } catch (cause) {
+      if (controller.signal.aborted) return;
       setError(
         cause instanceof SyntaxError
           ? "This file is not valid JSON. Choose a Crowdy floor plan or download the sample below."
@@ -485,12 +508,21 @@ export default function Workspace({
             ? cause.message
             : "This floor plan could not be opened. Try the sample JSON.",
       );
-    } finally {setBusy(false);if (uploadRef.current) uploadRef.current.value = "";}
+    } finally {
+      if (importController.current === controller) {
+        importController.current = null;
+        if (!controller.signal.aborted) {
+          setBusy(false);
+          if (uploadRef.current) uploadRef.current.value = "";
+        }
+      }
+    }
   }
   function reset() {
     if (busy) return;
     editPlan(clonePlan(openingSetup.current.plan));
     setScenario({ ...openingSetup.current.scenario });
+    setBaseline(null);
     setSelectedId(null);
     setMode("layout");
     setModal(null);
@@ -502,6 +534,11 @@ export default function Workspace({
     downloadJson(
       {
         version: 1,
+        comparison: canCompare && baseline && result ? {
+          sameStartingPeople: sameStartingPopulation(baseline,result), baseline, after: result,
+          clearanceTimeChange: clearance(baseline) !== null && clearance(result) !== null ? clearance(result)!-clearance(baseline)! : null,
+          evacuatedChange:result.exited-baseline.exited, trappedChange:(result.trapped??0)-(baseline.trapped??0),
+        } : null,
         plan,
         scenario,
         result: result
@@ -512,6 +549,14 @@ export default function Workspace({
               engine: result.engine,
               engineVersion: result.engineVersion,
               modelSettings: result.modelSettings,
+              bodyWidthMetres: result.agentRadius === undefined ? undefined : 2 * result.agentRadius,
+              exitWidthsMetres: result.exitWidths,
+              placementExcludedArea: result.placementExcludedArea,
+              trapped: result.trapped,
+              movingRemaining: result.movingRemaining,
+              startingOccupants: result.startingOccupants,
+              behaviorVersion: result.behaviorVersion,
+              individualBehavior: result.agents.map(agent => ({id:agent.sourceId, responseDelay:agent.delay, desiredSpeed:agent.desiredSpeed})),
               status: result.status,
               plan: result.plan,
               scenario: result.scenario,
@@ -546,6 +591,7 @@ export default function Workspace({
     showReference:mode==="layout"&&showReference,
     referenceOpacity,
     geometrySelection,
+    blockedExitIds: scenario.blockedExitIds,
     geometryTool,
     onGeometrySelect:(selection:GeometrySelection)=>{
       setGeometrySelection(selection);
@@ -584,11 +630,12 @@ export default function Workspace({
             <span>Export workspace</span>
           </button>
           <button
-            className={`button primary ${busy ? "is-loading" : ""}`}
+            className={`button primary ${running ? "is-loading" : ""}`}
+            disabled={busy && !running}
             onClick={run}
           >
-            <Icon name={busy ? "close" : "play"} size={15} />
-            {busy ? "Cancel run" : "Run simulation"}
+            <Icon name={running ? "close" : "play"} size={15} />
+            {running ? "Cancel run" : busy ? "Working…" : "Run simulation"}
           </button>
         </div>
       </div>
@@ -649,26 +696,47 @@ export default function Workspace({
               isSample={isSample}
               busy={busy}
               onUploadFloorPlan={() => {
+                setCalibratingExisting(false);
+                setPendingCalibration(null);
                 setModal("upload");
                 setError("");
               }}
               onUseCrowdEstimate={(occupancy) => {
+                const clearingBaseline = Boolean(baseline && scenario.occupancy !== occupancy);
+                if (clearingBaseline) {
+                  setBaseline(null);
+                }
+                if (scenario.occupancy !== occupancy) setMode("layout");
+                setPlaying(false);
                 setScenario((current) => ({ ...current, occupancy }));
-                setNotice(`Venue crowd estimate applied: ${occupancy} people.`);
+                setNotice(`Venue crowd estimate applied: ${occupancy} people.${clearingBaseline ? " Baseline cleared because the starting crowd changed." : ""}`);
               }}
             >
               <div className="scale-row">
                 <span>Plan scale</span>
                 <span className="mono">
-                  {(plan.native?.transform.pixels_per_metre ?? 32).toFixed(1)} px / m <Icon name="check" size={12} />
+                  {(plan.native?.transform.pixels_per_metre ?? 32).toFixed(1)} px / m
+                  {!(plan.native && nativeLayout(plan).source_image?.calibration?.method === "estimated") && (
+                    <Icon name="check" size={12} />
+                  )}
                 </span>
               </div>
+              {plan.native && nativeLayout(plan).source_image?.calibration?.method === "estimated" && (
+                <span className="estimated-scale-badge">Estimated scale</span>
+              )}
               {plan.native && nativeLayout(plan).source_image?.calibration && (
                 <p className="helper scale-evidence">
-                  {nativeLayout(plan).source_image!.calibration!.method === "automatic"
-                    ? "Detected from: "
-                    : "Calibrated from: "}
+                  {nativeLayout(plan).source_image!.calibration!.method === "estimated"
+                    ? "Estimated from: "
+                    : nativeLayout(plan).source_image!.calibration!.method === "automatic"
+                      ? "Detected from: "
+                      : "Calibrated from: "}
                   {nativeLayout(plan).source_image!.calibration!.label}
+                </p>
+              )}
+              {plan.native && nativeLayout(plan).source_image?.calibration?.method === "estimated" && (
+                <p className="helper scale-estimate-note">
+                  Distances, area, and results use assumed object sizes. Use Edit scale to enter a known measurement.
                 </p>
               )}
               {plan.native?.image && (
@@ -685,7 +753,8 @@ export default function Workspace({
                       image_id: source.id,
                       width_px: source.width_px,
                       height_px: source.height_px,
-                      reason: "Mark a known distance to correct the current scale. Your wall, door, and furniture edits will be preserved.",
+                      current_width_m: source.width_px * source.meters_per_pixel,
+                      reason: "Mark a known distance or enter the full image width to correct the current scale. Your wall, door, and furniture edits will be preserved.",
                     });
                     setModal("upload");
                   }}
@@ -796,7 +865,7 @@ export default function Workspace({
               <Icon name="people" size={17} />
               <h2>Scenario</h2>
             </div>
-            <fieldset disabled={busy}>
+            <fieldset disabled={busy || Boolean(baseline)}>
               <div className="occupancy-label">
                 <label htmlFor="occupancy">Occupancy</label>
                 <span>
@@ -865,6 +934,12 @@ export default function Workspace({
                 </select>
                 <Icon name="chevron" size={13} />
               </div>
+              <label className="field-label" htmlFor="body-width">Body width (cm)</label>
+              <input id="body-width" type="number" min="40" max="70" step="1" value={Math.round((scenario.bodyWidth ?? .46)*100)}
+                onChange={event => {const width=Number(event.target.value);if(Number.isInteger(width)&&width>=40&&width<=70)
+                  setScenario({...scenario,bodyWidth:width/100});}} />
+              <p className="field-note">Shoulder width and collision diameter use the same size. Default: 46 cm.
+                {plan.id === SAMPLE_PLAN.id && !plan.native ? " Sample exits are 1.75 m wide, so two abreast can fit in these wide openings." : " Check the drawing’s scale if doors look too wide."}</p>
               <label className="field-label" htmlFor="mobility">
                 Walking profile
               </label>
@@ -889,6 +964,34 @@ export default function Workspace({
                   ? "Default walking speed: 1.2 m/s."
                   : "Includes slower walkers. Speed: 0.7–1.2 m/s."}
               </p>
+            </fieldset>
+            {baseline && <p className="helper">Baseline starting people, body width and base walking speeds are fixed. You can change evacuation mode below.</p>}
+            <fieldset disabled={busy}>
+              <label className="field-label" htmlFor="behavior-mode">Evacuation mode</label>
+              <div className="select-wrap">
+                <select id="behavior-mode" value={scenario.behaviorMode ?? "idealized"}
+                  onChange={event => setScenario({...scenario,behaviorMode:event.target.value as Scenario["behaviorMode"]})}>
+                  <option value="idealized">Idealized · immediate response</option>
+                  <option value="behavioral">Behavioral · varied response</option>
+                </select>
+                <Icon name="chevron" size={13}/>
+              </div>
+              <p className="field-note">{scenario.behaviorMode === "behavioral"
+                ? "Response delays: 0–12 s, most likely 3 s. Desired speeds vary ±15% around each person’s base speed. Amber people are still responding."
+                : "Everyone responds immediately and uses their base walking speed. This is not a globally optimal evacuation."}</p>
+              <p className="field-note">Behavioral assumptions are illustrative. The seed repeats the same individual differences.</p>
+            </fieldset>
+            <fieldset disabled={busy} className="exit-availability">
+              <legend>Blocked exits</legend>
+              <p className="helper">Unavailable for the entire run. Blocking every exit is allowed. Doorway geometry stays unchanged.</p>
+              {plan.exits.map(exit => <label key={exit.id} className="exit-toggle">
+                <input type="checkbox" aria-label={`Block ${exit.label}`}
+                  checked={(scenario.blockedExitIds ?? []).includes(exit.id)}
+                  onChange={event => setScenario({...scenario,blockedExitIds:event.target.checked
+                    ? [...(scenario.blockedExitIds ?? []),exit.id]
+                    : (scenario.blockedExitIds ?? []).filter(id => id !== exit.id)})} />
+                {exit.label}
+              </label>)}
             </fieldset>
           </section>
           <div className="setup-bottom">
@@ -977,7 +1080,7 @@ export default function Workspace({
               <div className="compare-plans">
                 <div>
                   <div className="compare-label">
-                    <span>BASELINE</span>
+                    <span>BASELINE · {baseline.scenario.behaviorMode === "behavioral" ? "BEHAVIORAL" : "IDEALIZED"}</span>
                     <strong>{clearanceLabel(baseline)}</strong>
                   </div>
                   <FloorPlanView
@@ -989,7 +1092,7 @@ export default function Workspace({
                 </div>
                 <div>
                   <div className="compare-label">
-                    <span>PROPOSED</span>
+                    <span>PROPOSED · {result.scenario.behaviorMode === "behavioral" ? "BEHAVIORAL" : "IDEALIZED"}</span>
                     <strong>{clearanceLabel(result)}</strong>
                   </div>
                   <FloorPlanView
@@ -1094,6 +1197,12 @@ export default function Workspace({
                 <>
                   <span className="legend-person" />
                   Person
+                  {(result?.scenario.behaviorMode === "behavioral" || (mode === "compare" && baseline?.scenario.behaviorMode === "behavioral")) && <>
+                    <span className="legend-person" style={{background:"#b98a3e"}}/>Responding
+                  </>}
+                  {Boolean(result?.trapped || (mode === "compare" && baseline?.trapped)) && <>
+                    <span className="legend-person" style={{background:"#b64235"}}/>Trapped
+                  </>}
                   <span className="legend-exit" />
                   Exit
                 </>
@@ -1109,7 +1218,7 @@ export default function Workspace({
                 </strong>
                 <span>
                   {result
-                    ? `${evacuated} / ${result.scenario.occupancy} exited`
+                    ? `${evacuated} / ${result.scenario.occupancy} exited${mode !== "layout" && responding ? ` · ${responding} responding` : ""}`
                     : "Run a scenario to inspect movement"}
                 </span>
               </div>
@@ -1184,14 +1293,18 @@ export default function Workspace({
                 ? "Running"
                 : result
                   ? result.remaining
-                    ? "Partial"
+                    ? result.status === "trapped" ? "Trapped" : "Time limit"
                     : "Complete"
                   : "Not run"}
             </span>
           </div>
+          {(result?.plan??plan).native&&nativeLayout(result?.plan??plan).source_image?.calibration?.method==="estimated"&&
+            <p className="scale-estimate-note">Estimated scale: these results use assumed object sizes. Calibrate with a known measurement for more reliable distances and density.</p>}
+          {result && (result.placementExcludedArea ?? 0) > .01 &&
+            <p className="scale-estimate-note">Automatic placement excluded {result.placementExcludedArea!.toFixed(1)} m² with no body-clear route to an exit. These areas had no starting occupants; review narrow gaps and enclosed rooms before interpreting the results.</p>}
           {result && (
             <p className="results-subtitle">
-              {`${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`}
+              {`${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.behaviorMode === "behavioral" ? "Behavioral" : "Idealized"} · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`}
             </p>
           )}
           {stale && (
@@ -1216,12 +1329,13 @@ export default function Workspace({
             <p>
               {result
                 ? result.remaining
-                  ? `${result.exited} exited · ${result.remaining} remaining at ${formatTime(result.totalTime)}`
+                  ? `${result.exited} exited · ${result.trapped ?? 0} trapped · ${result.movingRemaining ?? result.remaining} with a route still inside at ${formatTime(result.totalTime)}`
                   : `${result.exited} people reached an exit`
                 : "Time until everyone reaches an exit"}
             </p>
           </div>
           <div className="secondary-metrics">
+            <div><span>Body width · collision diameter</span><strong>{result?.agentRadius === undefined ? "—" : `${Math.round(2*result.agentRadius*100)} cm`}</strong></div>
             <div>
               <span>Average exit time</span>
               <strong>
@@ -1247,9 +1361,11 @@ export default function Workspace({
                 </small>
               </strong>
             </div>
+            <div><span>Trapped · no available route</span><strong className={result?.trapped ? "warning-text" : ""}>{result?.trapped ?? "—"}</strong></div>
+            <div><span>With a route at time limit</span><strong>{result?.movingRemaining ?? "—"}</strong></div>
             {result?.perExitCounts && Object.entries(result.perExitCounts).map(([id, count]) => (
               <div key={id}>
-                <span>Via {result.plan.exits.find((exit) => exit.id === id)?.label ?? id}</span>
+                <span>Via {result.plan.exits.find((exit) => exit.id === id)?.label ?? id}{result.exitWidths?.[id] === undefined ? "" : ` · ${result.exitWidths[id].toFixed(2)} m wide`}</span>
                 <strong>{count}<small> {count === 1 ? "person" : "people"}</small></strong>
               </div>
             ))}
@@ -1368,12 +1484,20 @@ export default function Workspace({
                     ? baseline &&
                       result &&
                       (baseline.remaining || result.remaining)
-                      ? "Incomplete runs. Compare people remaining; evacuation times are unavailable until everyone exits."
+                      ? "Identical starting people. Compare evacuated, trapped, and people still inside with a route; full evacuation time is unavailable when anyone remains."
                       : sameScenario
-                        ? `${layoutChanges} layout object${layoutChanges === 1 ? "" : "s"} changed. Same occupancy and walking profile.`
-                        : "Scenario settings differ between runs."
-                    : "Edit the layout and run again to compare."}
+                        ? `${layoutChanges} layout object${layoutChanges === 1 ? "" : "s"} changed. Identical starting people and walking speeds.`
+                        : "Identical starting people and base speeds; evacuation mode or exit availability changed."
+                    : "Change evacuation mode, block exits or edit the layout, then run again."}
                 </p>
+                {canCompare && result && <dl className="comparison-outcomes">
+                  <div><dt>Mode · before → after</dt><dd>{baseline.scenario.behaviorMode === "behavioral" ? "Behavioral" : "Idealized"} → {result.scenario.behaviorMode === "behavioral" ? "Behavioral" : "Idealized"}</dd></div>
+                  <div><dt>Evacuated · before → after</dt><dd>{baseline.exited} → {result.exited}</dd></div>
+                  <div><dt>Trapped · before → after</dt><dd>{baseline.trapped ?? 0} → {result.trapped ?? 0}</dd></div>
+                  <div><dt>With a route · before → after</dt><dd>{baseline.movingRemaining ?? baseline.remaining} → {result.movingRemaining ?? result.remaining}</dd></div>
+                  <div><dt>Peak density · before → after</dt><dd>{baseline.peakDensity.toFixed(1)} → {result.peakDensity.toFixed(1)} people/m²</dd></div>
+                  {Object.entries(result.perExitCounts ?? {}).map(([id, total]) => <div key={id}><dt>{result.plan.exits.find(e=>e.id===id)?.label ?? id} · before → after</dt><dd>{baseline.perExitCounts?.[id] ?? 0} → {total}</dd></div>)}
+                </dl>}
                 {canCompare &&
                   baseline &&
                   result &&
@@ -1416,7 +1540,7 @@ export default function Workspace({
             ) : (
               <>
                 <p className="helper">
-                  Keep a run as a baseline, then test a change to the layout.
+                  Keep a run as a baseline, then test another mode, blocked exits or a layout change.
                 </p>
                 <button
                   className="button subtle pin-button"
@@ -1424,7 +1548,7 @@ export default function Workspace({
                   onClick={() => {
                     setBaseline(result);
                     setNotice(
-                      "Baseline pinned for this session. Edit the layout and run again.",
+                      "Baseline pinned. Starting positions and base speeds are fixed. Change evacuation mode, block exits or edit the layout, then run again.",
                     );
                   }}
                 >
@@ -1471,7 +1595,7 @@ export default function Workspace({
         <div className="dialog-header">
           <h2 id="workspace-dialog-title">
             {modal === "upload"
-              ? "Upload floor plan"
+              ? calibratingExisting ? "Edit scale" : "Upload floor plan"
               : modal === "reset"
                 ? "Restore the opening layout?"
                 : "Simulation assumptions"}
@@ -1486,6 +1610,7 @@ export default function Workspace({
         </div>
         {modal === "upload" ? (
           <>
+            {!calibratingExisting&&<>
             <p>
               Import a frontend or backend Crowdy JSON layout, or extract an image.
               Uploading replaces your layout; Undo restores it. Imported furniture stays editable.
@@ -1496,13 +1621,15 @@ export default function Workspace({
             </select>
             <p className="muted" role="status">
               {providerStatusError || (providerStatus[imageProvider]?.busy
-                ? `${imageProvider === "gemini" ? "Gemini" : "Claude"} is processing an image (${providerStatus[imageProvider].elapsed_seconds}s elapsed). Image requests stop after about 3 minutes. ${busy ? "Wait for this request to finish." : "Choose the other provider or import JSON while this image is processing."}`
+                ? `${imageProvider === "gemini" ? "Gemini" : "Claude"} is processing an image (${providerStatus[imageProvider].elapsed_seconds}s elapsed). Large plans use several structure, scale and detail passes. ${busy ? "Wait for this request to finish." : "Choose the other provider or import JSON while this image is processing."}`
                 : providerStatus[imageProvider]?.configured === false
                   ? "This provider needs an API key in the server’s .env file."
                   : providerStatus[imageProvider] ? "This provider is ready for an image." : "Checking provider status…")}
             </p>
-            <p className="muted">Scale is detected from printed dimensions or a scale bar. If none is readable, you can mark one known distance afterward. Images are resized to 1092 pixels on the longest edge before being sent to your selected provider; crop dense plans for clearer detail.</p>
+            <p className="muted">Scale uses printed dimensions first, then an estimate from doors and furniture when several objects agree. You can adjust estimates with Edit scale. If neither is usable, mark a known distance. Images are resized to at most 3072 pixels per side before being sent to your selected provider.</p>
+            </>}
             {pendingCalibration&&<ScaleCalibrator key={pendingCalibration.extraction_id} pending={pendingCalibration} busy={busy} onApply={finishScale}/>}
+            {!calibratingExisting&&<>
             <button
               className="upload-dropzone"
               disabled={busy}
@@ -1510,6 +1637,7 @@ export default function Workspace({
             >
               <Icon name="upload" size={26} />
               <strong>{busy ? "Importing floor plan…" : "Choose a floor plan"}</strong>
+              {busy && notice && <span role="status">{notice}</span>}
               <span>JSON up to 1 MB · PNG, JPEG, WebP up to 10 MB</span>
             </button>
             <input
@@ -1520,12 +1648,13 @@ export default function Workspace({
               aria-label="Choose floor plan file"
               onChange={(e) => upload(e.target.files?.[0])}
             />
+            </>}
             {error && (
               <div className="upload-error" role="alert">
                 {error}
               </div>
             )}
-            <button
+            {!calibratingExisting&&<><button
               className="text-button"
               onClick={() =>
                 downloadJson(
@@ -1541,6 +1670,7 @@ export default function Workspace({
               PNG, JPEG, and WebP extraction uses your server’s provider key.
               Export PDF pages as images first. Imported walls, doors, exits, and furniture can be corrected in this workspace.
             </p>
+            </>}
           </>
         ) : modal === "reset" ? (
           <>
@@ -1571,7 +1701,7 @@ export default function Workspace({
               <div>
                 <dt>Geometry</dt>
                 <dd>
-                  32 canvas pixels represent 1 metre. Walls define the floor
+                  Imported plans use their measured or estimated scale; the sample uses 32 pixels per metre. Walls define the floor
                   bounds; wall segments and furniture block movement. Boundary
                   exits include a short landing beyond the floor. Review
                   imported geometry before running.
@@ -1583,14 +1713,19 @@ export default function Workspace({
                   JuPedSim uses a collision-free speed model. People choose an
                   exit once using the shortest routed distance around obstacles;
                   they do not switch destinations to avoid congestion.
+                  Idealized mode starts everyone immediately at their base desired speed.
+                  Behavioral mode samples response delays from a triangular 0–12 s distribution (mode 3 s)
+                  and speed multipliers from a triangular 0.85–1.15 distribution (mode 1).
+                  These are illustrative assumptions, not calibrated predictions. Waiting people remain physical obstacles.
                 </dd>
               </div>
               <div>
                 <dt>Reported time</dt>
                 <dd>
                   Evacuation time is available only when everyone exits.
-                  Otherwise the run stops at 60 simulated seconds and keeps
-                  remaining people visible. Average exit time counts only people
+                  Trapped people have no body-clear route to an available exit at the start and remain stationary and visible in red.
+                  The run ends when everyone with a route has left, or at the configured time limit. People with a route still inside at that limit are reported separately.
+                  Average exit time counts only people
                   who reached an exit.
                 </dd>
               </div>
@@ -1600,6 +1735,10 @@ export default function Workspace({
                   Playback follows recorded positions and their simulation
                   timestamps. 1× advances one simulated second per real second.
                   Reduced motion starts runs paused.
+                  Shoulder ellipses face the measured walking direction with smoothed turns;
+                  collision and route clearance still use circular bodies. Amber means waiting to respond; red means trapped.
+                  Body width defaults to 46 cm (a 23 cm radius), is adjustable from 40–70 cm, and sets both the shoulder span and collision diameter.
+                  Door widths come from the floor geometry; wide exits can support people abreast. Estimated drawing scale affects their measured width.
                 </dd>
               </div>
               <div>

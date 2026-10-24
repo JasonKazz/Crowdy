@@ -1,9 +1,11 @@
 """Durable imports survive another worker with an empty local filesystem."""
 
+import base64
 import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,10 +16,11 @@ from fastapi.testclient import TestClient
 from app import api
 from app.schemas.extraction import ExtractedDrawing
 from app.services.floorplans.images import finish_calibration, load_image
+from app.services.floorplans.providers import ProviderError
 from app.services.floorplans.storage import (
     ArtifactStorageError, editor_storage_root, read_artifact, write_artifact,
 )
-from test_images import drawing_fixture, upload_fixture
+from test_images import drawing_fixture, image_bytes, region, upload_fixture
 
 
 class MemoryBlob:
@@ -143,4 +146,67 @@ class DurableImportTests(unittest.TestCase):
             finish_calibration("../escape", None, self.other_worker)
         with self.assertRaisesRegex(ValueError, "saved extraction was not found"):
             finish_calibration("b" * 32, None, self.other_worker)
+
+    def test_staged_job_and_review_survive_calibration_on_another_worker(self):
+        drawing = drawing_fixture()
+        drawing["exits"].append(region("review-interior-exit", 400, 200, 450, 250))
+
+        def staged(_provider, _image, width, height, directory, progress):
+            self.assertEqual((width, height), (1600, 800))
+            progress("Reading detail regions")
+            (directory / "report.json").write_text('{"review": true}')
+            (directory / "overview.png").write_bytes(image_bytes())
+            return ExtractedDrawing.model_validate(drawing), "staged-test-model"
+
+        with patch("app.services.floorplans.staged.extract_staged", side_effect=staged) as provider:
+            response = self.client.post("/api/floorplans", json={
+                "filename": "large-plan.png", "image_base64": base64.b64encode(image_bytes((1600, 800))).decode(),
+                "provider": "claude", "async_import": True,
+            }, headers=self.headers)
+            self.assertEqual(response.status_code, 202, response.text)
+            identifier = response.json()["job_id"]
+            for _ in range(100):
+                job = self.client.get("/api/floorplans/jobs/" + identifier, headers=self.headers).json()
+                if job["status"] != "running":
+                    break
+                time.sleep(.01)
+        self.assertEqual(job["status"], "complete", job)
+        provider.assert_called_once()
+        pending = job["result"]
+        self.assertTrue(pending["needs_scale"])
+        prefix = f'crowdy/editor/extractions/{pending["extraction_id"]}'
+        self.assertIn(f"{prefix}/stages/report.json", self.blob.objects)
+        self.assertTrue(self.blob.objects[f"{prefix}/stages/overview.png"].startswith(b"\x89PNG"))
+        self.assertFalse(self.first_worker.exists(), "Staged Blob imports must only use temporary scratch files")
+
+        os.environ["CROWDY_STORAGE_DIR"] = str(self.other_worker)
+        calibrated = self.client.post("/api/floorplans", json={
+            "extraction_id": pending["extraction_id"],
+            "manual_scale": {"kind": "dimension", "label": "18 m", "start": {"x": 50, "y": 50},
+                "end": {"x": 950, "y": 50}, "distance": 18, "unit": "m"},
+        }, headers=self.headers)
+        self.assertEqual(calibrated.status_code, 200, calibrated.text)
+        restored = calibrated.json()
+        self.assertEqual(len(restored["plan"]["exits"]), 2)
+        self.assertTrue(any("review-interior-exit" in warning and "omitted" in warning for warning in restored["warnings"]))
+        self.assertIn(f"{prefix}/candidate.json", self.blob.objects)
+        self.assertFalse(self.other_worker.exists())
+
+    def test_failed_staged_import_keeps_diagnostics_in_blob(self):
+        def failed(_provider, _image, _width, _height, directory, _progress):
+            (directory / "report.json").write_text('{"failures": ["Missing detail region"]}')
+            raise ProviderError("No complete layout was imported")
+
+        with patch("app.services.floorplans.staged.extract_staged", side_effect=failed):
+            response = self.client.post("/api/floorplans", json={
+                "filename": "large-plan.png", "image_base64": base64.b64encode(image_bytes((1600, 800))).decode(),
+                "provider": "claude",
+            }, headers=self.headers)
+        self.assertEqual(response.status_code, 422, response.text)
+        reports = [name for name in self.blob.objects if name.endswith("/stages/report.json")]
+        self.assertEqual(len(reports), 1)
+        prefix = reports[0].removesuffix("/stages/report.json")
+        error = json.loads(self.blob.objects[f"{prefix}/error.json"])
+        self.assertIn("No complete layout", error["error"])
+        self.assertFalse(self.first_worker.exists())
 

@@ -7,6 +7,18 @@ const layout=JSON.parse(readFileSync(new URL("../../examples/editable_office.jso
 const base={id:"editor-test",name:"Editor test",width:900,height:600,area:160,items:[],walls:[],exits:[],
   native:{layout,transform:{pixels_per_metre:40,offset_x:100,offset_y:500},floors:[[{x:100,y:500},{x:740,y:500},{x:740,y:100},{x:100,y:100}]],walls:[],exit_zones:[]}};
 const plan=withNativeLayout(base,layout);
+for (const area of [14813.587936797483, 1e12])
+  assert.equal(validatePlan({...plan,area}).area,area,"Large finite floor areas must remain importable");
+for (const [changes,message] of [
+  [{id:""},/needs an ID/],
+  [{name:""},/needs a name/],
+  [{width:1500},/editor canvas must be 900 × 600/],
+  ...[0,-1,NaN,Infinity].map(area=>[{area},/Floor area must be a finite number greater than 0/]),
+  [{items:undefined},/furniture list/],
+  [{walls:undefined},/walls list/],
+  [{exits:undefined},/exits list/],
+  [{native:undefined,exits:[]},/has no exits/],
+]) assert.throws(()=>validatePlan({...plan,...changes}),message,"Invalid imports must identify the failing field");
 const before=JSON.stringify(plan);
 assert.deepEqual(worldPoint(plan,pixelPoint(plan,[3.5,4.2])),[3.5,4.2]);
 const oldDoor=doorEnds(layout,layout.doors[0]);

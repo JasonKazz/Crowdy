@@ -4,7 +4,7 @@ import {useState} from "react";
 import type {Point} from "@/lib/simulation";
 
 export type PendingCalibration = {needs_scale: true; extraction_id: string; image_id: string;
-  width_px: number; height_px: number; reason: string};
+  width_px: number; height_px: number; reason: string; current_width_m?: number};
 
 export default function ScaleCalibrator({pending,busy,onApply}: {pending: PendingCalibration; busy: boolean;
   onApply: (reference: {kind: "dimension"; label: string; start: Point; end: Point; distance: number; unit: string})=>void}) {
@@ -12,8 +12,19 @@ export default function ScaleCalibrator({pending,busy,onApply}: {pending: Pendin
   const [length,setLength]=useState("");
   const [unit,setUnit]=useState("m");
   const [imageError,setImageError]=useState(false);
+  const [imageWidth,setImageWidth]=useState(pending.current_width_m?.toFixed(2)??"");
   return <section className="scale-calibrator" aria-label="Set a known distance">
     <p role="status">{pending.reason}</p>
+    {pending.current_width_m!==undefined&&<div className="scale-width-adjustment">
+      <label>Full image width (meters)<input type="number" min="0.001" max="1000" step="any" value={imageWidth}
+        disabled={busy} onChange={event=>setImageWidth(event.target.value)}/></label>
+      <p className="muted">Includes image margins. Changing this value replaces the estimate with your entered scale.</p>
+      <button className="button secondary" disabled={busy||!(Number(imageWidth)>0)||Number(imageWidth)>1000||imageError}
+        onClick={()=>onApply({kind:"dimension",label:`Entered full image width: ${imageWidth} m`,
+          start:{x:0,y:0},end:{x:pending.width_px,y:0},distance:Number(imageWidth),unit:"m"})}>
+        Apply image width</button>
+      <p>Or use a measurement between two points below.</p>
+    </div>}
     <p>Click the two ends of a known measurement, then enter its length. Your extraction is saved; this does not call the model again.</p>
     <svg viewBox={`0 0 ${pending.width_px} ${pending.height_px}`} className="calibration-image"
       role="group" aria-label="Mark measurement endpoints on the source image"

@@ -62,6 +62,10 @@ export default function GeometryPanel({plan,selection,tool,busy,onChange,onSelec
         onChange={e=>onOpacity(Number(e.target.value))}/></label><p className="helper">The original image stays fixed while editable geometry moves.</p></>}
     </div>}
     <button type="button" className="button subtle" onClick={onCheck}>Check layout</button>
+    {!!layout.extraction?.warnings?.length&&<details className="geometry-status">
+      <summary>Extraction notes ({layout.extraction.warnings.length})</summary>
+      {layout.extraction.warnings.map((warning,i)=><p key={i}>{warning}</p>)}
+    </details>}
     {plan.native.issues?.length?<div className="geometry-status" role="status">{plan.native.issues.map((issue,i)=><p key={i}>{issue}</p>)}</div>:
       <p className="helper geometry-valid" role="status">Geometry checks passed.</p>}
   </fieldset>;

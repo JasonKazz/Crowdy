@@ -78,6 +78,7 @@ HTML = r'''<!doctype html>
 const data = JSON.parse(document.getElementById('simulation-data').textContent);
 const scenario = data.scenario;
 const blockedExits = new Set(scenario.settings.blocked_exit_ids || []);
+const trappedPeople = new Set((data.trapped || []).map(person => person.agent_id));
 const frames = data.frames;
 const duration = frames[frames.length - 1].time;
 const exitedAt = new Map(data.evacuations.map(e => [e.agent_id, e.time]));
@@ -94,7 +95,7 @@ let lastStamp = null;
 
 document.getElementById('title').textContent = scenario.name;
 document.getElementById('outcome').textContent = data.status === 'completed'
-  ? 'Run completed' : 'Time limit reached · evacuation incomplete';
+  ? 'Run completed' : data.status === 'trapped' ? 'No available route · trapped people remain' : 'Time limit reached · evacuation incomplete';
 
 function lowerFrame(t) {
   let low = 0, high = frames.length - 1;
@@ -182,7 +183,7 @@ function render() {
     const [x, y] = screen(agent.x, agent.y);
     const radius = scenario.agent_defaults.radius * scale;
     ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.fillStyle = '#335cce'; ctx.fill();
+    ctx.fillStyle = trappedPeople.has(agent.id) ? '#b64235' : '#335cce'; ctx.fill();
     ctx.strokeStyle = '#193e9a'; ctx.lineWidth = 1; ctx.stroke();
     ctx.font = '11px system-ui'; ctx.textAlign = 'center';
     ctx.fillStyle = '#334155'; ctx.fillText(agent.id, x, y - radius - 6);

@@ -1,8 +1,10 @@
 import json
+import math
 import unittest
 from pathlib import Path
 
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, Point, Polygon, box
+from shapely.ops import unary_union
 
 from app.schemas.layout import ExitDoor, load_layout
 from app.schemas.scenario import Occupant, Region
@@ -10,7 +12,7 @@ from app.services.floorplans.layout import compile_layout
 from app.simulation.editor import validate_layout
 from app.simulation.engine import run_simulation
 from app.simulation.geometry import build_geometry
-from app.simulation.routing import RoutePlanner, plan_routes
+from app.simulation.routing import RoutePlanner, plan_routes, MeshGraph
 from test_exterior_exits import room
 
 
@@ -27,6 +29,16 @@ def regression_layout():
 
 
 class RoutingTests(unittest.TestCase):
+    def test_dense_tables_use_navmesh_and_keep_body_clearance(self):
+        floor=box(0,0,40,30).difference(unary_union([
+            Point(x,y).buffer(.6,quad_segs=3) for x in range(4,37,3) for y in range(4,27,3)]))
+        planner=RoutePlanner(floor,.23)
+        self.assertTrue(all(isinstance(graph,MeshGraph) for graph in planner.graphs))
+        planned=planner.route((1,1),box(38,27,39,29))
+        self.assertIsNotNone(planned)
+        self.assertTrue(planner.visible_body_space.covers(LineString(planned[1])))
+
+
     def test_exact_failed_layout_evacuates_all_40_original_people(self):
         layout = regression_layout()
         scenario = compile_layout(layout)
@@ -64,10 +76,10 @@ class RoutingTests(unittest.TestCase):
         # Point geometry is connected; the only paths to the door are 10 cm
         # around the ends or a 25 cm gap behind this table. A 40 cm body cannot fit.
         self.assertTrue(build_geometry(compile_layout(layout)).is_valid)
-        with self.assertRaisesRegex(ValueError, 'No body-clear route'):
-            validate_layout(layout)
-        with self.assertRaisesRegex(ValueError, 'No body-clear route'):
-            run_simulation(compile_layout(layout))
+        self.assertEqual(validate_layout(layout)['routes'][0]['status'], 'trapped')
+        result = run_simulation(compile_layout(layout))
+        self.assertEqual(result['summary']['trapped_count'], 1)
+        self.assertEqual(result['status'], 'trapped')
 
     def test_displaced_agent_can_return_to_an_earlier_safe_corner(self):
         scenario = compile_layout(regression_layout())
@@ -119,6 +131,16 @@ class RoutingTests(unittest.TestCase):
         boundary = next(b for b in scenario.exit_boundaries if b.id == 'exit_east')
         self.assertTrue(all(.2 <= sum((p[i] - boundary.start[i]) * boundary.outward[i] for i in range(2)) <= .4
                             for p in targets))
+
+    def test_fitted_target_vertex_order_does_not_change_door_lanes(self):
+        scenario=compile_layout(regression_layout())
+        expected=plan_routes(scenario)
+        for region in scenario.exits:
+            region.polygon=list(reversed(region.polygon))
+        actual=plan_routes(scenario)
+        self.assertEqual([r['exit_id'] for r in actual],[r['exit_id'] for r in expected])
+        for a,b in zip(actual,expected):
+            self.assertLess(math.dist(a['path'][-1],b['path'][-1]),1e-8)
 
     def test_invalid_open_width_is_reported(self):
         layout = room()

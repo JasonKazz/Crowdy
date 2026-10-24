@@ -29,6 +29,8 @@ class SimulationSettings(InputModel):
     sample_interval: float = Field(gt=0)
     max_time: float = Field(gt=0)
     blocked_exit_ids: list[str] = Field(default_factory=list)
+    behavior_mode: Literal["idealized", "behavioral"] = "idealized"
+    behavior_seed: int = Field(default=42, ge=0, le=2**32 - 1)
 
 
 class Population(InputModel):
@@ -86,6 +88,4 @@ class Scenario(InputModel):
         unknown = sorted(set(blocked) - {region.id for region in self.exits})
         if unknown:
             raise ValueError(f"Unknown blocked exit IDs: {', '.join(unknown)}")
-        if len(blocked) == len(self.exits):
-            raise ValueError("At least one exit must remain available")
         return self

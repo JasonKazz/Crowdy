@@ -5,6 +5,7 @@ from shapely.geometry import Point
 
 from app.schemas.scenario import Scenario
 from app.services.population.generate import resolve_population
+from app.simulation.behavior import agent_behaviors
 from app.simulation.geometry import build_geometry, region_to_polygon
 from app.simulation.routing import RoutePlanner, plan_routes
 
@@ -40,7 +41,10 @@ def run_simulation(scenario: Scenario) -> dict:
     )
 
     planner = RoutePlanner(geometry, scenario.agent_defaults.radius)
-    assignments = plan_routes(scenario, planner=planner)
+    assignments = plan_routes(scenario, planner=planner, allow_trapped=True)
+    trapped = {assignment["agent_id"] for assignment in assignments if assignment["exit_id"] is None}
+    behaviors = agent_behaviors(scenario)
+    behavior_by_id = {person["agent_id"]: person for person in behaviors}
     steering_stage = simulation.add_direct_steering_stage()
     steering_journey = simulation.add_journey(jps.JourneyDescription([steering_stage]))
     exit_shapes = {}
@@ -59,14 +63,18 @@ def run_simulation(scenario: Scenario) -> dict:
     agent_exits = {}
     agent_paths = {}
     cursors = {}
+    waiting = set()
     for occupant, assignment in zip(scenario.occupants, assignments):
         exit_id = assignment["exit_id"]
+        behavior = behavior_by_id[occupant.id]
+        speed = behavior["desired_speed"]
+        if occupant.id in trapped or behavior["response_delay"] > 0:
+            speed = 0
         engine_id = simulation.add_agent(
             jps.CollisionFreeSpeedModelAgentParameters(
                 position=occupant.position,
                 radius=scenario.agent_defaults.radius,
-                desired_speed=(occupant.desired_speed if occupant.desired_speed is not None
-                               else scenario.agent_defaults.desired_speed),
+                desired_speed=speed,
                 journey_id=steering_journey,
                 stage_id=steering_stage,
             )
@@ -75,6 +83,10 @@ def run_simulation(scenario: Scenario) -> dict:
         agent_exits[engine_id] = exit_id
         agent_paths[engine_id] = assignment["path"]
         cursors[engine_id] = 1
+        if occupant.id in trapped or behavior["response_delay"] > 0:
+            simulation.agent(engine_id).target = occupant.position
+        if occupant.id not in trapped and behavior["response_delay"] > 0:
+            waiting.add(engine_id)
 
     def capture_frame():
         return {
@@ -96,15 +108,34 @@ def run_simulation(scenario: Scenario) -> dict:
     boundaries = {boundary.id: boundary for boundary in scenario.exit_boundaries}
     steering_interval = max(1, round(.1 / settings.dt))
 
-    for step in range(1, max_steps + 1):
+    steps_to_run = 0 if len(trapped) == len(ids) else max_steps
+    for step in range(1, steps_to_run + 1):
+        any_released = False
         for agent in simulation.agents():
-            if step == 1 or step % steering_interval == 0:
+            if agent_ids[agent.id] in trapped:
+                continue
+            released = False
+            if agent.id in waiting:
+                behavior = behavior_by_id[agent_ids[agent.id]]
+                if simulation.elapsed_time() + 1e-9 < behavior["response_delay"]:
+                    continue
+                agent.model.desired_speed = behavior["desired_speed"]
+                waiting.remove(agent.id)
+                released = True
+                any_released = True
+            if released or step == 1 or step % steering_interval == 0:
                 target, agent_paths[agent.id], cursors[agent.id] = planner.update_route(
                     agent.position, agent_paths[agent.id], cursors[agent.id], exit_shapes[agent_exits[agent.id]])
                 agent.target = target
+        # Preserve the stationary endpoint exactly. Otherwise interpolating a
+        # regular 0.2 s sample interval can make a person walk before responding.
+        if any_released and frames[-1]["time"] < round(simulation.elapsed_time(), 8):
+            frames.append(capture_frame())
         simulation.iterate()
 
         for agent in list(simulation.agents()):
+            if agent_ids[agent.id] in trapped or agent.id in waiting:
+                continue
             boundary = boundaries.get(agent_exits[agent.id])
             position = agent.position
             if boundary is not None and agent.id not in crossed:
@@ -118,7 +149,7 @@ def run_simulation(scenario: Scenario) -> dict:
                                     "time": round(simulation.elapsed_time(), 8)})
                 simulation.mark_agent_for_removal(agent.id)
 
-        finished = simulation.agent_count() == 0
+        finished = simulation.agent_count() == len(trapped)
         if step % sample_steps == 0 or finished or step == max_steps:
             frames.append(capture_frame())
 
@@ -126,19 +157,26 @@ def run_simulation(scenario: Scenario) -> dict:
             break
 
     completed = simulation.agent_count() == 0
+    moving_remaining = simulation.agent_count() - len(trapped)
     return {
-        "status": "completed" if completed else "timed_out",
+        "status": "completed" if completed else "trapped" if moving_remaining == 0 else "timed_out",
         "scenario": scenario.model_dump(mode="json"),
         "population_generation": (
             population_config.model_dump(mode="json") if population_config else None
         ),
         "assignments": assignments,
+        "behavior": {"version": 1, "mode": settings.behavior_mode, "seed": settings.behavior_seed,
+                     "agents": behaviors},
+        "trapped": [{"agent_id": identifier, "reason": "No body-clear route to an available exit"}
+                    for identifier in sorted(trapped)],
         "frames": frames,
         "evacuations": evacuations,
         "door_crossings": door_crossings,
         "summary": {
             "evacuated_count": len(evacuations),
             "remaining_count": simulation.agent_count(),
+            "trapped_count": len(trapped),
+            "moving_remaining_count": moving_remaining,
             "simulation_time": round(simulation.elapsed_time(), 8),
             "clearance_time": (
                 round(simulation.elapsed_time(), 8) if completed else None

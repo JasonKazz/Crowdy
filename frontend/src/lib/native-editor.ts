@@ -6,11 +6,13 @@ export type NativeDoor = {id: string; wall_id: string; offset: number; width: nu
 export type NativeExit = {id: string; floor_id: string; edge_index: number; offset: number; width: number;
   landing_depth: number; outside_space: "open" | "corridor"; outside_width?: number | null};
 export type NativeLayout = {
+  extraction?: {warnings: string[]} | null;
   walls: NativeWall[]; doors: NativeDoor[]; exits: (NativeExit | {id: string; polygon: XY[]})[];
   walkable_areas: {id: string; polygon: XY[]}[]; furniture: {id: string; polygon: XY[]}[];
   agent_defaults: {radius: number; desired_speed: number};
   source_image?: {id: string; width_px: number; height_px: number; meters_per_pixel: number;
-    calibration?: {method: "automatic" | "manual"; label: string} | null} | null;
+    calibration?: {method: "automatic" | "manual" | "estimated"; label: string;
+      meters_per_pixel_range?: [number, number] | null} | null} | null;
 };
 export type GeometrySelection = {kind: "wall" | "door" | "exit"; id: string} | null;
 export type GeometryTool = "select" | "wall" | "door" | "exit";

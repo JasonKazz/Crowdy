@@ -26,7 +26,8 @@ def compile_layout(layout: Layout) -> Scenario:
     # Revalidate interactive callers and leave their editable document untouched.
     layout = Layout.model_validate(layout.model_dump())
     if layout.source_image:
-        if not layout.source_image.scale_confirmed:
+        estimated = layout.source_image.calibration and layout.source_image.calibration.method == "estimated"
+        if not layout.source_image.scale_confirmed and not estimated:
             raise ValueError("Set the image scale using two points and a known distance before simulation.")
         if layout.extraction is None:
             raise ValueError("Extract a layout from the uploaded image before simulation.")
@@ -34,7 +35,7 @@ def compile_layout(layout: Layout) -> Scenario:
         raise ValueError("Add at least one exterior exit door before simulation.")
     floor = unary_union([region_to_polygon(r) for r in layout.walkable_areas])
     floors = {region.id: region for region in layout.walkable_areas}
-    walkable_areas, exits, exit_openings = list(layout.walkable_areas), [], []
+    walkable_areas, exits, exit_openings, thresholds = list(layout.walkable_areas), [], [], []
     exit_boundaries = list(layout.exit_boundaries)
     for door in layout.exits:
         if not isinstance(door, ExitDoor):
@@ -46,19 +47,23 @@ def compile_layout(layout: Layout) -> Scenario:
             raise ValueError(f"Exit '{door.id}' is too narrow for the configured people")
         if door.landing_depth <= 2 * layout.agent_defaults.radius + .22:
             raise ValueError(f"Exit '{door.id}' needs a deeper outside landing")
-        apron, target, threshold = exit_geometry(door, floors[door.floor_id], layout.agent_defaults.radius)
         # Check the entire edge: a seam between overlapping floor regions is
-        # not an exterior wall. Also reject aprons that enter another wing.
+        # not an exterior wall. Fitted outside space must respect ALL wings.
         points = floors[door.floor_id].polygon
+        if door.edge_index >= len(points):
+            raise ValueError(f"Exit '{door.id}' references a missing floor edge")
         edge = LineString([points[door.edge_index], points[(door.edge_index + 1) % len(points)]])
         if not floor.boundary.buffer(1e-8).covers(edge):
             raise ValueError(f"Exit '{door.id}' must attach to an exterior floor edge")
+        apron, target, threshold = exit_geometry(door, floors[door.floor_id], layout.agent_defaults.radius, building=floor)
         shape = region_to_polygon(apron)
-        expected_overlap = door.width * 0.05
-        if abs(shape.intersection(floor).area - expected_overlap) > 1e-7:
-            raise ValueError(f"Exit '{door.id}' landing must lead outside without crossing another part of the building")
-        if any(shape.intersection(previous).area > 1e-9 for _, previous in exit_openings):
-            raise ValueError("Exterior exit landings must not overlap")
+        allowed_seam = region_to_polygon(threshold).intersection(floor)
+        if shape.intersection(floor).difference(allowed_seam).area > 1e-7:
+            raise ValueError(f"Exit '{door.id}' outside landing crosses the building beyond its doorway")
+        opening = region_to_polygon(threshold)
+        if any(opening.intersection(previous).area > 1e-9 for previous in thresholds):
+            raise ValueError("Exterior exit openings must not overlap; remove duplicate doors or split the entrance bank")
+        thresholds.append(opening)
         if apron.id in floors:
             raise ValueError(f"Reserved floor ID '{apron.id}' conflicts with an exterior exit")
         walkable_areas.append(apron)

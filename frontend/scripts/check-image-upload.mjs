@@ -6,18 +6,19 @@ import {
   imageBase64Length,
   uploadImageDimensions,
 } from "../src/lib/image-upload.ts";
-import { forwardBackend } from "../src/lib/backend-proxy.ts";
+import { forwardBackend, forwardBackendImage } from "../src/lib/backend-proxy.ts";
 
-assert.deepEqual(uploadImageDimensions(4200, 2800), {width:1092,height:728});
-assert.deepEqual(uploadImageDimensions(2800, 4200), {width:728,height:1092});
+assert.deepEqual(uploadImageDimensions(4200, 2800), {width:3072,height:2048});
+assert.deepEqual(uploadImageDimensions(2800, 4200), {width:2048,height:3072});
+assert.deepEqual(uploadImageDimensions(2400, 1600), {width:2400,height:1600}, "Detailed plans must retain enough resolution to activate staged extraction");
 assert.deepEqual(uploadImageDimensions(600, 400), {width:600,height:400}, "Small images must not be enlarged");
-assert.deepEqual(uploadImageDimensions(1, 20000), {width:1,height:1092}, "Thin crops must keep a nonzero dimension");
+assert.deepEqual(uploadImageDimensions(1, 20000), {width:1,height:3072}, "Thin crops must keep a nonzero dimension");
 assert.throws(() => uploadImageDimensions(0, 100), /dimensions/);
 assert.throws(() => uploadImageDimensions(6000, 6000), /30 million pixels/);
 for (const bytes of [0, 1, 2, 3, MAX_UPLOAD_IMAGE_BYTES - 1, MAX_UPLOAD_IMAGE_BYTES, MAX_UPLOAD_IMAGE_BYTES + 1]) {
   assert.equal(imageBase64Length(bytes), Buffer.alloc(bytes).toString("base64").length, "Base64 padding counts toward the request limit");
 }
-const largestPayload = JSON.stringify({filename:"é".repeat(200)+".png",provider:"gemini",
+const largestPayload = JSON.stringify({filename:"é".repeat(200)+".png",provider:"gemini",async_import:true,
   image_base64:"A".repeat(imageBase64Length(MAX_UPLOAD_IMAGE_BYTES))});
 assert.ok(Buffer.byteLength(largestPayload) < 4_500_000, "The full upload envelope must fit below the hosting request limit");
 
@@ -57,9 +58,39 @@ try {
   globalThis.fetch = async () => new Response("Bad Gateway", {status:502});
   const unavailable = await forwardBackend(new Request("http://app.test/api/floorplans"), "/api/floorplans", {});
   assert.equal(unavailable.status,502, "Non-JSON upstream failures must retain their HTTP failure classification");
+
+  const imageId = "a".repeat(32);
+  const imageRequest = () => new Request(`http://app.test/api/floorplans?image_id=${imageId}`);
+  for (const type of ["image/png", "image/jpeg"]) {
+    const bytes = new Uint8Array([1, 2, 3]);
+    globalThis.fetch = async () => new Response(bytes, {headers:{"Content-Type":`${type}; charset=binary`}});
+    const image = await forwardBackendImage(imageRequest(), imageId);
+    assert.equal(image.status,200);
+    assert.equal(image.headers.get("content-type"),type, "Preview encoding must pass through with its own MIME type");
+    assert.equal(image.headers.get("x-content-type-options"),"nosniff");
+    assert.match(image.headers.get("cache-control"),/private.*no-store/);
+    assert.deepEqual(new Uint8Array(await image.arrayBuffer()), bytes);
+  }
+  for (const type of ["text/html", "image/svg+xml", "image/png-untrusted"]) {
+    globalThis.fetch = async () => new Response("unsupported", {headers:{"Content-Type":type}});
+    assert.equal((await forwardBackendImage(imageRequest(), imageId)).status,502);
+  }
+  const previewLimit = 4 * 1024 * 1024;
+  globalThis.fetch = async () => new Response(new Uint8Array(previewLimit), {headers:{"Content-Type":"image/jpeg"}});
+  const largestPreview = await forwardBackendImage(imageRequest(), imageId);
+  assert.equal(largestPreview.status,200);
+  assert.equal((await largestPreview.arrayBuffer()).byteLength,previewLimit);
+  globalThis.fetch = async () => new Response(new Uint8Array(previewLimit + 1), {headers:{"Content-Type":"image/jpeg"}});
+  assert.equal((await forwardBackendImage(imageRequest(), imageId)).status,502,
+    "An oversized preview must be rejected even without a Content-Length header");
+  globalThis.fetch = async () => new Response("short body", {headers:{"Content-Type":"image/png","Content-Length":String(previewLimit + 1)}});
+  assert.equal((await forwardBackendImage(imageRequest(), imageId)).status,502,
+    "A declared oversized response must be rejected before buffering");
+  globalThis.fetch = async () => new Response("Not found", {status:404});
+  assert.equal((await forwardBackendImage(imageRequest(), imageId)).status,404);
 } finally {
   globalThis.fetch = originalFetch;
   if (originalUrl === undefined) delete process.env.CROWDY_BACKEND_URL;
   else process.env.CROWDY_BACKEND_URL = originalUrl;
 }
-console.log("Image upload checks passed: size/pixel limits, base64 padding and complete request budget, lossless PNG/JPEG fallback, oversized-image rejection, and non-JSON upstream errors.");
+console.log("Image upload checks passed: request budgets, lossless PNG/JPEG fallback, oversized-image rejection, non-JSON errors, PNG/JPEG preview MIME types and response limits.");

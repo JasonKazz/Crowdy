@@ -118,12 +118,12 @@ async def _request_attempts(client, url, headers, content):
         raise ProviderError(message) from None
 
 
-def output_schema() -> dict:
+def output_schema(model_type=ExtractedDrawing) -> dict:
     """Inline references and keep the JSON-schema subset accepted by both APIs.
 
     Full size/range checks still run against ExtractedDrawing after parsing.
     """
-    schema = ExtractedDrawing.model_json_schema()
+    schema = model_type.model_json_schema()
     definitions = schema.pop("$defs", {})
 
     def simplify(value):
@@ -141,7 +141,15 @@ def output_schema() -> dict:
             result["required"] = list(result.get("properties", {}))
         return result
 
-    return simplify(schema)
+    result = simplify(schema)
+    # A further nested object array exceeds Claude's geometry grammar limit.
+    # Keep classifications flat on the wire, then restore and validate typed
+    # objects locally. Both providers use exactly the same representation.
+    if "scale_objects" not in result.get("properties", {}):
+        return result
+    result["properties"]["scale_objects"] = {"type": "array", "items": {"type": "string"},
+        "description": "Suitable existing objects as kind:object_id strings; kind must be single_door, office_chair, or office_desk. Include several complete workstation desks AND clear single-leaf doors when visible, at least three objects across two types. Exclude partial desktops, reception tables, and leafless openings of unknown leaf count from scale evidence. Examples: single_door:door_1, office_desk:desk_3. Empty when unclear. Do not supply sizes."}
+    return result
 
 
 def extraction_prompt(provider: str, width: int, height: int) -> str:
@@ -156,6 +164,11 @@ def extraction_prompt(provider: str, width: int, height: int) -> str:
 
 
 def extract_drawing(provider: str, image: bytes, width: int, height: int) -> tuple[ExtractedDrawing, str]:
+    return extract_structured(provider, image, extraction_prompt(provider, width, height), ExtractedDrawing)
+
+
+def extract_structured(provider: str, image: bytes, prompt: str, model_type):
+    """One bounded vision call. Stages use smaller task-specific schemas."""
     if provider not in KEY_NAMES:
         raise ProviderError("Choose Gemini or Claude.")
     key = api_key(provider)
@@ -163,8 +176,7 @@ def extract_drawing(provider: str, image: bytes, width: int, height: int) -> tup
         raise ProviderError(f"Add {KEY_NAMES[provider]} to the root .env and restart the editor.")
     model = provider_status()[provider]["model"]
     encoded = base64.b64encode(image).decode("ascii")
-    prompt = extraction_prompt(provider, width, height)
-    schema = output_schema()
+    schema = output_schema(model_type)
     if provider == "gemini":
         response = request_json(
             f"https://generativelanguage.googleapis.com/v1beta/models/{quote(model, safe='')}:generateContent",
@@ -195,6 +207,11 @@ def extract_drawing(provider: str, image: bytes, width: int, height: int) -> tup
             raise ProviderError("Claude did not finish a usable extraction. Try a clearer or simpler plan.")
         text = "".join(part.get("text", "") for part in response.get("content", []) if part.get("type") == "text")
     try:
-        return ExtractedDrawing.model_validate_json(text), model
+        data = json.loads(text)
+        if isinstance(data, dict) and isinstance(data.get("scale_objects"), list):
+            data["scale_objects"] = [
+                {"kind": item.partition(":")[0], "object_id": item.partition(":")[2]}
+                if isinstance(item, str) else item for item in data["scale_objects"]]
+        return model_type.model_validate(data), model
     except ValueError:
         raise ProviderError("The extracted drawing did not match the required layout format. Retry or simplify the image.") from None
