@@ -11,7 +11,8 @@
     "test:backend-simulation": "node --experimental-strip-types scripts/check-backend-simulation.mjs",
     "test:backend-api": "node --experimental-strip-types scripts/check-backend-api.mjs",
     "test:auth": "node scripts/check-auth.mjs",
-    "test:workspaces": "node --experimental-strip-types scripts/check-workspaces.mjs"
+    "test:workspaces": "node --experimental-strip-types scripts/check-workspaces.mjs",
+    "test:native-editor": "node --experimental-strip-types scripts/check-native-editor.mjs"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.33.0",

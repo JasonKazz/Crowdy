@@ -47,3 +47,16 @@ and furniture does not accidentally fill a visibly open doorway. Correct inconsi
 only when supported by the image. Record ambiguous, hidden, or unreadable features in
 warnings, identifying the affected object or region. Never claim a guessed feature is
 certain. Return only the requested JSON object, with empty lists where appropriate.
+
+SCALE EVIDENCE
+Return scale_references for clearly readable dimension lines or graphical scale bars.
+Each reference needs its exact visible label, numeric distance, explicit units, and the
+two endpoints of the MEASURED SPAN in the same coordinate frame as the drawing. For a
+dimension, use the extension-line endpoints at the measured features, not the text box.
+For a scale bar, use the endpoints of a labeled interval. Include several independent
+long measurements when visible, including horizontal and vertical spans. Convert mixed
+feet/inches labels to decimal feet (e.g. 10 feet 6 inches = 10.5 ft).
+Do not infer absolute scale from doors, furniture, room names, or a ratio such as 1:100
+alone: image resizing loses the paper size. If units, endpoints, or numbers are ambiguous,
+omit that reference and explain in warnings. Return an empty list when no usable scale
+evidence exists. The backend computes meters per pixel; do not rescale your coordinates.

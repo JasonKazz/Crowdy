@@ -44,6 +44,7 @@ def drawing_fixture():
         "doors": [{"id": "door", "wall_id": "partition", "start": point(500, 200), "end": point(500, 260)}],
         "exits": [region("exit-west", 50, 70, 80, 130), region("exit-east", 920, 370, 950, 430)],
         "warnings": [],
+        "scale_references": [],
     }
 
 

@@ -1,8 +1,10 @@
-import {failure, forwardBackend, readBackendBody} from "@/lib/backend-proxy";
+import {failure, forwardBackend, forwardBackendImage, readBackendBody} from "@/lib/backend-proxy";
 
 export const maxDuration = 200;
 
 export async function GET(request: Request) {
+  const imageId = new URL(request.url).searchParams.get("image_id");
+  if (imageId !== null) return forwardBackendImage(request, imageId);
   return forwardBackend(request, "/api/floorplans");
 }
 

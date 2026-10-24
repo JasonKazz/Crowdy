@@ -21,6 +21,18 @@ Run `python -m app.simulation.editor` and open its printed `http://127.0.0.1:...
 
 ## Use it
 
+### Main website
+
+Choose **Upload floor plan**, pick a provider, and upload the image. There is no up-front scale field. The model returns explicit dimension/scale-bar observations (endpoints, value, units, visible label); Python validates bounds, converts units, checks agreement, and uses the longest agreeing reference. No reference, short/unreadable evidence, or conflicting dimensions opens a source-image measurement tool. Mark two endpoints and enter the distance in metres, centimetres, millimetres, feet, or inches. The saved extraction is reused, without another model request.
+
+The plan shows the calibration evidence beside its scale. **Edit scale** can correct a detected value without discarding furniture or structural edits. Agent size and walking speed remain physical simulation settings when the drawing scale changes.
+
+For imported layouts, **Walls & doors** provides Select, Draw wall, Add door, and Add exit tools. Draw a wall with two clicks (Shift constrains it to an axis); nearby existing endpoints snap together. Drag a wall, its endpoint handles, an interior door along its parent, or an exterior exit onto a boundary edge. Selection exposes metric coordinates, thickness, door width/offset/parent, and exit width/offset. Removing a wall also removes its attached doors. Undo restores the previous layout.
+
+The **Source image overlay** is the original processed image at the exact image-to-world-to-canvas transform. It never moves with edited furniture or doors. Reduce opacity or switch it off to inspect clean geometry. **Check layout** reports issues without destroying the draft; invalid layouts cannot simulate. The standalone editor still supports individual polygon vertex editing.
+
+### Standalone backend editor
+
 1. Upload an image up to 10 MiB. PDF input is not supported yet; export one page as PNG or JPEG first. Images above 30 million pixels are rejected.
 2. Enter a known real-world length, select **Mark two points to set scale**, and click its endpoints. Use a printed dimension or a distance you know; the model does not invent a building scale.
 3. Choose Gemini or Claude and **Extract layout**. **Compare both models** extracts sequentially with both providers against exactly the same processed image. Transient HTTP failures (408, 429, 500, 502, 503, 504, 529) get up to two retries with exponential backoff and jitter, within a shared 175-second request budget. Numeric `Retry-After` headers are honored when they fit in the budget. Invalid-key, access, and malformed-request errors are not retried. Network timeouts are not retried because the POST might already have been processed. There is no hidden fallback to the other provider. For a first test, `examples/sample_floorplan.png` has an 18-meter dimension marked along its top edge.
@@ -67,6 +79,18 @@ All artifacts live in the ignored `backend/data/editor/` directory:
 Images persist across server restarts in the same data directory. Exported layout JSON references that local image ID; moving JSON to another machine requires transferring its corresponding image storage too. No base64 image or API key is embedded in the editable JSON.
 
 ## Endpoints
+
+The main Next.js workspace uses `POST /api/floorplans` on the Python service:
+
+- New image: `{filename, image_base64, provider}`. A usable calibration returns `{plan, warnings}`. Otherwise the response has `needs_scale`, `extraction_id`, `image_id`, `width_px`, `height_px`, and `reason`.
+- Complete a pending extraction: `{extraction_id, manual_scale: {kind: "dimension", label, start: {x,y}, end: {x,y}, distance, unit}}`. Manual endpoints are pixels in the processed source image for both providers.
+- Check the current editable plan: `{editor_plan}`. It reconstructs edited furniture polygons and retains canonical wall/door changes; issues are in `plan.native.issues`.
+- Recalibrate without losing edits: `{editor_plan, manual_scale}`.
+- `GET /api/floorplans/images/<image_id>` serves the stored PNG with the same backend token protection. Next.js proxies it through `/api/floorplans?image_id=<image_id>`; credentials remain server-side.
+
+Explicit `image_width_m` remains accepted for existing clients. It is no longer supplied by the website. Automatic detection never uses a default 20 m width.
+
+The standalone editor endpoints remain:
 
 | Method | Path | Purpose |
 | --- | --- | --- |

@@ -5,9 +5,10 @@ import math
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
-from app.schemas.layout import Layout, load_layout
+from app.schemas.layout import ExitDoor, Layout, load_layout
 from app.schemas.scenario import Population, Region
-from app.services.floorplans.layout import compile_layout
+from app.services.floorplans.layout import compile_layout, wall_polygon
+from app.services.floorplans.exits import exit_geometry
 
 
 def projection(layout):
@@ -31,13 +32,41 @@ def world_point(x, y, transform):
             (transform["offset_y"] - y) / transform["pixels_per_metre"])
 
 
-def native_to_editor(data):
+def native_to_editor(data, strict=True):
     layout = load_layout(data)
     if layout.population is None:
         layout.population = Population(count=len(layout.occupants), seed=42,
                                        spawn_area_ids=[area.id for area in layout.walkable_areas])
         layout.occupants = []
-    compiled = compile_layout(layout)
+    issues = []
+    try:
+        compiled = compile_layout(layout)
+        obstacles, exit_regions = compiled.obstacles, compiled.exits
+    except ValueError as exc:
+        if strict:
+            raise
+        issues.append(str(exc))
+        # Rendering a draft does not authorize a run. Keep every original wall
+        # and door in layout; simulation still uses the strict compiler.
+        obstacles, exit_regions = list(layout.furniture), []
+        for wall in layout.walls:
+            length = math.dist(wall.start, wall.end)
+            intervals = sorted((max(0, min(length, d.offset - d.width / 2)), max(0, min(length, d.offset + d.width / 2)))
+                               for d in layout.doors if d.wall_id == wall.id)
+            cursor = 0
+            for start, end in [*intervals, (length, length)]:
+                if start > cursor:
+                    obstacles.append(Region(id=f"wall:{wall.id}:{cursor}", polygon=wall_polygon(wall, cursor, start)))
+                cursor = max(cursor, end)
+        floors = {floor.id: floor for floor in layout.walkable_areas}
+        for door in layout.exits:
+            if isinstance(door, ExitDoor):
+                try:
+                    exit_regions.append(exit_geometry(door, floors[door.floor_id], layout.agent_defaults.radius)[1])
+                except (KeyError, ValueError, IndexError):
+                    pass
+            else:
+                exit_regions.append(door)
     transform = projection(layout)
     pixels = lambda points: [pixel_point(point, transform) for point in points]
     items = []
@@ -54,18 +83,32 @@ def native_to_editor(data):
     furniture_ids = {region.id for region in layout.furniture}
     exits = []
     zones = []
-    for region in compiled.exits:
+    for region in exit_regions:
         centre = Polygon(region.polygon).centroid
         exits.append({"id": region.id, "label": region.id[:80], **pixel_point((centre.x, centre.y), transform)})
         zones.append({"id": region.id, "polygon": pixels(region.polygon)})
+    # Invalid exterior doors must remain selectable in the editor even if a
+    # valid outside removal strip cannot yet be generated.
+    for door in layout.exits:
+        if not any(item["id"] == door.id for item in exits) and isinstance(door, ExitDoor):
+            floor = next((f for f in layout.walkable_areas if f.id == door.floor_id), None)
+            point = floor.polygon[door.edge_index % len(floor.polygon)] if floor else (0, 0)
+            exits.append({"id": door.id, "label": door.id[:80], **pixel_point(point, transform)})
+    source = layout.source_image
+    image = None
+    if source:
+        top_left = pixel_point((0, source.height_px * source.meters_per_pixel), transform)
+        image = {"id": source.id, **top_left,
+                 "width": source.width_px * source.meters_per_pixel * transform["pixels_per_metre"],
+                 "height": source.height_px * source.meters_per_pixel * transform["pixels_per_metre"]}
     return {"id": "layout-" + hashlib.sha256(layout.name.encode()).hexdigest()[:16],
             "name": layout.name[:80], "width": 900, "height": 600,
             "area": unary_union([Polygon(r.polygon) for r in layout.walkable_areas]).area,
             "items": items, "walls": [], "exits": exits,
             "native": {"layout": layout.model_dump(mode="json"), "transform": transform,
                        "floors": [pixels(r.polygon) for r in layout.walkable_areas],
-                       "walls": [pixels(r.polygon) for r in compiled.obstacles if r.id not in furniture_ids],
-                       "exit_zones": zones}}
+                       "walls": [pixels(r.polygon) for r in obstacles if r.id not in furniture_ids],
+                       "exit_zones": zones, "issues": issues, "image": image}}
 
 
 def editor_native_layout(plan):

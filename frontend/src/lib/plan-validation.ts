@@ -24,7 +24,7 @@ export function validatePlan(value: unknown): FloorPlan {
     !Array.isArray(plan.walls) ||
     plan.walls.length > 100 ||
     !Array.isArray(plan.exits) ||
-    plan.exits.length < 1 ||
+    (!plan.native && plan.exits.length < 1) ||
     plan.exits.length > 12
   )
     throw new Error(

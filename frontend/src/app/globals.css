@@ -2715,3 +2715,35 @@ input::-webkit-inner-spin-button {
     max-width: 100%;
   }
 }
+
+/* Native layout correction and evidence-based image calibration. */
+.geometry-panel { border: 0; border-top: 1px solid var(--line, #dce2d6); padding: 14px 0; margin: 12px 0; min-width: 0; }
+.geometry-panel legend { font-size: 12px; font-weight: 600; padding: 0; }
+.geometry-picker { display: grid; gap: 5px; margin: 8px 0; font-size: 11px; }
+.geometry-picker select { padding: 6px; min-width: 0; width: 100%; border: 1px solid #cdd5c7; border-radius: 5px; background: white; }
+.geometry-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 10px 0; }
+.geometry-tools .button { padding: 7px 8px; min-height: 32px; font-size: 11px; }
+.geometry-tools .active { background: #e0eadd; border-color: #73936b; }
+.geometry-properties { display: grid; gap: 8px; margin: 12px 0; }
+.geometry-properties strong { font-size: 12px; }
+.geometry-properties label { display: grid; grid-template-columns: 1fr 78px; gap: 8px; align-items: center; font-size: 11px; }
+.geometry-properties input, .geometry-properties select { width: 100%; min-width: 0; padding: 6px; border: 1px solid #cdd5c7; border-radius: 5px; background: white; }
+.geometry-status { font-size: 11px; color: #885b31; padding: 8px 10px; background: #faf3e6; border-radius: 6px; margin-top: 10px; overflow-wrap: anywhere; }
+.geometry-status p { margin: 0; }
+.geometry-valid { color: #466b40; }
+.source-image-controls { border-top: 1px solid #dce2d6; margin-top: 12px; padding-top: 12px; }
+.source-image-controls label { display: flex; gap: 6px; align-items: center; font-size: 11px; margin: 7px 0; }
+.source-image-controls input[type=range] { min-width: 0; width: 90px; }
+.scale-evidence { overflow-wrap: anywhere; }
+.scale-calibrator { border: 1px solid #cbd8c3; background: #f5f8f1; border-radius: 8px; padding: 14px; margin: 14px 0; }
+.calibration-image { display: block; width: 100%; max-height: 320px; background: white; cursor: crosshair; touch-action: none; }
+.measurement-points, .measurement-input { display: flex; gap: 12px; margin: 12px 0; }
+.measurement-points fieldset { display: flex; gap: 8px; min-width: 0; flex: 1; border: 0; padding: 0; }
+.measurement-points legend { font-size: 11px; }
+.measurement-points label, .measurement-input label { display: grid; gap: 4px; font-size: 12px; min-width: 0; flex: 1; }
+.measurement-points input, .measurement-input input, .measurement-input select { width: 100%; min-width: 0; border: 1px solid #cbd3c5; border-radius: 4px; padding: 7px; background: white; }
+@media (min-width: 761px) {
+  .setup-panel { max-height: 760px; overflow-y: auto; }
+  .setup-panel > * { flex-shrink: 0; }
+  .spatial-workspace { align-self: start; width: 100%; }
+}

@@ -9,6 +9,9 @@ import { runBackendSimulation } from "@/lib/backend-simulation";
 import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
 import FloorPlanView from "./floor-plan";
 import Icon, { type IconName } from "./icon";
+import ScaleCalibrator, {type PendingCalibration} from "./scale-calibrator";
+import GeometryPanel from "./geometry-panel";
+import {nativeLayout, type GeometrySelection, type GeometryTool} from "@/lib/native-editor";
 import {
   SAMPLE_PLAN,
   runSimulation,
@@ -88,7 +91,12 @@ export default function Workspace({
   const [modal, setModal] = useState<"upload" | "help" | "reset" | null>(null);
   const [error, setError] = useState("");
   const [imageProvider, setImageProvider] = useState("gemini");
-  const [imageWidth, setImageWidth] = useState(20);
+  const [pendingCalibration,setPendingCalibration]=useState<PendingCalibration|null>(null);
+  const [calibratingExisting,setCalibratingExisting]=useState(false);
+  const [geometrySelection,setGeometrySelection]=useState<GeometrySelection>(null);
+  const [geometryTool,setGeometryTool]=useState<GeometryTool>("select");
+  const [showReference,setShowReference]=useState(true);
+  const [referenceOpacity,setReferenceOpacity]=useState(.35);
   const [notice, setNotice] = useState("");
   const [runError, setRunError] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -252,7 +260,13 @@ export default function Workspace({
     baseline && result && clearance(baseline) !== null && clearance(result) !== null
       ? clearance(result)! - clearance(baseline)!
       : 0;
-  const layoutChanges =
+  const structuralChanges = baseline?.plan.native&&result?.plan.native
+    ? (["walls","doors","exits"] as const).reduce((count,kind)=>{
+      const before=nativeLayout(baseline.plan)[kind],after=nativeLayout(result.plan)[kind];
+      return count+new Set([...before,...after].filter(item=>JSON.stringify(before.find(old=>old.id===item.id))!==
+        JSON.stringify(after.find(next=>next.id===item.id))).map(item=>item.id)).size;
+    },0):0;
+  const layoutChanges = structuralChanges + (
     baseline && result
       ? new Set(
           [...baseline.plan.items, ...result.plan.items]
@@ -269,7 +283,7 @@ export default function Workspace({
             )
             .map((item) => item.id),
         ).size
-      : 0;
+      : 0);
   const reducedMotion = () =>
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -319,6 +333,39 @@ export default function Workspace({
     setPlan(previous);
     setHistory(history.slice(0, -1));
     setSelectedId(null);
+    setGeometrySelection(null);
+    setGeometryTool("select");
+  }
+  function acceptImport(data: {plan: unknown;warnings?:string[]}) {
+    const next=validatePlan(data.plan);
+    editPlan(next);setSelectedId(null);setGeometrySelection(null);setGeometryTool("select");
+    setMode("layout");setModal(null);setPendingCalibration(null);setError("");setRunError("");
+    const calibration=next.native?nativeLayout(next).source_image?.calibration:null;
+    setNotice((calibration?.method==="automatic"?`Scale detected from ${calibration.label}. `:"")+
+      "Floor plan imported. Review walls, doors, and exits before running."+(data.warnings?.length?" "+data.warnings.join(" "):""));
+  }
+  async function finishScale(reference: Parameters<React.ComponentProps<typeof ScaleCalibrator>["onApply"]>[0]) {
+    if(!pendingCalibration||busy)return;
+    setBusy(true);setError("");
+    try {
+      const response=await fetch("/api/floorplans",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(calibratingExisting?{editor_plan:plan,manual_scale:reference}:
+          {extraction_id:pendingCalibration.extraction_id,manual_scale:reference})});
+      const data=await response.json();if(!response.ok)throw new Error(data.error||"Could not apply the measurement.");
+      acceptImport(data);
+    } catch(cause){setError(cause instanceof Error?cause.message:"Could not apply the measurement.");}
+    finally{setBusy(false);}
+  }
+  async function checkLayout() {
+    if(busy||!plan.native)return;
+    setBusy(true);setRunError("");
+    try {
+      const response=await fetch("/api/floorplans",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({editor_plan:plan})});
+      const data=await response.json();if(!response.ok)throw new Error(data.error||"Could not check the layout.");
+      const checked=validatePlan(data.plan);editPlan(checked);
+      setNotice(checked.native?.issues?.length?"Review the layout issues below.":"Geometry checks passed. Ready to simulate.");
+    }catch(cause){setRunError(cause instanceof Error?cause.message:"Could not check the layout.");}
+    finally{setBusy(false);}
   }
   async function run() {
     if (runController.current) {
@@ -376,6 +423,8 @@ export default function Workspace({
     }
     setBusy(true);
     setError("");
+    setPendingCalibration(null);
+    setCalibratingExisting(false);
     setNotice(image ? "Extracting the image. This can take a few minutes…" : "Importing floor plan…");
     try {
       let data;
@@ -384,7 +433,7 @@ export default function Workspace({
           const reader = new FileReader(); reader.onload=()=>resolve(String(reader.result).split(",")[1]);
           reader.onerror=()=>reject(new Error("Could not read this image.")); reader.readAsDataURL(file);
         });
-        data = {filename:file.name,image_base64:encoded,provider:imageProvider,image_width_m:imageWidth};
+        data = {filename:file.name,image_base64:encoded,provider:imageProvider};
       } else data = JSON.parse(await file.text());
       const raw = data.plan ?? data;
       let warnings: string[] = [];
@@ -393,17 +442,10 @@ export default function Workspace({
           body:JSON.stringify(image ? data : {layout:raw})});
         const imported = await response.json();
         if(!response.ok) throw new Error(imported.error || "The floor plan could not be imported.");
+        if(imported.needs_scale){setPendingCalibration(imported);setNotice("");return;}
         data = imported; warnings=imported.warnings ?? [];
       }
-      const next = validatePlan(data.plan ?? data);
-      editPlan(next);
-      setSelectedId(null);
-      setMode("layout");
-      setModal(null);
-      setError("");
-      setNotice(
-        "Floor plan imported. Review the geometry and exits before running." + (warnings.length ? " " + warnings.join(" ") : ""),
-      );
+      acceptImport({plan:data.plan??data,warnings});
     } catch (cause) {
       setError(
         cause instanceof SyntaxError
@@ -412,8 +454,7 @@ export default function Workspace({
             ? cause.message
             : "This floor plan could not be opened. Try the sample JSON.",
       );
-    } finally {setBusy(false);}
-    if (uploadRef.current) uploadRef.current.value = "";
+    } finally {setBusy(false);if (uploadRef.current) uploadRef.current.value = "";}
   }
   function reset() {
     if (busy) return;
@@ -459,7 +500,7 @@ export default function Workspace({
   }
   const planProps = {
     selectedId: mode === "layout" ? selectedId : null,
-    onSelect: setSelectedId,
+    onSelect: (id:string|null)=>{setSelectedId(id);setGeometrySelection(null);},
     onMove: moveItem,
     mode,
     time: mode === "layout" ? 0 : time,
@@ -467,6 +508,13 @@ export default function Workspace({
     showRoutes: layers.routes,
     showDensity: layers.density,
     zoom,
+    showReference:mode==="layout"&&showReference,
+    referenceOpacity,
+    geometrySelection,
+    geometryTool,
+    onGeometrySelect:(selection:GeometrySelection)=>{setGeometrySelection(selection);setSelectedId(null);},
+    onGeometryChange:busy?undefined:editPlan,
+    onGeometryToolDone:()=>setGeometryTool("select"),
   };
 
   return (
@@ -572,7 +620,7 @@ export default function Workspace({
               <span className="plan-card-copy">
                 <strong>{plan.name}</strong>
                 <span>
-                  {plan.area} m² <b>·</b> {plan.exits.length} exits
+                  {Number(plan.area.toFixed(1))} m² <b>·</b> {plan.exits.length} exits
                 </span>
               </span>
               <Icon name="chevron" size={14} />
@@ -594,6 +642,16 @@ export default function Workspace({
                 {(plan.native?.transform.pixels_per_metre ?? 32).toFixed(1)} px / m <Icon name="check" size={12} />
               </span>
             </div>
+            {plan.native&&nativeLayout(plan).source_image?.calibration&&<p className="helper scale-evidence">
+              {nativeLayout(plan).source_image!.calibration!.method==="automatic"?"Detected from: ":"Calibrated from: "}
+              {nativeLayout(plan).source_image!.calibration!.label}
+            </p>}
+            {plan.native?.image&&<button className="text-button" disabled={busy} onClick={()=>{
+              const source=nativeLayout(plan).source_image!;
+              setCalibratingExisting(true);setError("");setPendingCalibration({needs_scale:true,
+                extraction_id:"recalibrate",image_id:source.id,width_px:source.width_px,height_px:source.height_px,
+                reason:"Mark a known distance to correct the current scale. Your wall, door, and furniture edits will be preserved."});setModal("upload");
+            }}>Edit scale</button>}
           </section>
           <section className="setup-section layout-section">
             <div className="section-heading">
@@ -602,6 +660,9 @@ export default function Workspace({
               <span className="section-count">{plan.items.length} objects</span>
             </div>
             <p className="helper">Select furniture on the plan to move it.</p>
+            {mode==="layout"&&<GeometryPanel plan={plan} selection={geometrySelection} tool={geometryTool} busy={busy}
+              onChange={editPlan} onSelect={selection=>{setGeometrySelection(selection);setSelectedId(null);}} onTool={setGeometryTool} onCheck={checkLayout}
+              overlay={showReference} onOverlay={setShowReference} opacity={referenceOpacity} onOpacity={setReferenceOpacity}/>}
             <div className="layout-buttons">
               <button
                 className="button subtle"
@@ -1394,10 +1455,8 @@ export default function Workspace({
             <select id="image-provider" value={imageProvider} disabled={busy} onChange={e=>setImageProvider(e.target.value)}>
               <option value="gemini">Gemini</option><option value="claude">Claude</option>
             </select>
-            <label className="field-label" htmlFor="image-width">Full image width in meters (left edge to right edge)</label>
-            <input id="image-width" type="number" min="0.01" step="0.1" value={imageWidth} disabled={busy}
-              onChange={e=>{const width=Number(e.target.value);if(width>0&&width<=1000)setImageWidth(width);}} />
-            <p className="muted">For images, confirm this real-world scale before choosing a file. Extraction sends the image to your selected provider.</p>
+            <p className="muted">Scale is detected from printed dimensions or a scale bar. If none is readable, you can mark one known distance afterward. Extraction sends the image to your selected provider.</p>
+            {pendingCalibration&&<ScaleCalibrator key={pendingCalibration.extraction_id} pending={pendingCalibration} busy={busy} onApply={finishScale}/>}
             <button
               className="upload-dropzone"
               disabled={busy}
@@ -1434,7 +1493,7 @@ export default function Workspace({
             </button>
             <p className="dialog-note">
               PNG, JPEG, and WebP extraction uses your server’s provider key.
-              Export PDF pages as images first. The detailed backend editor remains available for wall and door corrections.
+              Export PDF pages as images first. Imported walls, doors, exits, and furniture can be corrected in this workspace.
             </p>
           </>
         ) : modal === "reset" ? (
