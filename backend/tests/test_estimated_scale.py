@@ -40,11 +40,32 @@ def normalized(drawing):
     return drawing
 
 
+def omitted_door_drawing():
+    """A fresh-upload regression: 33/36px desks and a 30px opening."""
+    drawing = estimated_drawing()
+    drawing["furniture"] = [region(f"desk_{i}", 100+i*100, 150, 100+i*100+width, 170)
+                            for i, width in enumerate((33, 36, 33))]
+    for item in drawing["furniture"]:
+        item["label"] = "Desk"
+    drawing["scale_objects"] = [{"object_id": item["id"], "kind": "office_desk"} for item in drawing["furniture"]]
+    drawing["doors"][0]["end"]["y"] = 230
+    return drawing
+
+
 def estimate(drawing, provider="claude"):
     return calibrate_drawing(source(), ExtractedDrawing.model_validate(drawing), provider)
 
 
 class EstimatedScaleTests(unittest.TestCase):
+    def test_door_inference_uses_the_final_consensus_in_both_coordinate_systems(self):
+        drawing = omitted_door_drawing()
+        claude, reason = estimate(drawing)
+        gemini, _ = estimate(normalized(drawing), "gemini")
+        self.assertIsNotNone(claude, reason)
+        self.assertEqual(claude.calibration, gemini.calibration)
+        self.assertGreaterEqual(claude.meters_per_pixel, 1 / 33)
+        self.assertLessEqual(claude.meters_per_pixel, 1.05 / 30)
+        self.assertIn("door", [obj.object_id for obj in claude.calibration.estimated_objects])
     def test_missing_door_classification_is_recovered_from_existing_geometry(self):
         drawing = estimated_drawing()
         drawing["furniture"] = [region(f"desk_{i}", 100+i*100, 150, 138+i*100, 170) for i in range(3)]
@@ -192,6 +213,17 @@ class EstimatedScaleTests(unittest.TestCase):
 
 
 class EstimatedScaleAPITests(unittest.TestCase):
+    def test_fresh_upload_does_not_ask_for_scale_when_omitted_door_geometry_agrees(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {"CROWDY_STORAGE_DIR": directory, "CROWDY_BACKEND_TOKEN": ""}), TestClient(api.app) as client:
+            drawing = ExtractedDrawing.model_validate(omitted_door_drawing())
+            with patch("app.services.floorplans.images.extract_drawing", return_value=(drawing, "fake-model")):
+                response = client.post("/api/floorplans", json={**upload_fixture().model_dump(), "provider": "claude"})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertNotIn("needs_scale", response.json())
+            calibration = response.json()["plan"]["native"]["layout"]["source_image"]["calibration"]
+            self.assertEqual(calibration["method"], "estimated")
+            self.assertTrue(any(obj["object_id"] == "door" and obj["origin"] == "geometry" for obj in calibration["estimated_objects"]))
+
     def test_estimated_import_runs_and_manual_adjustment_preserves_edits_without_model_call(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {"CROWDY_STORAGE_DIR": directory, "CROWDY_BACKEND_TOKEN": ""}), TestClient(api.app) as client:
             drawing = ExtractedDrawing.model_validate(estimated_drawing())

@@ -105,7 +105,8 @@ def supplement_scale_objects(source, drawing, provider):
         known.add(item.id)
         inferred_ids.add(item.id)
     supplemented = drawing.model_copy(update={"scale_objects": references})
-    anchors = [item for item in _object_evidence(source, supplemented, provider) if item.kind != "single_door"]
+    evidence = _object_evidence(source, supplemented, provider)
+    anchors = [item for item in evidence if item.kind != "single_door"]
     if len(anchors) >= 2:
         anchor_scales = [item.assumed_metres / item.observed_pixels for item in anchors]
         anchor = statistics.median(anchor_scales)
@@ -113,17 +114,23 @@ def supplement_scale_objects(source, drawing, provider):
             for door in drawing.doors:
                 if door.id in known:
                     continue
-                x = (door.end.x - door.start.x) * (source.width_px / 1000 if provider == "gemini" else 1)
-                y = (door.end.y - door.start.y) * (source.height_px / 1000 if provider == "gemini" else 1)
-                pixels = math.hypot(x, y)
-                if pixels > 0 and abs(.90 / pixels / anchor - 1) <= .25:
-                    references.append(ScaleObject(object_id=door.id, kind="single_door"))
+                reference = ScaleObject(object_id=door.id, kind="single_door")
+                candidate = drawing.model_copy(update={"scale_objects": [reference]})
+                door_evidence = _object_evidence(source, candidate, provider, {door.id})
+                # Apply the final category-balanced consensus, not a separate
+                # relative-to-furniture cutoff that can reject overlapping ranges.
+                if door_evidence and _estimate_evidence(source, [*evidence, *door_evidence])[0] is not None:
+                    references.append(reference)
+                    evidence.extend(door_evidence)
                     inferred_ids.add(door.id)
     return drawing.model_copy(update={"scale_objects": references}), inferred_ids
 
 
 def estimate_scale(source: SourceImage, drawing: ExtractedDrawing, provider: str, inferred_ids=()):
-    evidence = _object_evidence(source, drawing, provider, inferred_ids)
+    return _estimate_evidence(source, _object_evidence(source, drawing, provider, inferred_ids))
+
+
+def _estimate_evidence(source, evidence):
     groups, intervals = {}, []
     for item in evidence:
         nominal, low, high = OBJECT_SIZES[item.kind]
