@@ -12,7 +12,7 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from app.config import Settings
 from app.estimator import (
@@ -91,6 +91,7 @@ class SettingsTests(unittest.TestCase):
             with patch("app.estimator.CrowdEstimator.load", side_effect=AssertionError("model loaded")):
                 module = importlib.reload(importlib.import_module("app.main"))
         self.assertFalse(any(isinstance(value, CrowdEstimator) for value in vars(module).values()))
+        self.assertEqual(os.environ.get("YOLO_AUTOINSTALL"), "false")
         detector = CrowdEstimator(Settings(token=TOKEN))
         self.assertFalse(detector.ready)
         self.assertIsNone(detector._model)
@@ -233,6 +234,24 @@ class ApiTests(unittest.TestCase):
             with self.subTest(media_type=media_type, expected=expected):
                 self.assertEqual(self.upload(data, media_type).status_code, expected)
         self.assertEqual(self.estimator.frames, [])
+
+    def test_loaded_model_pillow_patch_cannot_activate_optional_plugins(self):
+        original_open = Image.open
+        optional_heif_plugin = Mock(side_effect=ModuleNotFoundError("pi_heif is not installed"))
+
+        def model_patched_open(*args, **kwargs):
+            # Ultralytics replaces Image.open at import time with this fallback
+            # behavior. It must never control decoding of service uploads.
+            try:
+                return original_open(*args, **kwargs)
+            except UnidentifiedImageError:
+                optional_heif_plugin()
+
+        with patch("PIL.Image.open", side_effect=model_patched_open):
+            response = self.upload(b"not a readable image", "image/png")
+            self.assertEqual(response.status_code, 422, response.text)
+            self.assertEqual(self.upload().status_code, 200)
+        optional_heif_plugin.assert_not_called()
 
     def test_requires_exactly_one_image_file_and_no_extra_fields(self):
         cases = [

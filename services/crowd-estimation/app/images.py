@@ -5,6 +5,8 @@ from io import BytesIO
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from app import pillow_open
+
 ALLOWED_TYPES = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}
 
 
@@ -16,7 +18,7 @@ def decode_image(data: bytes, content_type: str, max_pixels: int) -> Image.Image
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(BytesIO(data)) as source:
+            with pillow_open(BytesIO(data), formats=tuple(ALLOWED_TYPES.values())) as source:
                 if source.format != ALLOWED_TYPES.get(content_type):
                     raise InvalidImage("Image contents must match the PNG, JPEG, or WebP content type.")
                 if getattr(source, "n_frames", 1) != 1:
@@ -26,7 +28,7 @@ def decode_image(data: bytes, content_type: str, max_pixels: int) -> Image.Image
                 source.verify()
             # verify() invalidates the decoder. Reopen, orient, and detach pixels
             # from the upload so detections use the displayed image coordinates.
-            with Image.open(BytesIO(data)) as source:
+            with pillow_open(BytesIO(data), formats=tuple(ALLOWED_TYPES.values())) as source:
                 oriented = ImageOps.exif_transpose(source)
                 try:
                     if "A" in oriented.getbands() or "transparency" in oriented.info:

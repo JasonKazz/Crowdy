@@ -102,14 +102,16 @@ python3 "$infra_dir/scripts/stage-crowd-estimation.py" \
 # Azure runtime's architecture and push using the signed-in user's ACR rights.
 docker build --platform linux/amd64 --file "$build_context/Dockerfile" \
   --tag "$registry_server/$image_name" "$build_context"
-# Exercise the image's configured non-root USER before publishing. This catches
-# COPY permissions that root-owned build steps cannot detect. No network or
-# deployed credentials are available to this packaging smoke check.
+# Exercise startup and decoding as the configured non-root USER before
+# publishing. Loading the installed model also exposes dependency patches that
+# import-only checks miss. No network or deployed credentials are available.
 docker run --rm --platform linux/amd64 --network none \
   --env CROWDY_CROWD_ESTIMATION_TOKEN=crowdy-build-smoke-check \
   --entrypoint python "$registry_server/$image_name" -c '
 import os
 from app.config import Settings
+from app.estimator import CrowdEstimator
+from app.images import InvalidImage, decode_image
 from app.main import create_app
 if os.geteuid() == 0:
     raise SystemExit("The crowd-estimation image must run as a non-root user.")
@@ -117,7 +119,17 @@ settings = Settings.from_env()
 with settings.model_path.open("rb") as weights:
     if not weights.read(1):
         raise SystemExit("The baked model weights are empty.")
-create_app(settings=settings)
+estimator = CrowdEstimator(settings)
+create_app(settings=settings, estimator=estimator)
+estimator.load()
+if not estimator.ready:
+    raise SystemExit("The baked model did not become ready.")
+try:
+    decode_image(b"not a readable image", "image/png", settings.max_pixels)
+except InvalidImage:
+    pass
+else:
+    raise SystemExit("Malformed images must be rejected after model startup.")
 '
 az acr login --subscription "$student_subscription" --name "$registry_name"
 docker push "$registry_server/$image_name"

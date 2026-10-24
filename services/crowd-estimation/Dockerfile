@@ -9,6 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8001 \
     CROWDY_YOLO_MODEL=/srv/crowdy/models/yolo26n.pt \
     CROWDY_YOLO_DEVICE=cpu \
+    YOLO_AUTOINSTALL=false \
     YOLO_CONFIG_DIR=/tmp/ultralytics \
     MPLCONFIGDIR=/tmp/matplotlib
 

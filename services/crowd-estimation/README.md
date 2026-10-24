@@ -21,6 +21,9 @@ Keep an existing `.env` file. Model downloads happen only
 during the explicit setup step. Runtime startup fails if weights are missing,
 loads one model, verifies class 0 is `person`, and warms the predictor before
 readiness succeeds. Weights and local credentials are ignored by Git.
+Ultralytics dependency auto-installation is disabled for every service entry
+point, including local runs. Install dependencies with `uv sync`; the explicit
+model setup command downloads only the requested weights.
 
 Set these **server-only** values in `frontend/.env.local`, then restart Next.js:
 
@@ -36,6 +39,9 @@ to fit Vercel. The service independently checks the stream, file size, actual
 image format, animation, decompression size, and EXIF orientation. It never
 stores uploads or annotated images. The workspace source-storage flow remains
 responsible for saved images.
+Upload decoding keeps Pillow's original PNG/JPEG/WebP decoder, so importing
+Ultralytics cannot activate its optional HEIF plugin fallback for corrupt input.
+Unreadable images return 422 after the model has loaded as well as before.
 
 ## API
 
