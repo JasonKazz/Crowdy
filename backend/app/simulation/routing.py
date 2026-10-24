@@ -65,6 +65,12 @@ class VisibilityGraph:
         return None
 
 
+def body_clear_components(geometry, radius):
+    """The same passable floor components for placement and route planning."""
+    safe = geometry.buffer(-(radius + 0.02), quad_segs=3)
+    return [safe] if isinstance(safe, Polygon) else list(getattr(safe, "geoms", []))
+
+
 class RoutePlanner:
     def __init__(self, geometry: Polygon, radius: float):
         self.radius = radius
@@ -72,8 +78,7 @@ class RoutePlanner:
         self.visible_body_space = prep(self.body_space.buffer(1e-7, join_style="mitre"))
         # Round offsets represent circular bodies at sharp door jambs. Mitre
         # offsets can create artificial spikes that close a perfectly usable door.
-        safe = geometry.buffer(-(radius + 0.02), quad_segs=3)
-        self.components = [safe] if isinstance(safe, Polygon) else list(getattr(safe, "geoms", []))
+        self.components = body_clear_components(geometry, radius)
         self.graphs = [VisibilityGraph(component) for component in self.components if not component.is_empty]
 
     def route(self, start, exit_polygon, preferred=None):

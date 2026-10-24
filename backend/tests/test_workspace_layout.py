@@ -19,6 +19,31 @@ EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
 
 class WorkspaceLayoutTests(unittest.TestCase):
+    def test_automatic_placement_excludes_and_reports_body_inaccessible_pocket(self):
+        from test_exterior_exits import room
+        from app.schemas.scenario import Region
+        from app.services.floorplans.layout import compile_layout
+        from app.simulation.engine import run_simulation
+        layout = room()
+        layout.furniture = [Region(id=name, polygon=points) for name,points in (
+            ("left", [(2,2),(2.2,2),(2.2,4),(2,4)]),
+            ("top", [(2.2,3.8),(4,3.8),(4,4),(2.2,4)]),
+            ("bottom", [(2.2,2),(4,2),(4,2.2),(2.2,2.2)]),
+            ("right_lower", [(3.8,2.2),(4,2.2),(4,2.85),(3.8,2.85)]),
+            ("right_upper", [(3.8,3.15),(4,3.15),(4,3.8),(3.8,3.8)]))]
+        plan = native_to_editor(layout.model_dump(mode="json"))
+        response = self.client.post("/api/simulations", json={"plan": plan, "scenario": self.settings})
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertGreater(result["editor_metadata"]["excluded_spawn_area_m2"], .5)
+        self.assertEqual(result["summary"]["evacuated_count"], self.settings["occupancy"])
+        self.assertFalse(any(2.2 < p["position"][0] < 3.8 and 2.2 < p["position"][1] < 3.8
+                             for p in result["scenario"]["occupants"]))
+        # Explicitly trapped people remain an error, not silently relocated.
+        layout.occupants[0].position = (3,3)
+        with self.assertRaisesRegex(ValueError, "No body-clear route"):
+            run_simulation(compile_layout(layout))
+
     def setUp(self):
         self.source = json.loads((EXAMPLES / "narrow_table_regression.json").read_text())
         self.plan = native_to_editor(self.source)

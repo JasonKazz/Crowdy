@@ -141,7 +141,13 @@ def output_schema() -> dict:
             result["required"] = list(result.get("properties", {}))
         return result
 
-    return simplify(schema)
+    result = simplify(schema)
+    # A further nested object array exceeds Claude's geometry grammar limit.
+    # Keep classifications flat on the wire, then restore and validate typed
+    # objects locally. Both providers use exactly the same representation.
+    result["properties"]["scale_objects"] = {"type": "array", "items": {"type": "string"},
+        "description": "Suitable existing objects as kind:object_id strings; kind must be single_door, office_chair, or office_desk. Include several complete workstation desks AND clear single-leaf doors when visible, at least three objects across two types. Exclude partial desktops, reception tables, and leafless openings of unknown leaf count from scale evidence. Examples: single_door:door_1, office_desk:desk_3. Empty when unclear. Do not supply sizes."}
+    return result
 
 
 def extraction_prompt(provider: str, width: int, height: int) -> str:
@@ -195,6 +201,11 @@ def extract_drawing(provider: str, image: bytes, width: int, height: int) -> tup
             raise ProviderError("Claude did not finish a usable extraction. Try a clearer or simpler plan.")
         text = "".join(part.get("text", "") for part in response.get("content", []) if part.get("type") == "text")
     try:
-        return ExtractedDrawing.model_validate_json(text), model
+        data = json.loads(text)
+        if isinstance(data, dict) and isinstance(data.get("scale_objects"), list):
+            data["scale_objects"] = [
+                {"kind": item.partition(":")[0], "object_id": item.partition(":")[2]}
+                if isinstance(item, str) else item for item in data["scale_objects"]]
+        return ExtractedDrawing.model_validate(data), model
     except ValueError:
         raise ProviderError("The extracted drawing did not match the required layout format. Retry or simplify the image.") from None

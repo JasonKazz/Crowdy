@@ -73,6 +73,7 @@ export type SimulationResult = {
   engineVersion?: string;
   /** Physical collision-body radius in metres from the native engine. */
   agentRadius?: number;
+  placementExcludedArea?: number;
   modelSettings?: {
     dt: number;
     sampleInterval: number;

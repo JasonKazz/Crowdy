@@ -11,6 +11,8 @@ import warnings
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
 
 from app.schemas.extraction import (
     CalibrationInfo, ExtractedDrawing, ExtractionInfo, ExtractionRequest, ImageUpload, ScaleReference, SourceImage,
@@ -19,7 +21,7 @@ from app.schemas.layout import Layout
 from app.schemas.scenario import AgentDefaults, Population, Region, SimulationSettings
 from app.services.floorplans.layout import compile_layout
 from app.services.floorplans.providers import ProviderError, extract_drawing
-from app.services.floorplans.calibration import calibrate
+from app.services.floorplans.calibration import calibrate, calibrate_drawing
 
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -51,6 +53,14 @@ def save_image(upload: ImageUpload, root: Path) -> SourceImage:
                 # Both providers see the identical image, within Claude's standard-tier
                 # native pixel budget: at most 39 x 39 patches of 28 pixels.
                 corrected.thumbnail((1092, 1092), Image.Resampling.LANCZOS)
+                # Small plans contain tiny repeated desks and door symbols.
+                # Present them at a consistent readable size to both providers;
+                # all observations and the overlay use this same stored frame.
+                longest = max(corrected.size)
+                if longest < 1000:
+                    factor = 1000 / longest
+                    corrected = corrected.resize(tuple(max(1, round(side * factor)) for side in corrected.size),
+                                                 Image.Resampling.LANCZOS)
                 image = Image.new("RGB", corrected.size, "white")
                 image.paste(corrected, mask=corrected.getchannel("A"))
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning):
@@ -145,10 +155,30 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
                    for point in (start, end)]
         doors.append({"id": door.id, "wall_id": door.wall_id,
                       "offset": sum(offsets) / 2, "width": abs(offsets[1] - offsets[0])})
+    furniture = [region(item) for item in drawing.furniture]
+    # Adjacent counters can enclose sink/appliance cavities. Merge only such
+    # closed furniture clusters and fill their inaccessible interiors. Open U
+    # shapes and rooms bounded by walls remain untouched. One merged item also
+    # moves as a whole in the editor, with no stale filler left behind.
+    shapes = [Polygon(item.polygon) for item in furniture]
+    if shapes and all(shape.is_valid for shape in shapes):
+        solids = unary_union(shapes)
+        pieces = [solids] if isinstance(solids, Polygon) else list(solids.geoms)
+        for piece in pieces:
+            if not piece.interiors:
+                continue
+            exterior = Polygon(piece.exterior)
+            members = [item for item in furniture if exterior.covers(Polygon(item.polygon))]
+            if not members:  # Already absorbed by an enclosing furniture cluster.
+                continue
+            member_ids = {item.id for item in members}
+            furniture = [item for item in furniture if item.id not in member_ids]
+            furniture.append(Region(id=members[0].id, polygon=list(piece.exterior.coords)[:-1]))
+            info.warnings.append("Joined touching furniture around an enclosed cavity into one solid editable barrier; open aisles were preserved.")
     return Layout(
         name=drawing.name or "Extracted floor plan", source_image=source, extraction=info,
         walkable_areas=[Region(id="floor", polygon=[position(point) for point in drawing.floor_outline])],
-        furniture=[region(item) for item in drawing.furniture], walls=walls, doors=doors,
+        furniture=furniture, walls=walls, doors=doors,
         exits=[region(item) for item in drawing.exits],
         rooms=[region(item) for item in drawing.rooms],
         room_labels={item.id: item.label for item in drawing.rooms},
@@ -176,7 +206,7 @@ def extract_image(request: ExtractionRequest, root: Path) -> dict:
             (directory / "context.json").write_text(json.dumps({"source": original.model_dump(mode="json"),
                 "info": info.model_dump(mode="json"), "people_count": request.people_count}))
             if request.meters_per_pixel is None:
-                source, reason = calibrate(original, drawing.scale_references, provider)
+                source, reason = calibrate_drawing(original, drawing, provider)
                 if source is None:
                     results.append({"provider": provider, "needs_scale": True, "extraction_id": info.id,
                         "image_id": original.id, "width_px": original.width_px, "height_px": original.height_px,
@@ -198,13 +228,16 @@ def extract_image(request: ExtractionRequest, root: Path) -> dict:
 
 def save_candidate(drawing, source, info, people_count, directory):
     layout = drawing_to_layout(drawing, source, info.provider, info, people_count)
+    notes = list(layout.extraction.warnings)
+    if source.calibration and source.calibration.method == "estimated":
+        notes.append("Scale estimated from assumed object sizes. Use Edit scale to replace it with a known measurement.")
     issues = []
     try:
         compile_layout(layout)
     except ValueError as exc:
         issues.append(str(exc))
     result = {"provider": info.provider, "model": info.model, "layout": layout.model_dump(mode="json"),
-              "warnings": layout.extraction.warnings, "issues": issues,
+              "warnings": notes, "issues": issues,
               "elapsed_seconds": info.elapsed_seconds,
               "counts": {name: len(getattr(layout, name)) for name in ("rooms", "walls", "doors", "furniture", "exits")}}
     (directory / "candidate.json").write_text(json.dumps(result, indent=2, allow_nan=False))
