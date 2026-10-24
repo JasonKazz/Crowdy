@@ -77,3 +77,27 @@ open data/two_exit_room_blocked_animation.html
 This writes two result snapshots and `data/two_exit_room_comparison.json`. The comparison resolves the population once and reuses the exact IDs, positions, geometry, speeds, and time settings. The clearance-time difference is only reported when both runs evacuate everyone. Repeating a comparison for the same input filename replaces its previous comparison files.
 
 For an individual run, set `settings.blocked_exit_ids` to a list of exit IDs. Unknown IDs, duplicate IDs, and blocking every exit are rejected. Closure means the exit is unavailable as a destination for the entire simulation; it does not remove its landing from the floor or model a physical barricade, changing hazard, or timed closure. People choose among the available exits at the start. Playback shows blocked exit zones in red and counts departures per exit.
+
+## Local layout editor
+
+The backend includes a standalone browser page for testing layout edits against the real Python simulator. It needs no API keys, JavaScript dependencies, or running Next.js app.
+
+From `backend/`, with the Python environment activated:
+
+```bash
+python -m app.simulation.editor
+```
+
+Open http://127.0.0.1:8765 and leave the terminal running. Press Ctrl+C to stop the editor. If that port is already in use, add `--port 8766` and open the matching address.
+
+The example office has furniture, an interior partition with a sliding door opening, and two exits. Drag furniture, walls, and exits; drag a door along its parent wall. The inspector edits object size and position, wall endpoints and thickness, and door width. Add/remove objects, undo/redo, preview seeded people with **Check layout**, and choose **Run simulation** followed by **Open animation**. Invalid geometry is reported before simulation.
+
+**Export editable layout** saves unfinished work as JSON. **Import JSON** accepts editable layouts or the existing scenario examples. To start with another file:
+
+```bash
+python -m app.simulation.editor ../examples/two_exit_room.json
+```
+
+Each run saves `layout.json`, `scenario.json`, `result.json`, and `playback.html` in a separate `backend/data/editor/<run_id>/` directory. Existing saved files remain after restarting; run links are available during the current server session. Source examples are never overwritten. See [the editor guide](docs/layout-editor.md) for the geometry format and limitations.
+
+Run the Python checks with `python -m unittest discover -s tests -v`. If Node.js is available, the editor's coordinate and door-dragging helpers can also be checked with `node tests/editor_geometry.test.cjs`.

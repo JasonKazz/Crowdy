@@ -226,6 +226,21 @@ requestAnimationFrame(tick);
 </html>'''
 
 
+def render_html(result: dict) -> str:
+    """Render either saved or in-memory results without changing the caller's data."""
+    if not result.get("frames"):
+        raise ValueError("The result must contain at least one frame")
+    scenario = Scenario.model_validate(result["scenario"])
+    geometry = build_geometry(scenario)
+    payload = dict(result)
+    payload["geometry"] = {
+        "boundary": list(geometry.exterior.coords),
+        "holes": [list(ring.coords) for ring in geometry.interiors],
+    }
+    encoded = json.dumps(payload, separators=(",", ":"), allow_nan=False)
+    return HTML.replace("__DATA__", encoded.replace("<", "\\u003c"))
+
+
 def main():
     repo_root = Path(__file__).resolve().parents[3]
     data_dir = repo_root / "backend" / "data"
@@ -243,21 +258,9 @@ def main():
         )
 
     result = json.loads(input_path.read_text(encoding="utf-8"))
-    if not result.get("frames"):
-        raise ValueError("The result must contain at least one frame")
-
-    scenario = Scenario.model_validate(result["scenario"])
-    geometry = build_geometry(scenario)
-    result["geometry"] = {
-        "boundary": list(geometry.exterior.coords),
-        "holes": [list(ring.coords) for ring in geometry.interiors],
-    }
-
-    payload = json.dumps(result, separators=(",", ":"), allow_nan=False)
-    payload = payload.replace("<", "\\u003c")
     stem = input_path.stem.removesuffix("_result")
     output_path = data_dir / f"{stem}_animation.html"
-    output_path.write_text(HTML.replace("__DATA__", payload), encoding="utf-8")
+    output_path.write_text(render_html(result), encoding="utf-8")
     print(f"Saved animation: {output_path}")
 
 

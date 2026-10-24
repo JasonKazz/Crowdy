@@ -1,0 +1,28 @@
+/* Run from backend/: node tests/editor_geometry.test.cjs */
+const assert = require('node:assert/strict');
+const G = require('../app/simulation/editor-geometry.js');
+const close=(a,b)=>assert.ok(Math.abs(a-b)<1e-9, `${a} != ${b}`);
+const rectangle=[[2,3],[5,3],[5,5],[2,5]];
+const moved=G.translate(rectangle,1,-2);
+assert.deepEqual(moved,[[3,1],[6,1],[6,3],[3,3]]);
+assert.deepEqual(rectangle,[[2,3],[5,3],[5,5],[2,5]]);
+const rotated=G.rotate(rectangle,90),r=G.bounds(rotated);
+close(r.maxX-r.minX,2);close(r.maxY-r.minY,3);
+const resized=G.bounds(G.resize(rectangle,6,4));
+close(resized.maxX-resized.minX,6);close(resized.maxY-resized.minY,4);
+assert.throws(()=>G.resize(rectangle,0,1));
+const wall={id:'w',start:[8,0],end:[8,10],thickness:.2};
+const door={id:'d',wall_id:'w',offset:4,width:1.2};
+const pieces=G.wallPieces(wall,[door]);
+assert.equal(pieces.length,2);
+close(G.bounds(pieces[0]).maxY,3.4);close(G.bounds(pieces[1]).minY,4.6);
+close(G.doorOffset(wall,door,[20,6]),6);
+close(G.doorOffset(wall,door,[8,-10]),.6);
+close(G.doorOffset(wall,door,[8,20]),9.4);
+const angled={id:'a',start:[2,2],end:[5,6],thickness:.4};
+close(G.wallLength(angled),5);
+close(G.doorOffset(angled,{offset:1,width:1},[3.5,4]),2.5);
+const shifted={...wall,start:[7,0],end:[7,10]};
+const opening=G.bounds(G.wallPolygon(shifted,3.4,4.6));
+close(opening.minX,6.9);close(opening.maxX,7.1);close(opening.minY,3.4);
+console.log('Editor geometry checks passed: translation, rotation, resizing, wall cuts, and door dragging.');
