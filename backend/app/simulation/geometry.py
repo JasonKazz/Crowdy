@@ -4,6 +4,10 @@ from shapely.validation import explain_validity
 
 from app.schemas.scenario import Region, Scenario
 
+# Metre coordinates can acquire tiny overshoots when wall endpoints are expanded
+# into polygons. This tolerance is numerical, not an image-snapping allowance.
+GEOMETRY_TOLERANCE = 1e-8
+
 
 def region_to_polygon(region: Region) -> Polygon:
     polygon = Polygon(region.polygon)
@@ -34,11 +38,11 @@ def build_geometry(scenario: Scenario) -> Polygon:
         for region in scenario.obstacles
     ]
 
-    for region, obstacle in zip(scenario.obstacles, obstacles):
+    for index, (region, obstacle) in enumerate(zip(scenario.obstacles, obstacles)):
         if not floor.covers(obstacle):
-            raise ValueError(
-                f"Obstacle '{region.id}' extends outside the floor"
-            )
+            if not floor.buffer(GEOMETRY_TOLERANCE).covers(obstacle):
+                raise ValueError(f"Obstacle '{region.id}' extends outside the floor")
+            obstacles[index] = obstacle.intersection(floor)
 
     # Remove furniture from the space people can walk through.
     walkable = (

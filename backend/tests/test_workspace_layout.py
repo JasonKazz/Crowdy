@@ -89,6 +89,24 @@ class WorkspaceLayoutTests(unittest.TestCase):
             self.assertAlmostEqual(source["meters_per_pixel"] * source["width_px"], 20)
             self.assertTrue(plan["native"]["layout"]["extraction"])
 
+    def test_reported_claude_wall_roundoff_imports_and_simulates(self):
+        # Actual saved observations from sample_floorplan.png; no paid model call.
+        drawing = ExtractedDrawing.model_validate_json(
+            (Path(__file__).parent / "fixtures" / "claude-boundary-observations.json").read_text())
+        with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {"CROWDY_STORAGE_DIR": directory}), \
+                patch("app.services.floorplans.images.extract_drawing", return_value=(drawing, "saved-claude-output")):
+            response = self.client.post("/api/floorplans", json={
+                **upload_fixture().model_dump(), "provider": "claude", "image_width_m": 20})
+        self.assertEqual(response.status_code, 200, response.text)
+        plan = response.json()["plan"]
+        wall = plan["native"]["layout"]["walls"][0]
+        self.assertEqual(wall["start"], [10, 9.040000000000001])
+        self.assertEqual(wall["end"], [10, .92])
+        run = self.client.post("/api/simulations", json={"plan": plan, "scenario": self.settings})
+        self.assertEqual(run.status_code, 200, run.text)
+        self.assertEqual(run.json()["summary"]["evacuated_count"], 20)
+        self.assertEqual(run.json()["summary"]["remaining_count"], 0)
+
     def test_import_uses_same_backend_token_as_simulation(self):
         with patch.dict("os.environ", {"CROWDY_BACKEND_TOKEN": "local-test-token"}):
             self.assertEqual(self.client.post("/api/floorplans", json={"layout": self.source}).status_code, 401)

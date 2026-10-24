@@ -23,7 +23,7 @@ Run `python -m app.simulation.editor` and open its printed `http://127.0.0.1:...
 
 1. Upload an image up to 10 MiB. PDF input is not supported yet; export one page as PNG or JPEG first. Images above 30 million pixels are rejected.
 2. Enter a known real-world length, select **Mark two points to set scale**, and click its endpoints. Use a printed dimension or a distance you know; the model does not invent a building scale.
-3. Choose Gemini or Claude and **Extract layout**. **Compare both models** makes one request per provider, sequentially, against exactly the same processed image. There is no automatic retry or hidden fallback to the other provider. For a first test, `examples/sample_floorplan.png` has an 18-meter dimension marked along its top edge.
+3. Choose Gemini or Claude and **Extract layout**. **Compare both models** extracts sequentially with both providers against exactly the same processed image. Transient HTTP failures (408, 429, 500, 502, 503, 504, 529) get up to two retries with exponential backoff and jitter, within a shared 175-second request budget. Numeric `Retry-After` headers are honored when they fit in the budget. Invalid-key, access, and malformed-request errors are not retried. Network timeouts are not retried because the POST might already have been processed. There is no hidden fallback to the other provider. For a first test, `examples/sample_floorplan.png` has an 18-meter dimension marked along its top edge.
 4. For a comparison, choose **Use Gemini layout** or **Use Claude layout** to inspect that candidate. The cards show model names, wall/door/furniture counts, time, model notes, and geometry issues. These are observations and checks, not an accuracy score.
 5. Edit the clean geometry view. **Compare with original image (fixed reference)** shows the source pixels for alignment checks; printed tables, door swings, and walls cannot move with the editable objects. The reference hides when you edit to avoid leaving apparent duplicates behind. Correct furniture, wall endpoints, door offsets/widths, exterior exits, or polygon corners. Unrecognized exits remain empty; add exterior exit doors manually.
 6. Check the layout, set population/settings, and run. Image-derived layouts cannot simulate until scale is confirmed and an extraction has been selected. Normal geometry and population checks still apply.
@@ -41,6 +41,16 @@ The floor outline supplies the exterior boundary; wall records describe interior
 Room labels do not change population placement, which remains uniform in the selected interior spawn region. Each converted candidate goes through the existing layout compiler; JSON/schema validity alone does not establish geometric accuracy.
 
 Calibration rescales geometric coordinates, wall thicknesses, door openings, outside landings, and explicit occupant positions. It leaves agent radius, walking speed, and simulation time settings unchanged. Recalibrating after extraction uses the same image alignment.
+
+## Improving extraction instructions
+
+Edit `backend/app/services/floorplans/floorplan_extraction.txt` to change the instructions sent to both providers. `{coordinates}` is filled with the provider-specific coordinate contract; leave that placeholder intact. Instructions cover the full-image frame, shared junction coordinates, wall thickness, continuous parent walls, aligned door jambs, exterior-only exits, polygon validity, and explicit ambiguity warnings. Field descriptions in `backend/app/schemas/extraction.py` also go into the structured-output schema. The prompt file is read for every extraction, so text-only changes do not require a server restart. Python/schema changes do.
+
+The API already requests schema-constrained JSON. That controls its structure, not whether the geometry matches the source. Continue validating in Python and reviewing the image overlay. The compiler tolerates at most `1e-8` meters of numerical boundary overshoot, clipping it only in the local simulation geometry; it does not move stored walls, enlarge the floor, or repair genuinely misplaced objects.
+
+To evaluate a prompt change, keep the model, processed image, and calibration fixed. Compare extracted outlines, missing/extra walls and furniture, doorway alignment/width, and exterior exits against a manually checked layout. Record geometry failures and corrections needed. A layout that imports successfully is not automatically a more accurate reading. A labeled example image with its verified JSON is a useful future addition, but text describing example coordinates alone is not visual ground truth.
+
+Useful references: [Claude coordinates](https://platform.claude.com/docs/en/build-with-claude/vision-coordinates), [structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs), and [Gemini transient-error retries](https://ai.google.dev/gemini-api/docs/troubleshooting).
 
 ## Stored artifacts
 

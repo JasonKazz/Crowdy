@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 
 from PIL import Image
@@ -249,6 +249,67 @@ class ProviderTests(unittest.TestCase):
             with self.assertRaises(ProviderError) as caught:
                 request_json("https://api.example", {"x-api-key": "secret-token"}, {})
         self.assertNotIn("secret-token", str(caught.exception))
+
+    def test_transient_503_retries_then_returns_success(self):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"ok": true}'
+        errors = [HTTPError("https://api.example", 503, "private", {}, io.BytesIO(b"private"))
+                  for _ in range(2)]
+        with patch("app.services.floorplans.providers.urlopen", side_effect=[*errors, response]) as transport, \
+                patch("app.services.floorplans.providers.time.sleep") as sleep, \
+                patch("app.services.floorplans.providers.random.uniform", return_value=0):
+            self.assertEqual(request_json("https://api.example", {}, {}), {"ok": True})
+        self.assertEqual(transport.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+        self.assertTrue(all(error.fp.closed for error in errors))
+
+    def test_persistent_503_stops_and_sanitizes_the_error(self):
+        errors = [HTTPError("https://api.example", 503, "secret-token", {}, io.BytesIO(b"secret-token"))
+                  for _ in range(3)]
+        with patch("app.services.floorplans.providers.urlopen", side_effect=errors) as transport, \
+                patch("app.services.floorplans.providers.time.sleep") as sleep:
+            with self.assertRaisesRegex(ProviderError, "HTTP 503.*3 attempts") as caught:
+                request_json("https://api.example", {"x-api-key": "secret-token"}, {})
+        self.assertEqual(transport.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertNotIn("secret-token", str(caught.exception))
+
+    def test_client_errors_are_not_retried(self):
+        for code in (400, 401, 402, 403, 404):
+            with self.subTest(code=code):
+                error = HTTPError("https://api.example", code, "private", {}, io.BytesIO())
+                with patch("app.services.floorplans.providers.urlopen", side_effect=error) as transport, \
+                        patch("app.services.floorplans.providers.time.sleep") as sleep:
+                    with self.assertRaises(ProviderError):
+                        request_json("https://api.example", {}, {})
+                self.assertEqual(transport.call_count, 1)
+                sleep.assert_not_called()
+
+    def test_retry_after_respected_and_retry_time_budget_not_reset(self):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{}'
+        error = HTTPError("https://api.example", 429, "private", {"Retry-After": "5"}, io.BytesIO())
+        with patch("app.services.floorplans.providers.urlopen", side_effect=[error, response]) as transport, \
+                patch("app.services.floorplans.providers.time.sleep") as sleep, \
+                patch("app.services.floorplans.providers.time.monotonic", side_effect=[100, 100, 101, 106]):
+            self.assertEqual(request_json("https://api.example", {}, {}), {})
+        sleep.assert_called_once_with(5)
+        self.assertEqual([call.kwargs["timeout"] for call in transport.call_args_list], [175, 169])
+
+    def test_retry_after_beyond_budget_stops_without_waiting(self):
+        error = HTTPError("https://api.example", 503, "private", {"Retry-After": "600"}, io.BytesIO())
+        with patch("app.services.floorplans.providers.urlopen", side_effect=error) as transport, \
+                patch("app.services.floorplans.providers.time.sleep") as sleep:
+            with self.assertRaisesRegex(ProviderError, "HTTP 503.*1 attempt"):
+                request_json("https://api.example", {}, {})
+        self.assertEqual(transport.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_network_timeouts_do_not_duplicate_possibly_processed_requests(self):
+        with patch("app.services.floorplans.providers.urlopen", side_effect=TimeoutError) as transport:
+            with self.assertRaisesRegex(ProviderError, "time limit"):
+                request_json("https://api.example", {}, {})
+        self.assertEqual(transport.call_count, 1)
 
 
 if __name__ == "__main__":
