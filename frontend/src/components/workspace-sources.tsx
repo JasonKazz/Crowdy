@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { FloorPlan } from "@/lib/simulation";
-import { uploadImageDimensions } from "@/lib/image-upload";
+import { prepareImageUpload } from "@/lib/image-upload";
 import {
   deleteVenueImage,
   estimateVenueCrowd,
@@ -10,6 +10,7 @@ import {
   MAX_VENUE_IMAGE_BYTES,
   saveVenueImage,
   VENUE_IMAGE_TYPES,
+  venueImageMigrationNotice,
   type VenueImageSource,
 } from "@/lib/workspace-sources";
 import Icon from "./icon";
@@ -27,34 +28,6 @@ type WorkspaceSourcesProps = {
 };
 
 type ImagePreview = VenueImageSource & { url: string };
-
-function imageSize(file: File): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-    const finish = () => {
-      URL.revokeObjectURL(url);
-      image.onload = null;
-      image.onerror = null;
-    };
-    image.onload = () => {
-      const width = image.naturalWidth;
-      const height = image.naturalHeight;
-      finish();
-      try {
-        uploadImageDimensions(width, height);
-        resolve({ width, height });
-      } catch (cause) {
-        reject(cause);
-      }
-    };
-    image.onerror = () => {
-      finish();
-      reject(new Error("This file could not be opened as an image."));
-    };
-    image.src = url;
-  });
-}
 
 function PlanThumbnail({ plan }: { plan: FloorPlan }) {
   const patternId = `source-grid-${useId().replaceAll(":", "")}`;
@@ -113,6 +86,7 @@ export default function WorkspaceSources({
   const [status, setStatus] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
+  const requests = useRef<AbortController | null>(null);
   const operation = useRef(false);
   const objectUrls = useRef(new Set<string>());
   const dragDepth = useRef(0);
@@ -125,9 +99,14 @@ export default function WorkspaceSources({
   useEffect(() => {
     const current = ++generation.current;
     const urls = objectUrls.current;
+    const controller = new AbortController();
+    requests.current = controller;
     async function loadImages() {
       try {
-        const sources = !isSample && ownerId ? await listVenueImages(ownerId, workspaceId) : [];
+        const sources = !isSample && ownerId ? await listVenueImages(ownerId, workspaceId, { signal: controller.signal, prepareLegacy: async (source) => {
+          const prepared = await prepareImageUpload(new File([source.blob], source.name, { type: source.type }));
+          return { ...source, blob: prepared.blob, type: prepared.blob.type, size: prepared.blob.size, width: prepared.width, height: prepared.height };
+        } }) : [];
         if (generation.current !== current) return;
         const previews = sources.map((source) => {
           const url = URL.createObjectURL(source.blob);
@@ -135,6 +114,7 @@ export default function WorkspaceSources({
           return { ...source, url };
         });
         setImages(previews);
+        if (ownerId) setError(venueImageMigrationNotice(ownerId, workspaceId));
       } catch (cause) {
         if (generation.current === current) {
           setError(cause instanceof Error ? cause.message : "Saved venue images could not be loaded.");
@@ -145,6 +125,7 @@ export default function WorkspaceSources({
     }
     void loadImages();
     return () => {
+      controller.abort();
       generation.current = current + 1;
       operation.current = false;
       for (const url of urls) URL.revokeObjectURL(url);
@@ -169,20 +150,21 @@ export default function WorkspaceSources({
         }
         if (file.size > MAX_VENUE_IMAGE_BYTES) throw new Error("Images must be 10 MB or smaller.");
         if (file.size === 0) throw new Error("This image is empty. Choose another file.");
-        const dimensions = await imageSize(file);
+        const prepared = await prepareImageUpload(file);
         if (generation.current !== current) return;
         const source: VenueImageSource = {
           id: crypto.randomUUID(),
           name: file.name,
-          type: file.type,
-          size: file.size,
-          ...dimensions,
+          type: prepared.blob.type,
+          size: prepared.blob.size,
+          width: prepared.width,
+          height: prepared.height,
           addedAt: Date.now(),
-          blob: file,
+          blob: prepared.blob,
         };
-        if (persistent && ownerId) await saveVenueImage(ownerId, workspaceId, source);
+        if (persistent && ownerId) await saveVenueImage(ownerId, workspaceId, source, { signal: requests.current?.signal });
         if (generation.current !== current) return;
-        const url = URL.createObjectURL(file);
+        const url = URL.createObjectURL(source.blob);
         objectUrls.current.add(url);
         accepted.push({ ...source, url });
       } catch (cause) {
@@ -208,7 +190,7 @@ export default function WorkspaceSources({
     setError("");
     const current = generation.current;
     try {
-      if (persistent && ownerId) await deleteVenueImage(ownerId, workspaceId, source.id);
+      if (persistent && ownerId) await deleteVenueImage(ownerId, workspaceId, source.id, { signal: requests.current?.signal });
       if (generation.current !== current) return;
       setImages((previous) => previous.filter((image) => image.id !== source.id));
       objectUrls.current.delete(source.url);

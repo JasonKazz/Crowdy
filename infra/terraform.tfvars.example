@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars (ignored by Git) and use the owning tenant.
+subscription_id = "146aa8b7-dd72-4385-a658-2e1e39da630c"
+tenant_id       = "00000000-0000-0000-0000-000000000000"
+location        = "westus2"
+
+# Resource group Owners receive alerts. Additional emails are optional.
+monthly_budget_usd    = 40
+budget_start_date     = "2026-10-01T00:00:00Z"
+budget_contact_emails = []
+
+# Pass optional LLM keys using TF_VAR_gemini_api_key and
+# TF_VAR_anthropic_api_key in the shell, rather than adding them here.
+# scripts/deploy.sh maintains deployment.auto.tfvars.json with the app image.

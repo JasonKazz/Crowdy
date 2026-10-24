@@ -1,74 +1,80 @@
-# Vercel deployment
+# Azure backend and Vercel frontend
 
-Crowdy uses two Vercel projects in the `808-atoms` scope:
+Crowdy runs its Next.js frontend as `crowdy-calhacks13` in the `808-atoms` Vercel scope. Terraform in `infra/` deploys the Python backend to Azure Container Apps in the Azure for Students subscription and provisions private Azure Blob Storage. See [the infrastructure guide](../infra/README.md) for the exact resources, student subscription, region, cost estimates, state handling, and deployment script.
 
-| Project | Root directory | Production URL |
-| --- | --- | --- |
-| `crowdy-calhacks13` | `frontend/` | https://crowdy-calhacks13.vercel.app |
-| `crowdy-backend` | `backend/` | https://crowdy-backend.vercel.app |
-
-The browser calls the Next.js origin. Its API routes forward simulations, floor-plan imports, and source-image requests to the Python service with a server-only bearer token. Private Vercel Blob stores source PNGs and extraction/calibration records across backend instances. Personal workspaces are still saved in account-scoped browser storage; Blob does not synchronize those workspaces.
+The browser calls same-origin Next.js routes. The server forwards simulations, floor-plan imports, source images, and workspace requests with a server-only backend token. Workspace ownership derives from the authenticated Auth0 session; browser request fields or headers cannot select another owner. Private Blob Storage holds workspace manifests, native geometry drafts, scenarios, venue images, source floor-plan images, and extraction/calibration artifacts. A signed-in account can reopen its personal workspaces from another browser or device.
 
 ## Backend configuration
 
-The backend project uses the FastAPI framework preset. `pyproject.toml` selects `app.api:app`, `.python-version` selects Python 3.12, and `uv.lock` pins the API dependencies. The JuPedSim dependency metadata excludes the unused PySide6/VTK desktop visualizer packages. Local and standalone setup can continue to use `requirements.txt` and the existing Dockerfile.
+`backend/Dockerfile` builds a Python 3.12 image with the native JuPedSim runtime. Terraform uses a private Container Registry, one Container Apps replica, and managed identity for registry pulls and Blob access. No database server is needed for this initial deployment: private workspace manifests use Azure ETags to coordinate writes, and layout revisions prevent stale browser saves from overwriting newer edits. Deletion tombstones prevent old browser migrations from resurrecting removed workspaces or source images.
 
-`backend/vercel.json` gives the resolved `app/api/__init__.py` function a 200-second duration. `.vercelignore` excludes local environments, data, tests, real environment files, and the standalone requirements manifest from the deployment upload.
-
-Set these backend **Production** environment variables in Vercel:
+Terraform supplies these backend settings:
 
 | Variable | Value |
 | --- | --- |
-| `CROWDY_BACKEND_TOKEN` | Shared secret matching the frontend's value. |
-| `BLOB_READ_WRITE_TOKEN` | Token supplied by the linked private Blob store. Keep it on the backend only. |
-| `GEMINI_API_KEY` | Gemini credential, required to use Gemini extraction. |
-| `GEMINI_MODEL` | An image/structured-output model ID available to that Gemini account. |
-| `ANTHROPIC_API_KEY` | Anthropic credential, required to use Claude extraction. |
-| `ANTHROPIC_MODEL` | An image/structured-output model ID available to that Anthropic account. |
+| `CROWDY_BACKEND_TOKEN` | Generated shared secret matching the frontend server. |
+| `AZURE_STORAGE_ACCOUNT_URL` | The provisioned storage account's HTTPS Blob endpoint. |
+| `AZURE_STORAGE_CONTAINER` | Private `crowdy` container. |
+| `AZURE_CLIENT_ID` | The user-assigned managed identity's client ID. |
+| `GEMINI_API_KEY` | Optional secret; enables Gemini floor-plan extraction. |
+| `ANTHROPIC_API_KEY` | Optional secret; enables Claude floor-plan extraction. |
 
-The backend project has its private Blob store linked. Provider keys are not configured yet; add the desired provider's key and model before using production image extraction. Sample and JSON simulations do not need provider credentials. `CLAUDE_API_KEY` is accepted when `ANTHROPIC_API_KEY` is absent.
+The initial Azure deployment has no image extraction provider keys. Add the desired provider's key through Terraform's sensitive variables before production image extraction. Provider model IDs must be available to that account. Sample and JSON simulations do not need provider credentials. `CLAUDE_API_KEY` remains accepted when `ANTHROPIC_API_KEY` is absent.
 
-Without `BLOB_READ_WRITE_TOKEN`, local artifacts use `data/editor/` relative to the backend working directory. On Vercel, the filesystem fallback is `/tmp/crowdy/editor/`; it is temporary and isolated per instance. `CROWDY_STORAGE_DIR` overrides that filesystem root, but does not provide shared persistence. With Blob configured, image and extraction artifacts are stored privately under `crowdy/editor/`; storage errors are reported rather than silently falling back to disk.
+Azure storage is authoritative when configured. Storage failures are reported instead of falling back to ephemeral files. Local development without Azure settings uses `data/editor/` for artifacts and `data/persistent/` for account workspaces relative to the backend working directory; `CROWDY_STORAGE_DIR` overrides that local root. Legacy `BLOB_READ_WRITE_TOKEN` support remains for older Vercel artifact deployments, but is not the Azure persistence configuration.
 
 ## Frontend configuration
 
-Keep the existing Auth0 values in the `crowdy-calhacks13` project's **Production** environment and configure:
+Keep the existing Auth0 values in the frontend's **Production** environment and configure:
 
 | Variable | Value |
 | --- | --- |
 | `APP_BASE_URL` | `https://crowdy-calhacks13.vercel.app` |
 | `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_SECRET` | Existing Auth0 application and session settings. |
-| `CROWDY_BACKEND_URL` | `https://crowdy-backend.vercel.app` |
-| `CROWDY_BACKEND_TOKEN` | The same shared secret as the backend. |
+| `CROWDY_BACKEND_URL` | Azure backend URL from the Terraform `backend_url` output. |
+| `CROWDY_BACKEND_TOKEN` | Terraform's sensitive `backend_token` output. |
 
-These settings remain server-side; do not add a `NEXT_PUBLIC_` prefix. Auth0's allowed callback is `https://crowdy-calhacks13.vercel.app/auth/callback`, and its allowed logout URL is `https://crowdy-calhacks13.vercel.app/`. The backend origin does not need Auth0 callback registration.
+Set the same backend URL/token in `frontend/.env.local` for local frontend development against Azure, then restart Next.js. Retrieve the token privately and keep real environment files and Terraform state out of Git. Never use a `NEXT_PUBLIC_` prefix. Auth0's production callback remains `https://crowdy-calhacks13.vercel.app/auth/callback`, and its logout URL remains `https://crowdy-calhacks13.vercel.app/`. The backend origin needs no Auth0 callback registration.
 
 ## Deploy and check
 
-Environment changes take effect on the next deployment. With the CLI authenticated and each directory linked to the project above, deploy the backend first, then the frontend. From the repository root:
+Deploy the Azure backend first using the Terraform script from the repository root:
 
 ```sh
-vercel --cwd backend --prod --scope 808-atoms
+./infra/scripts/check.sh
+./infra/scripts/deploy.sh deploy
+```
+
+Follow the [infrastructure prerequisites](../infra/README.md#prerequisites) to authenticate to the student subscription. The script creates the foundation, builds the backend image, then applies a saved plan to deploy that image. It does not deploy the frontend or configure its Vercel environment.
+
+After setting the frontend environment variables, deploy it with the authenticated Vercel CLI:
+
+```sh
 vercel --cwd frontend --prod --scope 808-atoms
 ```
 
-For a fresh checkout, run `vercel link --cwd backend --project crowdy-backend --scope 808-atoms` and `vercel link --cwd frontend --project crowdy-calhacks13 --scope 808-atoms` first. Local `.vercel/` project links and real environment files stay ignored by Git.
+For a fresh checkout, link only the frontend with `vercel link --cwd frontend --project crowdy-calhacks13 --scope 808-atoms`. Existing `backend/vercel.json` and related files support older deployments; the current backend deployment uses the Azure image instead. Environment changes require a frontend restart/redeployment or an updated backend deployment.
 
-Check the native service directly and through the frontend proxy:
+Check the backend's anonymous `/health` endpoint using the Terraform `backend_url` and the frontend's `/api/simulations` health proxy. Both should report the JuPedSim runtime and ready state when no simulation is active. Open the Berkeley sample and inspect an actual simulation's playback and counts. Sign in, create a personal workspace, upload a venue image, and reopen it in another browser session with the same account. Verify that another account cannot load its workspace or images.
+
+With the frontend running and its protected backend configured, run:
 
 ```sh
-curl --fail --silent --show-error https://crowdy-backend.vercel.app/health
-curl --fail --silent --show-error https://crowdy-calhacks13.vercel.app/api/simulations
+cd frontend
+npm run test:auth
+npm run test:cloud-workspaces
 ```
 
-Both should report JuPedSim 1.4.2 and `ready` when no simulation is active. Open the public Berkeley sample, run a simulation, and inspect playback and the evacuation counts. After configuring a provider, import an image, verify its overlay and scale, and test a manual measurement when no reliable printed dimension is present. Sign-in/callback behavior needs a real Auth0 browser check in addition to the synthetic regression tests.
+The auth checks use encrypted synthetic sessions without changing Auth0 users or tenant configuration. The cloud checks create isolated synthetic-account fixtures, exercise workspace CRUD, private source-image round trips, account isolation, mutation origin checks, revision conflicts, and tombstones, then delete the fixtures. No credentials or cookie values are logged. A real browser login/callback still needs a manual Auth0 check. After adding a provider key, separately verify extraction, overlay alignment, scale, and manual measurement.
 
-## Request limits and checks
+## Persistence and request limits
 
-Vercel Functions have a 4.5 MB request/response limit. The website accepts source images up to 10 MiB, then corrects orientation, adds a white background, and resizes to at most 3072 pixels per side before sending. It prefers PNG and falls back to JPEG to keep the encoded image within 3 MiB; the complete base64 JSON request stays below the hosting limit. Images that cannot fit are rejected before upload. The backend stores the processed source as PNG for provider calls and calibration; overlays use PNG or JPEG previews bounded to 3 MiB, keeping the canonical coordinate frame and stored source unchanged.
+Personal layouts and scenarios autosave through `/api/workspaces`; a failed request never falls back to browser storage. The editor keeps failed changes visible with retry/export controls. Runs and baselines remain temporary for the current editor session. Berkeley studio remains a public, temporary sample.
 
-Simulation requests have a 55-second frontend timeout and playback responses have a 16 MiB proxy budget. The platform's 4.5 MB response limit still applies on Vercel, so large trajectories need a smaller population or a deployment with a larger response allowance. Image extraction has a 175-second deadline per provider call and a 190-second frontend timeout for synchronous imports. Local staged uploads use a process-local job with progress polling. Vercel keeps imports synchronous because jobs cannot be shared reliably across request-scoped workers; large staged imports may exceed its 200-second function duration and require a persistent backend or durable worker queue. Simulation and extraction locks are per Python process, so their busy state does not coordinate every Vercel instance.
+Valid account-scoped browser workspaces migrate with their original IDs after sign-in. Existing cloud records win, and local snapshots are removed only after cloud acknowledgement or a durable deletion tombstone. Legacy IndexedDB venue images migrate in bounded batches after their workspace exists in the cloud. Failed uploads or local cleanup retain originals and show a retry notice. Reopen Sources to continue a pending batch. Browser storage is not required for active cloud persistence.
 
-Run the [integration checks](integration.md#validation) before deploying, including `npm run test:image-upload` from `frontend/` and `python -m unittest discover -s tests -v` from `backend/`. The storage suite uses mocked Blob calls; a deployed health check and real simulation confirm the native runtime, while a private Blob round trip confirms production storage access. Provider regression tests use fixtures and do not verify a live account's model access.
+The Vercel frontend's 4.5 MB request/response limit still applies. Image uploads accept PNG/JPEG/WebP files up to 10 MiB, normalize orientation and dimensions, and encode to at most 3 MiB before transfer; the JSON/base64 envelope stays below the hosting limit. Workspace JSON requests are limited to 2 MiB. Workspace/image proxy responses have a 4 MiB budget and return a clear error if the library is too large to load at once. The current library API includes plan data in its collection response; large libraries will need pagination or summary endpoints.
 
-See Vercel's [FastAPI deployment guide](https://vercel.com/docs/frameworks/backend/fastapi), [Python runtime](https://vercel.com/docs/functions/runtimes/python), and [function limits](https://vercel.com/docs/functions/limitations) for hosting configuration.
+Simulation requests retain a 55-second frontend timeout. Large playback trajectories can exceed Vercel's response allowance even when the backend succeeds; reduce occupancy or use hosting with a larger response allowance. Image imports run as background jobs on the persistent Azure process with progress polling. Job state, active provider work, and simulation locks remain process-local: the deployment fixes the backend at one replica, and interrupted jobs should be retried after a restart or redeployment. Multiple replicas require a durable job queue and coordinated work scheduling.
+
+Run the [integration checks](integration.md#validation), frontend build/lint, and backend tests before deploying. Unit tests mock cloud calls; a live private Blob round trip verifies managed identity and deployed storage access. Provider fixture tests do not verify a live account's model access.

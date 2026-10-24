@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import AuthControls from "./auth-controls";
 import Icon from "./icon";
 
@@ -11,16 +12,19 @@ export default function AppHeader({
 }: {
   workspaceName?: string;
   onHelp?: () => void;
-  onNavigate?: () => boolean;
+  onNavigate?: () => boolean | Promise<boolean>;
 }) {
+  const router = useRouter();
   return (
     <header className="app-header">
       <Link
         className="brand"
         href="/"
         aria-label="Crowdy home"
-        onClick={(event) => {
-          if (onNavigate?.() === false) event.preventDefault();
+        onClick={async (event) => {
+          if (!onNavigate || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          if (await onNavigate()) router.push("/");
         }}
       >
         <span className="brand-symbol">
@@ -35,8 +39,10 @@ export default function AppHeader({
       <nav className="breadcrumb" aria-label="Breadcrumb">
         <Link
           href="/"
-          onClick={(event) => {
-            if (onNavigate?.() === false) event.preventDefault();
+          onClick={async (event) => {
+            if (!onNavigate || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            if (await onNavigate()) router.push("/");
           }}
         >
           Workspaces

@@ -1,5 +1,4 @@
-// The browser UI verifies IndexedDB persistence. These checks cover input
-// boundaries and prove the placeholder estimate never depends on input data.
+// Isolated HTTP fixtures cover durable sources without touching real accounts.
 import assert from "node:assert/strict";
 import {
   MAX_VENUE_IMAGE_BYTES,
@@ -9,6 +8,7 @@ import {
   listVenueImages,
   saveVenueImage,
   deleteVenueImage,
+  venueImageMigrationNotice,
 } from "../src/lib/workspace-sources.ts";
 
 const source = (type = "image/png", size = 16) => ({
@@ -50,7 +50,7 @@ for (const invalid of [
   { ...source(), addedAt: -1 },
 ]) {
   assert.throws(() => validateVenueImageSource(invalid), /readable PNG, JPEG, or WebP/,
-    "Invalid source metadata must be rejected before it reaches browser storage");
+    "Invalid source metadata must be rejected before it reaches cloud storage");
 }
 
 for (const input of [
@@ -73,87 +73,143 @@ await assert.rejects(listVenueImages("", "workspace-a"), /Sign in/);
 await assert.rejects(listVenueImages("owner-a", ""), /Choose a workspace/);
 await assert.rejects(deleteVenueImage("owner-a", "workspace-a", ""), /could not be found/);
 await assert.rejects(saveVenueImage("owner-a", "workspace-a", source("image/gif")), /readable PNG, JPEG, or WebP/);
-await assert.rejects(listVenueImages("owner-a", "workspace-a"), /Browser storage is unavailable/,
-  "Server rendering must not silently accept nonpersistent venue sources");
+await assert.rejects(saveVenueImage("owner-a", "workspace-a", source("image/png", 3 * 1024 * 1024 + 1)), /under 3 MB/);
 
-globalThis.window = {};
-await assert.rejects(listVenueImages("owner-a", "workspace-a"), /Browser storage is unavailable/);
-Object.defineProperty(globalThis.window, "indexedDB", {
-  get() { throw Object.assign(new Error("blocked"), { name: "SecurityError" }); },
-});
-await assert.rejects(listVenueImages("owner-a", "workspace-a"), /Enable site storage/,
-  "Browser policy failures must tell the user how to retry");
-delete globalThis.window;
-
-// A narrow request fixture verifies commit/error timing without pretending to
-// implement IndexedDB. Actual blob round trips belong to browser verification.
-const request = {};
-let written;
-let deletedKey;
-let lookupKey;
-let closed = 0;
-const transaction = {
-  error: null,
-  objectStore() {
-    return {
-      put(record) { written = record; return request; },
-      delete(key) { deletedKey = key; return request; },
-      index() { return { getAll(key) { lookupKey = key; return request; } }; },
-    };
-  },
+let account = "owner-a", offline = false, releaseSave = null, lastSave, failUpload = false;
+const deletedSources = new Set();
+const images = new Map(), calls = [];
+const key = (owner, workspace, id) => `${owner}:${workspace}:${id}`;
+globalThis.fetch = async (url, init={}) => {
+  if (init.signal?.aborted) throw init.signal.reason;
+  calls.push({url,init});
+  assert.equal(init.cache,"no-store");
+  assert.equal(init.credentials,"same-origin");
+  if (init.headers["X-Crowdy-Account"] !== account) return Response.json({error:"Your account changed"},{status:409});
+  if (offline) return Response.json({error:"Cloud images unavailable"},{status:503});
+  const parts = url.split("/");
+  const workspace = decodeURIComponent(parts[3]), id = decodeURIComponent(parts[5] ?? "");
+  if (init.method === "POST") {
+    const body = JSON.parse(init.body);
+    if (failUpload) return Response.json({error:"Upload unavailable"},{status:503});
+    if (deletedSources.has(key(account,workspace,body.id))) return Response.json({error:"Image was deleted"},{status:410});
+    assert.deepEqual(Object.keys(body).sort(),["id","image_base64","name"]);
+    lastSave = body;
+    if (releaseSave) await releaseSave;
+    const blob = new Blob([Buffer.from(body.image_base64,"base64")],{type:"image/png"});
+    const metadata = {...source(),id:body.id,name:body.name,size:blob.size,blob};
+    images.set(key(account,workspace,body.id),{...metadata,owner:account,workspace});
+    return Response.json({id:metadata.id,name:metadata.name,type:metadata.type,size:metadata.size,width:metadata.width,height:metadata.height,addedAt:metadata.addedAt},{status:201});
+  }
+  const saved = images.get(key(account,workspace,id));
+  if (init.method === "DELETE") {
+    if (!saved) return Response.json({error:"Image not found"},{status:404});
+    images.delete(key(account,workspace,id));
+    deletedSources.add(key(account,workspace,id));
+    return new Response(null,{status:204});
+  }
+  if (parts[6] === "image") {
+    return saved ? new Response(saved.blob,{headers:{"Content-Type":saved.type}}) : Response.json({error:"Image not found"},{status:404});
+  }
+  return Response.json({sources:[...images.values()].filter(image => image.owner === account && image.workspace === workspace).map(image => ({id:image.id,name:image.name,type:image.type,size:image.size,width:image.width,height:image.height,addedAt:image.addedAt}))});
 };
-const database = { close() { closed++; }, transaction() { return transaction; } };
-globalThis.window = { indexedDB: {
-  open() {
-    const opened = { result: database };
-    queueMicrotask(() => opened.onsuccess());
-    return opened;
-  },
-} };
-const untilRequest = () => new Promise(resolve => setImmediate(resolve));
-
+globalThis.window = {};
+Object.defineProperty(globalThis.window,"indexedDB",{get(){ throw new Error("IndexedDB must not be used for active persistence"); }});
+Object.defineProperty(globalThis.window,"localStorage",{get(){ throw new Error("Browser storage must not be used for venue images"); }});
 const supplied = source();
-const save = saveVenueImage("owner-a", "workspace-a", supplied);
-supplied.name = "mutated after saving";
-await untilRequest();
-assert.equal(written.name, "venue.png", "Saving must snapshot metadata before awaiting browser storage");
-assert.equal(written.ownerId, "owner-a");
-assert.equal(written.workspaceId, "workspace-a");
+let release;
+releaseSave = new Promise(resolve => {release = resolve;});
+const pending = saveVenueImage("owner-a","workspace-a",supplied);
+supplied.name = "changed after save";
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(lastSave.name,"venue.png","Upload metadata must be snapshotted before awaiting file reads");
 let saved = false;
-save.then(() => { saved = true; });
-request.onsuccess();
-await Promise.resolve();
-assert.equal(saved, false, "Request success must not report a durable save before transaction completion");
-transaction.oncomplete();
-await save;
-assert.equal(saved, true);
-
-const failure = saveVenueImage("owner-b", "workspace-a", source());
-await untilRequest();
-request.onsuccess();
-transaction.error = Object.assign(new Error("quota"), { name: "QuotaExceededError" });
-transaction.onabort();
-await assert.rejects(failure, /no space left/,
-  "A quota failure after request success must still reject the save");
-transaction.error = null;
-
-const remove = deleteVenueImage("owner-b", "workspace-b", "same-image-id");
-await untilRequest();
-assert.deepEqual(deletedKey, ["owner-b", "workspace-b", "same-image-id"],
-  "Deleting a shared image ID must stay scoped to the account and workspace");
-request.onsuccess();
-transaction.oncomplete();
-await remove;
-
-const read = listVenueImages("owner-a", "workspace-b");
-await untilRequest();
-assert.deepEqual(lookupKey, ["owner-a", "workspace-b"]);
-request.result = [{ ...source(), ownerId: "owner-b", workspaceId: "workspace-b" }];
-request.onsuccess();
-transaction.oncomplete();
-await assert.rejects(read, /Existing images have been kept/,
-  "A mismatched stored account must never be returned by the source API");
-assert.equal(closed, 4, "Completed and aborted requests must close their database connections");
+pending.then(() => { saved = true; });
+assert.equal(saved,false,"A save must not succeed before the backend acknowledges it");
+release(); releaseSave = null;
+await pending;
+assert.equal(saved,true);
+const persisted = await listVenueImages("owner-a","workspace-a");
+assert.equal(persisted.length,1);
+assert.equal(persisted[0].blob.size,16);
+assert.equal(persisted[0].blob.type,"image/png");
+assert.equal(persisted[0].name,"venue.png");
+account = "owner-b";
+assert.deepEqual(await listVenueImages("owner-b","workspace-a"),[],"Same workspace/image IDs must not cross accounts");
+await assert.rejects(listVenueImages("owner-a","workspace-a"),/account changed/);
+await assert.rejects(deleteVenueImage("owner-b","workspace-a","venue-check-1"),/not found/);
+account = "owner-a";
+assert.deepEqual(await listVenueImages("owner-a","workspace-b"),[],"Sources must remain scoped to one workspace");
+const controller = new AbortController(); controller.abort();
+await assert.rejects(listVenueImages("owner-a","workspace-a",{signal:controller.signal}));
+offline = true;
+await assert.rejects(saveVenueImage("owner-a","workspace-a",source()),/unavailable/);
+await assert.rejects(deleteVenueImage("owner-a","workspace-a","venue-check-1"),/unavailable/);
+offline = false;
+assert.equal((await listVenueImages("owner-a","workspace-a")).length,1,"Failed deletion must retain cloud data");
+await deleteVenueImage("owner-a","workspace-a","venue-check-1");
+assert.deepEqual(await listVenueImages("owner-a","workspace-a"),[]);
+// Narrow legacy IndexedDB fixture: only already-stored records are read, and
+// originals may be deleted only after the HTTP service acknowledges the image.
+const legacy = new Map();
+let legacyDeleteFails = false;
+function indexedTransaction() {
+  const transaction = { abort() { queueMicrotask(() => transaction.onabort?.()); }, objectStore() {
+    function task(action) {
+      const request = {};
+      queueMicrotask(() => {
+        if (legacyDeleteFails && action.kind === "delete") { transaction.onabort?.(); return; }
+        request.result = action.run();
+        request.onsuccess?.();
+        transaction.oncomplete?.();
+      });
+      return request;
+    }
+    return {
+      index() { return { getAll(scope,count) { return task({kind:"read",run:() => [...legacy.values()].filter(image => image.ownerId === scope[0] && image.workspaceId === scope[1]).slice(0,count)}); } }; },
+      delete(scope) { return task({kind:"delete",run:() => { legacy.delete(scope.join(":")); }}); },
+    };
+  } };
+  return transaction;
+}
+const database = { objectStoreNames:{contains:() => true},close(){},transaction:indexedTransaction };
+globalThis.window = {indexedDB:{databases:async() => [{name:"crowdy-workspace-sources-v1"}],open() {
+  const request = {result:database}; queueMicrotask(() => request.onsuccess?.()); return request;
+}}};
+const legacyImage = {...source(),id:"legacy-image-a",ownerId:"owner-a",workspaceId:"workspace-legacy"};
+const otherLegacy = {...legacyImage,ownerId:"owner-b"};
+legacy.set(key(legacyImage.ownerId,legacyImage.workspaceId,legacyImage.id),legacyImage);
+legacy.set(key(otherLegacy.ownerId,otherLegacy.workspaceId,otherLegacy.id),otherLegacy);
+assert.equal((await listVenueImages("owner-a","workspace-legacy")).length,1);
+assert.equal(legacy.has(key("owner-a","workspace-legacy",legacyImage.id)),false);
+assert.equal(legacy.has(key("owner-b","workspace-legacy",legacyImage.id)),true,"Legacy migration must never read or remove another account's images");
+const failedLegacy = {...legacyImage,id:"legacy-image-failed"};
+legacy.set(key("owner-a","workspace-legacy",failedLegacy.id),failedLegacy);
+failUpload = true;
+assert.equal((await listVenueImages("owner-a","workspace-legacy")).length,1);
+assert.equal(legacy.has(key("owner-a","workspace-legacy",failedLegacy.id)),true,"A failed upload must keep the original Blob");
+assert.match(venueImageMigrationNotice("owner-a","workspace-legacy"),/originals have been kept/);
+failUpload = false; legacyDeleteFails = true;
+await listVenueImages("owner-a","workspace-legacy");
+assert.equal(legacy.has(key("owner-a","workspace-legacy",failedLegacy.id)),true,"An aborted local cleanup must leave recoverable data");
+const uploadCount = calls.filter(call => call.init.method === "POST").length;
+legacyDeleteFails = false;
+await listVenueImages("owner-a","workspace-legacy");
+assert.equal(legacy.has(key("owner-a","workspace-legacy",failedLegacy.id)),false);
+assert.equal(calls.filter(call => call.init.method === "POST").length,uploadCount,"An existing cloud image must not be overwritten by legacy data");
+assert.equal(venueImageMigrationNotice("owner-a","workspace-legacy"),"");
+await deleteVenueImage("owner-a","workspace-legacy",legacyImage.id);
+legacy.set(key("owner-a","workspace-legacy",legacyImage.id),legacyImage);
+await listVenueImages("owner-a","workspace-legacy");
+assert.equal(legacy.has(key("owner-a","workspace-legacy",legacyImage.id)),false,"A source tombstone must retire stale local originals without resurrection");
+assert.equal(images.has(key("owner-a","workspace-legacy",legacyImage.id)),false);
+// Each pass is bounded to eight images; remaining originals get a visible notice.
+for (let i=0;i<9;i++) {
+  const image = {...legacyImage,id:`batch-image-${i}`,workspaceId:"workspace-batch"};
+  legacy.set(key("owner-a","workspace-batch",image.id),image);
+}
+assert.equal((await listVenueImages("owner-a","workspace-batch")).length,8);
+assert.match(venueImageMigrationNotice("owner-a","workspace-batch"),/Reopen Sources to retry/);
+assert.equal((await listVenueImages("owner-a","workspace-batch")).length,9);
+assert.equal(venueImageMigrationNotice("owner-a","workspace-batch"),"");
 delete globalThis.window;
-
-console.log("Workspace source checks passed: format/size/metadata validation, fixed 80 estimate, storage failures, scope keys, immutable save metadata, transaction commit timing, and quota aborts.");
+console.log("Workspace source checks passed: format/size validation, fixed 80 estimate, HTTP blob round trips, immutable metadata, cloud acknowledgement, account/workspace isolation, cancellation, offline errors, independence from browser storage, and bounded account-scoped legacy image migration with preserved originals, retry, and deletion tombstones.");

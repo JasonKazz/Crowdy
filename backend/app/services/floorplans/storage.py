@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+from app.services import azure_storage
+
 
 class ArtifactStorageError(OSError):
     """Storage failures with no credentials or upstream response data."""
@@ -34,7 +36,10 @@ def _blob_path(root: Path, path: Path) -> str:
 
 def write_artifact(root: Path, path: Path, data: bytes) -> None:
     pathname = _blob_path(root, path)
-    if os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip():
+    if azure_storage.azure_configured():
+        azure_storage.write_blob(pathname, data,
+            "image/png" if path.suffix == ".png" else "application/json")
+    elif os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip():
         try:
             _blob_client().put_blob(pathname, data, access="private",
                 add_random_suffix=False, allow_overwrite=True,
@@ -50,6 +55,8 @@ def write_artifact(root: Path, path: Path, data: bytes) -> None:
 
 def read_artifact(root: Path, path: Path) -> bytes:
     pathname = _blob_path(root, path)
+    if azure_storage.azure_configured():
+        return azure_storage.read_blob(pathname)[0]
     if os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip():
         try:
             return _blob_client().get_blob(pathname, access="private").body

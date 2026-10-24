@@ -19,13 +19,13 @@ export type WorkspaceRecord = {
   updatedAt: number;
 };
 
-type WorkspaceInput = {
+export type WorkspaceInput = {
   name: string;
   plan: FloorPlan;
   scenario: Scenario;
 };
 
-type WorkspaceUpdate = {
+export type WorkspaceUpdate = {
   name?: string;
   plan: FloorPlan;
   scenario: Scenario;
@@ -33,8 +33,6 @@ type WorkspaceUpdate = {
 
 const STORAGE_PREFIX = "crowdy-workspaces-v1:";
 const CHANGE_EVENT = "crowdy-workspaces-changed";
-const CORRUPT_MESSAGE =
-  "Saved workspace data could not be read. Existing data has been kept.";
 const MISSING_MESSAGE =
   "This workspace is no longer available. Return to Workspaces and try again.";
 const itemKinds = new Set([
@@ -77,45 +75,10 @@ function validTimestamp(value: unknown): value is number {
   );
 }
 
-function nextTimestamp(records: WorkspaceRecord[]): number {
-  const newest = records.reduce(
-    (latest, record) => Math.max(latest, record.updatedAt),
-    -1,
-  );
-  const now = Math.max(Date.now(), newest + 1);
-  if (!validTimestamp(now))
-    fail(
-      "Saved workspace timestamps could not be updated. Existing data has been kept.",
-    );
-  return now;
-}
-
 function storageKey(ownerId: string): string {
-  if (
-    !isText(ownerId, 512) ||
-    ownerId.trim() !== ownerId ||
-    /[\u0000-\u001f]/.test(ownerId)
-  ) {
+  if (!isText(ownerId, 512) || ownerId.trim() !== ownerId || /[\u0000-\u001f]/.test(ownerId))
     fail("Sign in to access your personal workspaces.");
-  }
-  try {
-    return STORAGE_PREFIX + encodeURIComponent(ownerId);
-  } catch {
-    return fail("The account identifier is invalid. Try signing in again.");
-  }
-}
-
-function storage(): Storage {
-  if (typeof window === "undefined") {
-    fail("Workspaces can only be loaded in a browser.");
-  }
-  try {
-    return window.localStorage;
-  } catch {
-    return fail(
-      "Browser storage is unavailable. Enable site storage and try again.",
-    );
-  }
+  return STORAGE_PREFIX + encodeURIComponent(ownerId);
 }
 
 function validPlan(value: unknown): value is FloorPlan {
@@ -291,55 +254,6 @@ function validRecord(
   );
 }
 
-function readRecords(ownerId: string): WorkspaceRecord[] {
-  const key = storageKey(ownerId);
-  let raw: string | null;
-  try {
-    raw = storage().getItem(key);
-  } catch {
-    return fail(
-      "Browser storage is unavailable. Enable site storage and try again.",
-    );
-  }
-  if (raw === null) return [];
-  let values: unknown;
-  try {
-    values = JSON.parse(raw);
-  } catch {
-    return fail(CORRUPT_MESSAGE);
-  }
-  if (!Array.isArray(values)) return fail(CORRUPT_MESSAGE);
-  const ids = new Set<string>();
-  for (const value of values) {
-    if (!validRecord(value, ownerId) || ids.has(value.id))
-      return fail(CORRUPT_MESSAGE);
-    ids.add(value.id);
-  }
-  return values.map((value) => copyRecord(value as WorkspaceRecord));
-}
-
-function saveRecords(ownerId: string, records: WorkspaceRecord[]) {
-  const key = storageKey(ownerId);
-  try {
-    storage().setItem(key, JSON.stringify(records));
-  } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "name" in error &&
-      error.name === "QuotaExceededError"
-    ) {
-      fail(
-        "This browser has no space left for workspaces. Export or remove an existing workspace and try again.",
-      );
-    }
-    fail(
-      "Your workspace could not be saved in this browser. Enable site storage and try again.",
-    );
-  }
-  window.dispatchEvent(new Event(CHANGE_EVENT));
-}
-
 function workspaceName(value: string): string {
   if (typeof value !== "string")
     return fail("Give your workspace a name between 1 and 80 characters.");
@@ -369,101 +283,185 @@ function requirePersonalId(id: string) {
     fail(MISSING_MESSAGE);
 }
 
-export function listWorkspaces(ownerId: string): WorkspaceRecord[] {
-  return readRecords(ownerId).sort(
-    (a, b) =>
-      b.updatedAt - a.updatedAt ||
-      b.createdAt - a.createdAt ||
-      a.id.localeCompare(b.id),
+type RequestOptions = { signal?: AbortSignal; keepalive?: boolean };
+const revisions = new Map<string, number>();
+const mutations = new Map<string, Promise<unknown>>();
+const migrationRuns = new Map<string, Promise<void>>();
+
+export class WorkspaceRequestError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+    this.name = "WorkspaceRequestError";
+  }
+}
+
+// Account is a precondition only. The server derives authorization from its
+// encrypted session and never trusts this browser value as an owner identity.
+export async function workspaceRequest(ownerId: string, path = "", init: RequestInit = {}): Promise<Response> {
+  storageKey(ownerId);
+  const response = await fetch(`/api/workspaces${path}`, {
+    ...init,
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", "X-Crowdy-Account": ownerId, ...init.headers },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new WorkspaceRequestError(
+      typeof data?.error === "string" ? data.error : "Your workspace could not be saved to your account. Try again.",
+      response.status,
+    );
+  }
+  return response;
+}
+
+function received(value: unknown, ownerId: string): WorkspaceRecord {
+  if (!validRecord(value, ownerId)) fail("The saved workspace response could not be read. Try refreshing the page.");
+  const record = copyRecord(value);
+  revisions.set(`${ownerId}:${record.id}`, record.updatedAt);
+  return record;
+}
+
+function changed() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(CHANGE_EVENT));
+}
+
+function serialize<T>(key: string, action: () => Promise<T>): Promise<T> {
+  const previous = mutations.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(action);
+  mutations.set(key, next);
+  void next.finally(() => { if (mutations.get(key) === next) mutations.delete(key); }).catch(() => undefined);
+  return next;
+}
+
+async function migrateLegacy(ownerId: string, options: RequestOptions) {
+  if (typeof window === "undefined") return;
+  const key = storageKey(ownerId);
+  let records: unknown;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return;
+    records = JSON.parse(raw);
+  } catch { return; } // Browser storage is optional; cloud storage remains usable.
+  if (!Array.isArray(records)) return;
+  for (const legacy of records) {
+    if (options.signal?.aborted) throw options.signal.reason;
+    if (!validRecord(legacy, ownerId)) continue;
+    try {
+      const response = await workspaceRequest(ownerId, "", {
+        method: "POST", signal: options.signal,
+        body: JSON.stringify({ id: legacy.id, name: legacy.name, plan: copyPlan(legacy.plan), scenario: copyScenario(legacy.scenario) }),
+      });
+      received(await response.json(), ownerId);
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      if (!(error instanceof WorkspaceRequestError) || ![409, 410].includes(error.status)) continue;
+      if (error.status === 409) {
+        // Existing cloud work wins. Never PUT a legacy snapshot over it.
+        try {
+          const response = await workspaceRequest(ownerId, `/${encodeURIComponent(legacy.id)}`, { signal: options.signal });
+          received(await response.json(), ownerId);
+        } catch (existingError) {
+          if (!(existingError instanceof WorkspaceRequestError) || existingError.status !== 410) continue;
+        }
+      }
+    }
+    try {
+      const latest = JSON.parse(window.localStorage.getItem(key) ?? "[]");
+      if (!Array.isArray(latest)) continue;
+      // Remove only the exact snapshot acknowledged by the cloud.
+      const remaining = latest.filter(entry => JSON.stringify(entry) !== JSON.stringify(legacy));
+      if (remaining.length) window.localStorage.setItem(key, JSON.stringify(remaining));
+      else window.localStorage.removeItem(key);
+    } catch { /* Keep recoverable legacy data if browser storage is blocked. */ }
+  }
+}
+
+async function ensureMigration(ownerId: string, options: RequestOptions) {
+  storageKey(ownerId);
+  let migration = migrationRuns.get(ownerId);
+  if (!migration) {
+    migration = migrateLegacy(ownerId, options);
+    migrationRuns.set(ownerId, migration);
+    void migration.catch(() => { if (migrationRuns.get(ownerId) === migration) migrationRuns.delete(ownerId); });
+  }
+  await migration;
+}
+
+export async function listWorkspaces(ownerId: string, options: RequestOptions = {}): Promise<WorkspaceRecord[]> {
+  await ensureMigration(ownerId, options);
+  const response = await workspaceRequest(ownerId, "", { signal: options.signal });
+  const data = await response.json();
+  if (!Array.isArray(data?.workspaces)) fail("Your workspace library could not be read. Try again.");
+  return data.workspaces.map((record: unknown) => received(record, ownerId)).sort(
+    (a: WorkspaceRecord, b: WorkspaceRecord) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || a.id.localeCompare(b.id),
   );
 }
 
-export function getWorkspace(
-  ownerId: string,
-  id: string,
-): WorkspaceRecord | null {
+export async function getWorkspace(ownerId: string, id: string, options: RequestOptions = {}): Promise<WorkspaceRecord | null> {
   storageKey(ownerId);
   if (id === SAMPLE_WORKSPACE_ID) return null;
   requirePersonalId(id);
-  return readRecords(ownerId).find((record) => record.id === id) ?? null;
+  await ensureMigration(ownerId, options);
+  try {
+    const response = await workspaceRequest(ownerId, `/${encodeURIComponent(id)}`, { signal: options.signal });
+    return received(await response.json(), ownerId);
+  } catch (error) {
+    if (error instanceof WorkspaceRequestError && [404, 410].includes(error.status)) return null;
+    throw error;
+  }
 }
 
-export function createWorkspace(
-  ownerId: string,
-  input: WorkspaceInput,
-): WorkspaceRecord {
-  const records = readRecords(ownerId);
+export async function createWorkspace(ownerId: string, input: WorkspaceInput, options: RequestOptions = {}): Promise<WorkspaceRecord> {
+  storageKey(ownerId);
   const name = workspaceName(input.name);
   validateInputs(input.plan, input.scenario);
-  let id: string;
-  try {
-    id = `ws-${globalThis.crypto.randomUUID()}`;
-  } catch {
-    return fail(
-      "This browser could not create a workspace identifier. Try another browser.",
-    );
-  }
-  const now = nextTimestamp(records);
-  const record: WorkspaceRecord = {
-    id,
-    ownerId,
-    name,
-    plan: copyPlan(input.plan),
-    scenario: copyScenario(input.scenario),
-    createdAt: now,
-    updatedAt: now,
-  };
-  saveRecords(ownerId, [...records, record]);
-  return copyRecord(record);
+  const response = await workspaceRequest(ownerId, "", { method: "POST", signal: options.signal,
+    body: JSON.stringify({ name, plan: copyPlan(input.plan), scenario: copyScenario(input.scenario) }) });
+  const record = received(await response.json(), ownerId);
+  changed();
+  return record;
 }
 
-export function updateWorkspace(
-  ownerId: string,
-  id: string,
-  input: WorkspaceUpdate,
-): WorkspaceRecord {
+export function updateWorkspace(ownerId: string, id: string, input: WorkspaceUpdate, options: RequestOptions = {}): Promise<WorkspaceRecord> {
+  storageKey(ownerId);
   requirePersonalId(id);
-  const records = readRecords(ownerId);
-  const index = records.findIndex((record) => record.id === id);
-  if (index === -1) return fail(MISSING_MESSAGE);
-  const name =
-    input.name === undefined ? records[index].name : workspaceName(input.name);
   validateInputs(input.plan, input.scenario);
-  const updated: WorkspaceRecord = {
-    ...records[index],
-    name,
-    plan: copyPlan(input.plan),
-    scenario: copyScenario(input.scenario),
-    updatedAt: nextTimestamp(records),
-  };
-  records[index] = updated;
-  saveRecords(ownerId, records);
-  return copyRecord(updated);
+  const snapshot = { ...(input.name === undefined ? {} : { name: workspaceName(input.name) }), plan: copyPlan(input.plan), scenario: copyScenario(input.scenario) };
+  return serialize(`${ownerId}:${id}`, async () => {
+    if (options.signal?.aborted) throw options.signal.reason;
+    let expectedUpdatedAt = revisions.get(`${ownerId}:${id}`);
+    if (expectedUpdatedAt === undefined) {
+      const current = await getWorkspace(ownerId, id, options);
+      if (!current) fail(MISSING_MESSAGE);
+      expectedUpdatedAt = current.updatedAt;
+    }
+    const body = JSON.stringify({ ...snapshot, expectedUpdatedAt });
+    const response = await workspaceRequest(ownerId, `/${encodeURIComponent(id)}`, {
+      method: "PUT", signal: options.signal,
+      // Browsers cap keepalive requests at 64 KiB; larger plans rely on autosave.
+      keepalive: Boolean(options.keepalive && new TextEncoder().encode(body).byteLength < 60 * 1024), body,
+    });
+    const record = received(await response.json(), ownerId);
+    // Editor changes do not reload an open editor with a stale remote snapshot.
+    return record;
+  });
 }
 
-export function deleteWorkspace(ownerId: string, id: string): void {
+export function deleteWorkspace(ownerId: string, id: string, options: RequestOptions = {}): Promise<void> {
+  storageKey(ownerId);
   requirePersonalId(id);
-  const records = readRecords(ownerId);
-  if (!records.some((record) => record.id === id)) return fail(MISSING_MESSAGE);
-  saveRecords(
-    ownerId,
-    records.filter((record) => record.id !== id),
-  );
+  return serialize(`${ownerId}:${id}`, async () => {
+    await workspaceRequest(ownerId, `/${encodeURIComponent(id)}`, { method: "DELETE", signal: options.signal });
+    revisions.delete(`${ownerId}:${id}`);
+    changed();
+  });
 }
 
 export function subscribeWorkspaces(listener: () => void): () => void {
   if (typeof window === "undefined") return () => {};
-  const handleStorage = (event: StorageEvent) => {
-    if (
-      event.key === null ||
-      (typeof event.key === "string" && event.key.startsWith(STORAGE_PREFIX))
-    )
-      listener();
-  };
   window.addEventListener(CHANGE_EVENT, listener);
-  window.addEventListener("storage", handleStorage);
-  return () => {
-    window.removeEventListener(CHANGE_EVENT, listener);
-    window.removeEventListener("storage", handleStorage);
-  };
+  return () => window.removeEventListener(CHANGE_EVENT, listener);
 }

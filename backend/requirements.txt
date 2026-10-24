@@ -8,3 +8,5 @@ httpx>=0.27,<1
 Pillow>=10,<14
 python-dotenv>=1,<2
 vercel-blob>=0.5.0,<1
+azure-storage-blob>=12.23,<13
+azure-identity>=1.19,<2

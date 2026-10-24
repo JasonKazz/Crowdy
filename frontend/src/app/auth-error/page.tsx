@@ -9,7 +9,7 @@ export default function AuthErrorPage() {
         <h1>Sign-in couldn’t finish</h1>
         <p>
           The sign-in link may have expired or authorization was cancelled. Your
-          workspace is still available in this browser.
+          saved workspaces are still in your account.
         </p>
         <div className={styles.actions}>
           <Link className="button secondary" href="/">
