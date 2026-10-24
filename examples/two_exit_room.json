@@ -1,0 +1,21 @@
+{
+  "name": "50 people, two exits, one table",
+  "units": "meters",
+  "walkable_areas": [
+    {"id": "room", "polygon": [[0, 0], [10, 0], [10, 8], [0, 8]]},
+    {"id": "east-doorway", "polygon": [[10, 3.4], [10.4, 3.4], [10.4, 4.6], [10, 4.6]]},
+    {"id": "east-landing", "polygon": [[10.4, 2], [12.4, 2], [12.4, 6], [10.4, 6]]},
+    {"id": "west-doorway", "polygon": [[-0.4, 3.4], [0, 3.4], [0, 4.6], [-0.4, 4.6]]},
+    {"id": "west-landing", "polygon": [[-2.4, 2], [-0.4, 2], [-0.4, 6], [-2.4, 6]]}
+  ],
+  "obstacles": [
+    {"id": "table", "polygon": [[4, 3], [6, 3], [6, 5], [4, 5]]}
+  ],
+  "exits": [
+    {"id": "exit-east", "polygon": [[11.9, 3], [12.4, 3], [12.4, 5], [11.9, 5]]},
+    {"id": "exit-west", "polygon": [[-2.4, 3], [-1.9, 3], [-1.9, 5], [-2.4, 5]]}
+  ],
+  "population": {"count": 50, "seed": 42, "spawn_area_ids": ["room"]},
+  "agent_defaults": {"radius": 0.2, "desired_speed": 1.2},
+  "settings": {"dt": 0.01, "sample_interval": 0.1, "max_time": 120}
+}

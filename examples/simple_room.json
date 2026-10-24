@@ -1,0 +1,47 @@
+{
+  "name": "Room with a table and one doorway",
+  "units": "meters",
+  "walkable_areas": [
+    {
+      "id": "room",
+      "polygon": [[0, 0], [10, 0], [10, 8], [0, 8]]
+    },
+    {
+      "id": "doorway",
+      "polygon": [[10, 3.4], [10.4, 3.4], [10.4, 4.6], [10, 4.6]]
+    },
+    {
+      "id": "landing",
+      "polygon": [[10.4, 2], [12.4, 2], [12.4, 6], [10.4, 6]]
+    }
+  ],
+  "obstacles": [
+    {
+      "id": "table",
+      "polygon": [[4, 3], [6, 3], [6, 5], [4, 5]]
+    }
+  ],
+  "exits": [
+    {
+      "id": "exit-east",
+      "polygon": [[11.9, 3], [12.4, 3], [12.4, 5], [11.9, 5]]
+    }
+  ],
+  "occupants": [
+    {"id": "p1", "position": [2, 2]},
+    {"id": "p2", "position": [3, 2]},
+    {"id": "p3", "position": [2, 4]},
+    {"id": "p4", "position": [3, 4]},
+    {"id": "p5", "position": [2, 6]},
+    {"id": "p6", "position": [3, 6]}
+  ],
+  "agent_defaults": {
+    "radius": 0.2,
+    "desired_speed": 1.2
+  },
+  "settings": {
+    "dt": 0.01,
+    "sample_interval": 0.1,
+    "max_time": 120
+  }
+}
