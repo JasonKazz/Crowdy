@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppHeader from "./app-header";
 import AppFooter from "./app-footer";
-import { awaitFloorPlanImport } from "@/lib/floorplan-import";
+import { awaitFloorPlanImport, FLOOR_PLAN_IMPORT_TIMEOUT_MS, FLOOR_PLAN_IMPORT_TIMEOUT_MESSAGE } from "@/lib/floorplan-import";
 import { validatePlan } from "@/lib/plan-validation";
 import { runBackendSimulation, sameStartingPopulation } from "@/lib/backend-simulation";
 import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
@@ -28,7 +28,12 @@ import {
 } from "@/lib/simulation";
 
 type Mode = "layout" | "simulation" | "compare";
-type ProviderStatus = Record<string, {configured: boolean; busy: boolean; elapsed_seconds: number}>;
+type ProviderStatus = Record<string, {configured: boolean; busy: boolean; elapsed_seconds: number; model?: string}>;
+function providerLabel(provider: string, model?: string) {
+  if (model === "google/gemini-3.8-flash" || model === "gemini-3.8-flash") return "Gemini 3.8 Flash";
+  if (model === "anthropic/claude-sonnet-5.5" || model === "claude-sonnet-5.5" || model === "claude-sonnet-5-5") return "Claude Sonnet 5.5";
+  return provider === "gemini" ? "Gemini" : "Claude";
+}
 const signature = (plan: FloorPlan, scenario: Scenario) =>
   JSON.stringify({ plan, scenario });
 const formatTime = (n: number) => `${n.toFixed(1)} s`;
@@ -518,30 +523,32 @@ export default function Workspace({
       return;
     }
     const controller = new AbortController();
+    const deadline = image ? AbortSignal.timeout(FLOOR_PLAN_IMPORT_TIMEOUT_MS) : null;
+    const signal = deadline ? AbortSignal.any([controller.signal, deadline]) : controller.signal;
     importController.current = controller;
     setBusy(true);
     setError("");
     setPendingCalibration(null);
     setCalibratingExisting(false);
-    setNotice(image ? "Extracting the image. This can take a few minutes…" : "Importing floor plan…");
+    setNotice(image ? `Reading your floor plan with ${providerLabel(imageProvider, providerStatus[imageProvider]?.model)}…` : "Importing floor plan…");
     try {
       let data;
       if (image) {
         const prepared = await prepareImageUpload(file);
         data = {filename: prepared.filename, image_base64: prepared.image_base64, provider:imageProvider,async_import:true};
       } else data = JSON.parse(await file.text());
-      controller.signal.throwIfAborted();
+      signal.throwIfAborted();
       const raw = data.plan ?? data;
       let warnings: string[] = [];
       if (image || raw.walkable_areas) {
         const response = await fetch("/api/floorplans",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify(image ? data : {layout:raw}), signal:controller.signal});
+          body:JSON.stringify(image ? data : {layout:raw}), signal});
         if (response.status === 413) throw new Error(IMAGE_UPLOAD_SIZE_ERROR);
         let imported = await response.json().catch(() => null);
         if (!imported || typeof imported !== "object") throw new Error("The floor plan service returned an unreadable response. Try again shortly.");
         if(!response.ok) throw new Error(imported.error || "The floor plan could not be imported.");
-        if (imported.job_id) imported = await awaitFloorPlanImport(imported.job_id, setNotice, controller.signal);
-        controller.signal.throwIfAborted();
+        if (imported.job_id) imported = await awaitFloorPlanImport(imported.job_id, setNotice, signal);
+        signal.throwIfAborted();
         if(imported.needs_scale){setPendingCalibration(imported);setNotice("");return;}
         data = imported; warnings=imported.warnings ?? [];
       }
@@ -549,7 +556,9 @@ export default function Workspace({
     } catch (cause) {
       if (controller.signal.aborted) return;
       setError(
-        cause instanceof SyntaxError
+        deadline?.aborted
+          ? FLOOR_PLAN_IMPORT_TIMEOUT_MESSAGE
+          : cause instanceof SyntaxError
           ? "This file is not valid JSON. Choose a Crowdy floor plan or download the sample below."
           : cause instanceof Error
             ? cause.message
@@ -1673,16 +1682,20 @@ export default function Workspace({
               Uploading replaces your layout; Undo restores it. Imported furniture stays editable.
             </p>
             <label className="field-label" htmlFor="image-provider">Image extraction provider</label>
-            <select id="image-provider" value={imageProvider} disabled={busy} onChange={e=>setImageProvider(e.target.value)}>
-              <option value="gemini">Gemini</option><option value="claude">Claude</option>
+            <select id="image-provider" value={imageProvider} disabled={busy}
+              aria-describedby={`image-provider-status${providerStatus[imageProvider]?.model ? " image-provider-model" : ""}`}
+              onChange={e=>setImageProvider(e.target.value)}>
+              <option value="gemini">{providerLabel("gemini", providerStatus.gemini?.model)}</option>
+              <option value="claude">{providerLabel("claude", providerStatus.claude?.model)}</option>
             </select>
-            <p className="muted" role="status">
+            <p id="image-provider-status" className="muted" role="status">
               {providerStatusError || (providerStatus[imageProvider]?.busy
-                ? `${imageProvider === "gemini" ? "Gemini" : "Claude"} is processing an image (${providerStatus[imageProvider].elapsed_seconds}s elapsed). Large plans use several structure, scale and detail passes. ${busy ? "Wait for this request to finish." : "Choose the other provider or import JSON while this image is processing."}`
+                ? `${providerLabel(imageProvider, providerStatus[imageProvider]?.model)} is processing an image (${providerStatus[imageProvider].elapsed_seconds}s elapsed). ${busy ? "Your current layout stays in place until the import finishes." : "Choose the other provider or import JSON while this image is processing."}`
                 : providerStatus[imageProvider]?.configured === false
-                  ? "This provider needs an API key in the server’s .env file."
+                  ? "This provider is not configured for this deployment."
                   : providerStatus[imageProvider] ? "This provider is ready for an image." : "Checking provider status…")}
             </p>
+            {providerStatus[imageProvider]?.model && <p id="image-provider-model" className="muted">Model: {providerStatus[imageProvider].model}</p>}
             <p className="muted">Scale uses printed dimensions first, then an estimate from doors and furniture when several objects agree. You can adjust estimates with Edit scale. If neither is usable, mark a known distance. Images are resized to at most 3072 pixels per side before being sent to your selected provider.</p>
             </>}
             {pendingCalibration&&<ScaleCalibrator key={pendingCalibration.extraction_id} pending={pendingCalibration} busy={busy} onApply={finishScale}/>}
@@ -1724,7 +1737,7 @@ export default function Workspace({
               Download sample JSON
             </button>
             <p className="dialog-note">
-              PNG, JPEG, and WebP extraction uses your server’s provider key.
+              PNG, JPEG, and WebP images are read with the selected model.
               Export PDF pages as images first. Imported walls, doors, exits, and furniture can be corrected in this workspace.
             </p>
             </>}

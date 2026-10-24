@@ -6,6 +6,7 @@ import io
 import json
 import math
 import tempfile
+import threading
 import time
 import uuid
 import warnings
@@ -22,6 +23,10 @@ from app.schemas.layout import Layout, exit_from_marker
 from app.schemas.scenario import AgentDefaults, Population, Region, SimulationSettings
 from app.services.floorplans.layout import compile_layout
 from app.services.floorplans.providers import ProviderError, extract_drawing
+from app.services.floorplans.interactive import (
+    INTERACTIVE_REVIEW_WARNING, check_extraction_time, extraction_mode, extraction_scope,
+    review_interactive_structure, validate_interactive_observations,
+)
 from app.services.floorplans.calibration import calibrate, calibrate_drawing
 from app.services.floorplans.storage import read_artifact, write_artifact
 
@@ -53,8 +58,8 @@ def save_image(upload: ImageUpload, root: Path) -> SourceImage:
                 if original.width * original.height > MAX_IMAGE_PIXELS:
                     raise ValueError("The image is too large. Resize it below 30 million pixels.")
                 corrected = ImageOps.exif_transpose(original).convert("RGBA")
-                # Preserve detail for tiled extraction. Individual provider inputs
-                # are resized separately; the editor always uses this one frame.
+                # Preserve detail in the whole-plan provider input and overlay;
+                # both use the exact same canonical image coordinates.
                 corrected.thumbnail((3072, 3072), Image.Resampling.LANCZOS)
                 # Small plans contain tiny repeated desks and door symbols.
                 # Present them at a consistent readable size to both providers;
@@ -314,8 +319,17 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
     )
 
 
-def extract_image(request: ExtractionRequest, root: Path, progress=None) -> dict:
+def extract_image(request: ExtractionRequest, root: Path, progress=None, *,
+                  deadline: float | None = None, cancelled: threading.Event | None = None) -> dict:
+    mode = extraction_mode()
+    with extraction_scope(mode, deadline=deadline, cancelled=cancelled) as expires:
+        return _extract_image(request, root, progress, mode=mode, deadline=expires, cancelled=cancelled)
+
+
+def _extract_image(request: ExtractionRequest, root: Path, progress, *, mode: str,
+                   deadline: float, cancelled: threading.Event | None) -> dict:
     original, image = load_image(root, request.image_id)
+    check_extraction_time(deadline, cancelled)
     results = []
     providers = ("gemini", "claude") if request.provider == "both" else (request.provider,)
     for provider in providers:
@@ -323,7 +337,8 @@ def extract_image(request: ExtractionRequest, root: Path, progress=None) -> dict
         extraction_id = uuid.uuid4().hex
         directory = root / "extractions" / extraction_id
         try:
-            if max(original.width_px, original.height_px) > 1092:
+            check_extraction_time(deadline, cancelled)
+            if mode == "diagnostic_staged":
                 from app.services.floorplans.staged import extract_staged
                 # Stages need scratch files while extracting. Persist them via
                 # the configured store, including failed-stage diagnostics, so
@@ -340,26 +355,46 @@ def extract_image(request: ExtractionRequest, root: Path, progress=None) -> dict
                                                artifact.read_bytes())
             else:
                 if progress:
-                    progress("Reading compact floor plan")
+                    progress("Reading the whole floor plan")
                 drawing, model = extract_drawing(provider, image, original.width_px, original.height_px)
+                # Keep the original observation even if the one bounded quality
+                # follow-up cannot finish. Never hide failed geometry behind a
+                # successful-looking empty outline or a background crop queue.
+                write_artifact(root, directory / "whole-plan.json", drawing.model_dump_json(indent=2).encode())
+                check_extraction_time(deadline, cancelled)
+                drawing, review = review_interactive_structure(provider, image, original.width_px, original.height_px,
+                                                               drawing, progress)
+                if review is not None:
+                    write_artifact(root, directory / "structure-review.json", json.dumps(review, indent=2).encode())
+            check_extraction_time(deadline, cancelled)
+            if progress:
+                progress("Checking extracted geometry and scale")
             info = ExtractionInfo(id=extraction_id, provider=provider, model=model,
                                   elapsed_seconds=round(time.perf_counter() - started, 3),
-                                  warnings=drawing.warnings)
+                                  warnings=([INTERACTIVE_REVIEW_WARNING] if mode == "interactive" else []) + drawing.warnings)
             write_artifact(root, directory / "observations.json", drawing.model_dump_json(indent=2).encode())
             write_artifact(root, directory / "context.json", json.dumps({"source": original.model_dump(mode="json"),
-                "info": info.model_dump(mode="json"), "people_count": request.people_count}).encode())
+                "info": info.model_dump(mode="json"), "people_count": request.people_count,
+                "extraction_mode": mode}).encode())
+            check_extraction_time(deadline, cancelled)
+            if mode == "interactive":
+                validate_interactive_observations(drawing)
             if request.meters_per_pixel is None:
                 source, reason = calibrate_drawing(original, drawing, provider)
                 if source is None:
                     results.append({"provider": provider, "needs_scale": True, "extraction_id": info.id,
                         "image_id": original.id, "width_px": original.width_px, "height_px": original.height_px,
-                        "reason": reason, "warnings": drawing.warnings})
+                        "reason": reason, "warnings": info.warnings})
                     continue
             else:
                 source = original.model_copy(update={"meters_per_pixel": request.meters_per_pixel,
                     "scale_confirmed": request.scale_confirmed,
                     "calibration": CalibrationInfo(method="manual", label="Entered image scale")})
+            check_extraction_time(deadline, cancelled)
+            if progress:
+                progress("Validating the floor plan")
             result = save_candidate(drawing, source, info, request.people_count, directory, root)
+            check_extraction_time(deadline, cancelled)
             results.append(result)
         except (ProviderError, ValueError) as exc:
             error = {"provider": provider, "error": str(exc), "extraction_id": extraction_id}

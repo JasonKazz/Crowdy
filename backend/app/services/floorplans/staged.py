@@ -5,6 +5,7 @@ in non-overlapping cores, while a halo supplies context across tile boundaries.
 Raw stage observations and a merge report are saved alongside the candidate.
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 import copy
 import io
 import json
@@ -515,7 +516,7 @@ def extract_staged(provider, image_bytes, width, height, directory: Path, progre
     # Two requests at a time; wall and furniture regions each have a 16-tile cap.
     report(f"Reading {len(structural_regions)} wall regions and {len(regions)} furniture regions")
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = {pool.submit(run, task): task[0] for task in work}
+        futures = {pool.submit(copy_context().run, run, task): task[0] for task in work}
         for future in as_completed(futures):
             name = futures[future]
             try:
@@ -654,7 +655,7 @@ def extract_staged(provider, image_bytes, width, height, directory: Path, progre
                     start=DrawingPoint(x=points[0].x,y=points[0].y),end=DrawingPoint(x=points[1].x,y=points[1].y)))
             return index,(verified,result["warnings"])
         with ThreadPoolExecutor(max_workers=2) as pool:
-            jobs={pool.submit(review_doors,i+1,bounds):i+1 for i,(_,bounds) in enumerate(structural_regions)}
+            jobs={pool.submit(copy_context().run,review_doors,i+1,bounds):i+1 for i,(_,bounds) in enumerate(structural_regions)}
             for job in as_completed(jobs):
                 index=jobs[job]
                 try:

@@ -23,7 +23,8 @@ from app.schemas.rooms import PopulationConfig, RoomType
 from app.schemas.extraction import ImageUpload, ExtractionRequest, ScaleReference
 from app.services.floorplans.images import save_image, extract_image, finish_calibration, load_image_bytes, image_preview
 from app.services.floorplans.storage import editor_storage_root
-from app.services.floorplans.providers import load_environment, provider_status
+from app.services.floorplans.providers import extraction_deadline, load_environment, provider_status
+from app.services.floorplans.interactive import check_extraction_time
 from app.services.floorplans.calibration import recalibrate_layout
 from app.services.floorplans.import_jobs import create_job, update_job, job_status
 from app.simulation.workspace_layout import editor_native_layout, native_to_editor
@@ -32,6 +33,7 @@ from app.simulation.engine import run_simulation
 
 MAX_BODY_BYTES = 1_048_576
 MAX_WORKSPACE_BODY_BYTES = 2 * 1_048_576
+FLOORPLAN_IMPORT_TIME_BUDGET = 90
 ENGINE_VERSION = version("jupedsim")
 _simulation_lock = threading.Lock()
 logger = logging.getLogger(__name__)
@@ -50,7 +52,11 @@ def import_status():
 def import_with_slot(payload, progress=None):
     # The worker owns the slot until it actually stops, even if the browser disconnects.
     try:
-        return import_floorplan(payload, progress) if progress else import_floorplan(payload)
+        deadline = time.monotonic() + FLOORPLAN_IMPORT_TIME_BUDGET
+        with extraction_deadline(deadline):
+            result = import_floorplan(payload, progress) if progress else import_floorplan(payload)
+            check_extraction_time(deadline)
+            return result
     finally:
         with _import_guard:
             _active_imports.pop(payload.provider, None)

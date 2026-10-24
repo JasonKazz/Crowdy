@@ -3,12 +3,16 @@
 import asyncio
 import base64
 import copy
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import math
 import os
 from pathlib import Path
 import random
 import re
+from threading import Event
+from time import monotonic
 from urllib.parse import quote
 
 import httpx
@@ -25,12 +29,53 @@ GATEWAY_MODELS = {"gemini": "google/gemini-3.8-flash", "claude": "anthropic/clau
 GATEWAY_MODEL_NAMES = {"gemini": "AI_GATEWAY_GEMINI_MODEL", "claude": "AI_GATEWAY_ANTHROPIC_MODEL"}
 EXTRACTION_PROMPT = Path(__file__).with_name("floorplan_extraction.txt")
 MAX_PROVIDER_ATTEMPTS = 3
-PROVIDER_TIME_BUDGET = 175
+PROVIDER_TIME_BUDGET = 75
 RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504, 529}
+_EXTRACTION_DEADLINE = ContextVar("floorplan_extraction_deadline", default=None)
+_EXTRACTION_CANCELLATIONS = ContextVar("floorplan_extraction_cancellations", default=())
+TIME_LIMIT_MESSAGE = ("Image extraction exceeded the time limit or lost its connection. "
+                      "Retry or choose the other provider.")
 
 
 class ProviderError(RuntimeError):
     """An actionable error without credentials or raw upstream error bodies."""
+
+
+@contextmanager
+def extraction_deadline(deadline: float, *, cancelled: Event | None = None):
+    """Share an absolute monotonic budget across calls in the current worker.
+
+    Concurrent workers must enter their own context, or use copy_context().run.
+    Nested contexts can shorten the deadline but cannot extend a parent's budget.
+    """
+    if not math.isfinite(deadline):
+        raise ValueError("Extraction deadline must be a finite monotonic timestamp.")
+    parent = _EXTRACTION_DEADLINE.get()
+    deadline_token = _EXTRACTION_DEADLINE.set(min(parent, deadline) if parent is not None else deadline)
+    events = _EXTRACTION_CANCELLATIONS.get()
+    cancellation_token = _EXTRACTION_CANCELLATIONS.set(events + ((cancelled,) if cancelled is not None else ()))
+    try:
+        _check_extraction_budget()
+        yield
+    finally:
+        _EXTRACTION_CANCELLATIONS.reset(cancellation_token)
+        _EXTRACTION_DEADLINE.reset(deadline_token)
+
+
+def _check_extraction_budget(deadline: float | None = None):
+    if any(event.is_set() for event in _EXTRACTION_CANCELLATIONS.get()):
+        raise ProviderError("Image extraction was cancelled. Retry when ready.")
+    deadlines = [value for value in (deadline, _EXTRACTION_DEADLINE.get()) if value is not None]
+    if any(not math.isfinite(value) for value in deadlines):
+        raise ValueError("Extraction deadline must be a finite monotonic timestamp.")
+    if deadlines and monotonic() >= min(deadlines):
+        raise ProviderError(TIME_LIMIT_MESSAGE)
+
+
+def _request_deadline(deadline: float | None = None) -> float:
+    _check_extraction_budget(deadline)
+    return min(value for value in (monotonic() + PROVIDER_TIME_BUDGET,
+                                   deadline, _EXTRACTION_DEADLINE.get()) if value is not None)
 
 
 def load_environment(env_file: Path | None = None):
@@ -63,32 +108,57 @@ def api_key(provider: str) -> str:
     return key
 
 
-def request_json(url: str, headers: dict, payload: dict) -> dict:
+def request_json(url: str, headers: dict, payload: dict, *, deadline: float | None = None) -> dict:
     """Called by extraction workers, with one deadline covering retries and body reads."""
+    expires = _request_deadline(deadline)
     content = json.dumps(payload, allow_nan=False).encode()
     try:
-        return asyncio.run(_request_json(url, headers, content))
+        result = asyncio.run(_request_json(url, headers, content, deadline=expires))
+        _check_extraction_budget(expires)
+        return result
     except (TimeoutError, httpx.TransportError):
         # A timed-out POST may already have been processed. Do not duplicate it.
-        raise ProviderError("Image extraction exceeded the time limit or lost its connection. "
-                            "Retry or choose the other provider.") from None
+        raise ProviderError(TIME_LIMIT_MESSAGE) from None
 
 
 def _provider_client():
     return httpx.AsyncClient(timeout=PROVIDER_TIME_BUDGET, follow_redirects=False)
 
 
-async def _request_json(url: str, headers: dict, content: bytes) -> dict:
+async def _request_json(url: str, headers: dict, content: bytes, *, deadline: float) -> dict:
     # Socket/read timeouts alone can be extended indefinitely by a slow response.
     # Cancellation closes the HTTP connection before returning the extraction slot.
-    async with asyncio.timeout(PROVIDER_TIME_BUDGET):
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise TimeoutError()
+    async with asyncio.timeout(remaining):
         async with _provider_client() as client:
-            return await _request_attempts(client, url, headers, content)
+            events = _EXTRACTION_CANCELLATIONS.get()
+            if not events:
+                return await _request_attempts(client, url, headers, content, deadline=deadline)
+            # Cancelling the real HTTP task runs stream/client cleanup before the
+            # synchronous worker returns and its provider slot is released.
+            request = asyncio.create_task(_request_attempts(client, url, headers, content, deadline=deadline))
+            cancellation = asyncio.create_task(_wait_for_cancellation(events))
+            try:
+                done, _ = await asyncio.wait((request, cancellation), return_when=asyncio.FIRST_COMPLETED)
+                if cancellation in done:
+                    raise ProviderError("Image extraction was cancelled. Retry when ready.")
+                return await request
+            finally:
+                request.cancel()
+                cancellation.cancel()
+                await asyncio.gather(request, cancellation, return_exceptions=True)
 
 
-async def _request_attempts(client, url, headers, content):
-    deadline = asyncio.get_running_loop().time() + PROVIDER_TIME_BUDGET
+async def _wait_for_cancellation(events):
+    while not any(event.is_set() for event in events):
+        await asyncio.sleep(.025)
+
+
+async def _request_attempts(client, url, headers, content, *, deadline):
     for attempt in range(MAX_PROVIDER_ATTEMPTS):
+        _check_extraction_budget(deadline)
         async with client.stream("POST", url, content=content,
                                  headers={"Content-Type": "application/json", **headers}) as response:
             code = response.status_code
@@ -115,7 +185,7 @@ async def _request_attempts(client, url, headers, content):
         except ValueError:
             pass
         if (code in RETRYABLE_HTTP_CODES and attempt + 1 < MAX_PROVIDER_ATTEMPTS
-                and asyncio.get_running_loop().time() + delay < deadline):
+                and monotonic() + delay < deadline):
             await asyncio.sleep(delay)
             continue
         if code in (401, 403):
@@ -195,8 +265,9 @@ def extraction_prompt(provider: str, width: int, height: int) -> str:
     return EXTRACTION_PROMPT.read_text(encoding="utf-8").format(coordinates=coordinates)
 
 
-def extract_drawing(provider: str, image: bytes, width: int, height: int) -> tuple[ExtractedDrawing, str]:
-    return extract_structured(provider, image, extraction_prompt(provider, width, height), ExtractedDrawing)
+def extract_drawing(provider: str, image: bytes, width: int, height: int, *, deadline: float | None = None) -> tuple[ExtractedDrawing, str]:
+    options = {"deadline": deadline} if deadline is not None else {}
+    return extract_structured(provider, image, extraction_prompt(provider, width, height), ExtractedDrawing, **options)
 
 
 def gateway_text(response: dict) -> str:
@@ -218,8 +289,9 @@ def gateway_text(response: dict) -> str:
     return text
 
 
-def extract_structured(provider: str, image: bytes, prompt: str, model_type):
+def extract_structured(provider: str, image: bytes, prompt: str, model_type, *, deadline: float | None = None):
     """One bounded vision call. Stages use smaller task-specific schemas."""
+    _check_extraction_budget(deadline)
     if provider not in KEY_NAMES:
         raise ProviderError("Choose Gemini or Claude.")
     gateway_key = gateway_api_key()
@@ -229,6 +301,7 @@ def extract_structured(provider: str, image: bytes, prompt: str, model_type):
     model = provider_model(provider, gateway=bool(gateway_key))
     encoded = base64.b64encode(image).decode("ascii")
     schema = output_schema(model_type)
+    request_options = {"deadline": deadline} if deadline is not None else {}
     if gateway_key:
         prefix = "google/" if provider == "gemini" else "anthropic/"
         if not model.startswith(prefix) or not re.fullmatch(r"[a-z]+/[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", model):
@@ -237,6 +310,7 @@ def extract_structured(provider: str, image: bytes, prompt: str, model_type):
             AI_GATEWAY_URL,
             {"Authorization": f"Bearer {key}"},
             {"model": model, "stream": False, "max_tokens": 16384,
+             **({"reasoning_effort": "low"} if model in GATEWAY_MODELS.values() else {}),
              "messages": [{"role": "user", "content": [
                  {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}", "detail": "high"}},
                  {"type": "text", "text": prompt},
@@ -244,6 +318,7 @@ def extract_structured(provider: str, image: bytes, prompt: str, model_type):
              "response_format": {"type": "json_schema", "json_schema": {
                  "name": "floorplan_extraction", "strict": True, "schema": schema,
              }}},
+            **request_options,
         )
         text = gateway_text(response)
     elif provider == "gemini":
@@ -254,8 +329,10 @@ def extract_structured(provider: str, image: bytes, prompt: str, model_type):
                 {"inlineData": {"mimeType": "image/png", "data": encoded}}, {"text": prompt},
             ]}], "generationConfig": {
                 "maxOutputTokens": 16384,
+                **({"thinkingConfig": {"thinkingLevel": "low"}} if model == "gemini-3.8-flash" else {}),
                 "responseFormat": {"text": {"mimeType": "APPLICATION_JSON", "schema": schema}},
             }},
+            **request_options,
         )
         candidates = response.get("candidates", [])
         if not candidates or candidates[0].get("finishReason") not in (None, "STOP"):
@@ -270,7 +347,9 @@ def extract_structured(provider: str, image: bytes, prompt: str, model_type):
              "messages": [{"role": "user", "content": [
                  {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": encoded}},
                  {"type": "text", "text": prompt},
-             ]}], "output_config": {"format": {"type": "json_schema", "schema": schema}}},
+             ]}], "output_config": {"format": {"type": "json_schema", "schema": schema},
+                                      **({"effort": "low"} if model == "claude-sonnet-5-5" else {})}},
+            **request_options,
         )
         if response.get("stop_reason") not in (None, "end_turn"):
             raise ProviderError("Claude did not finish a usable extraction. Try a clearer or simpler plan.")
@@ -285,6 +364,8 @@ def extract_structured(provider: str, image: bytes, prompt: str, model_type):
             data["scale_objects"] = [
                 {"kind": item.partition(":")[0], "object_id": item.partition(":")[2]}
                 if isinstance(item, str) else item for item in data["scale_objects"]]
-        return model_type.model_validate(data), model
+        drawing = model_type.model_validate(data)
+        _check_extraction_budget(deadline)
+        return drawing, model
     except ValueError:
         raise ProviderError("The extracted drawing did not match the required layout format. Retry or simplify the image.") from None

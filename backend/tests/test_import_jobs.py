@@ -52,6 +52,36 @@ class ImportJobTests(unittest.TestCase):
         self.assertIn('No complete layout',status['error'])
         self.assertFalse(api.import_status()['gemini']['busy'])
 
+    def test_late_import_result_is_not_reported_as_complete_and_releases_slot(self):
+        def late_result(payload, progress):
+            time.sleep(.02)
+            return {'plan': {'late-fixture': True}}
+        with patch('app.api.FLOORPLAN_IMPORT_TIME_BUDGET', .005), \
+                patch('app.api.import_floorplan', side_effect=late_result):
+            response = self.client.post('/api/floorplans', json={
+                'filename': 'plan.png', 'image_base64': 'fake', 'async_import': True})
+            status = self.wait_terminal(response.json()['job_id'])
+        self.assertEqual(status['status'], 'failed')
+        self.assertIn('time limit', status['error'])
+        self.assertNotIn('result', status)
+        self.assertFalse(api.import_status()['gemini']['busy'])
+
+    def test_upload_storage_time_consumes_the_same_provider_budget(self):
+        from test_images import source
+        def slow_save(*args):
+            time.sleep(.02)
+            return source()
+        with patch('app.api.FLOORPLAN_IMPORT_TIME_BUDGET', .005), \
+                patch('app.api.save_image', side_effect=slow_save), \
+                patch('app.services.floorplans.images.extract_drawing') as provider:
+            response = self.client.post('/api/floorplans', json={
+                'filename': 'plan.png', 'image_base64': 'fake', 'async_import': True})
+            status = self.wait_terminal(response.json()['job_id'])
+        self.assertEqual(status['status'], 'failed')
+        self.assertIn('time limit', status['error'])
+        provider.assert_not_called()
+        self.assertFalse(api.import_status()['gemini']['busy'])
+
     def test_vercel_async_upload_returns_the_synchronous_result_without_creating_a_job(self):
         image={'filename':'plan.png','image_base64':'fake','provider':'claude','async_import':True}
         results=({'plan':{'test-fixture':True},'warnings':['Review exit']},

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {awaitFloorPlanImport} from '../src/lib/floorplan-import.ts';
+import {awaitFloorPlanImport,FLOOR_PLAN_IMPORT_TIMEOUT_MS,FLOOR_PLAN_IMPORT_TIMEOUT_MESSAGE} from '../src/lib/floorplan-import.ts';
 let replies=[];
 const originalFetch=globalThis.fetch;
 const scriptedFetch=async()=>{
@@ -19,11 +19,11 @@ const serviceError=pattern=>error=>{
  return true;
 };
 const progress=[];
-replies=[{body:{status:'running',progress:'Reading detail 2',elapsed_seconds:12}},
+replies=[{body:{status:'running',progress:'Reading floor plan',elapsed_seconds:12}},
  {body:{status:'complete',result:{plan:{id:'fixture'},warnings:['Review exits']}}}];
 const result=await awaitFloorPlanImport(id,message=>progress.push(message));
 assert.equal(result.plan.id,'fixture');
-assert.match(progress[0],/Reading detail 2.*12s/);
+assert.match(progress[0],/Reading floor plan.*12s/);
 replies=[{body:{status:'failed',error:'A detail region failed'}}];
 await assert.rejects(awaitFloorPlanImport(id,noop),/detail region failed/);
 replies=[{status:404,body:{error:'Backend restarted'}}];
@@ -106,5 +106,89 @@ await assert.rejects(awaitFloorPlanImport(id,()=>{
  queueMicrotask(()=>betweenPolls.abort(waitReason));
 },betweenPolls.signal),error=>error===waitReason);
 assert.equal(replies.length,1,'Cancelling while waiting must not fetch another result.');
+
+// Control deadline signals without waiting through the interactive time budget.
+// The shared upload signal is also passed here by the workspace, so polling
+// cannot extend an upload that has already consumed part of that budget.
+const originalTimeout=AbortSignal.timeout;
+async function withDeadlines(check){
+ const deadlines=new Map();
+ AbortSignal.timeout=milliseconds=>{
+  const controller=new AbortController();
+  deadlines.set(milliseconds,controller);
+  return controller.signal;
+ };
+ try{await check(deadlines);}
+ finally{AbortSignal.timeout=originalTimeout;}
+}
+const timeoutReason=()=>new DOMException('Image import deadline reached','TimeoutError');
+const timedOut=error=>error instanceof Error && error.message===FLOOR_PLAN_IMPORT_TIMEOUT_MESSAGE;
+assert.equal(FLOOR_PLAN_IMPORT_TIMEOUT_MS,110_000);
+
+await withDeadlines(async deadlines=>{
+ let started;
+ const startedRequest=new Promise(resolve=>{started=resolve;});
+ let requests=0;
+ globalThis.fetch=async(_url,{signal,cache})=>new Promise((resolve,reject)=>{
+  requests++; assert.equal(cache,'no-store'); started();
+  signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
+ });
+ const pending=awaitFloorPlanImport(id,noop);
+ await startedRequest;
+ deadlines.get(110_000).abort(timeoutReason());
+ await assert.rejects(pending,timedOut);
+ assert.equal(requests,1,'An expired import must not retry the request');
+});
+
+await withDeadlines(async deadlines=>{
+ let bodyStarted;
+ const startedBody=new Promise(resolve=>{bodyStarted=resolve;});
+ globalThis.fetch=async(_url,{signal})=>({ok:true,json:()=>new Promise((resolve,reject)=>{
+  bodyStarted();
+  signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
+ })});
+ const pending=awaitFloorPlanImport(id,noop);
+ await startedBody;
+ deadlines.get(110_000).abort(timeoutReason());
+ await assert.rejects(pending,timedOut,'Slow response bodies must share the total deadline');
+});
+
+await withDeadlines(async deadlines=>{
+ globalThis.fetch=scriptedFetch;
+ replies=[{body:{status:'running',progress:'Reading floor plan',elapsed_seconds:89}},
+  {body:{status:'complete',result:{plan:{id:'too-late'}}}}];
+ await assert.rejects(awaitFloorPlanImport(id,()=>{
+  queueMicrotask(()=>deadlines.get(110_000).abort(timeoutReason()));
+ }),timedOut);
+ assert.equal(replies.length,1,'An expired import must not poll or accept a later result');
+});
+
+await withDeadlines(async deadlines=>{
+ let started;
+ const startedRequest=new Promise(resolve=>{started=resolve;});
+ globalThis.fetch=async(_url,{signal})=>new Promise((resolve,reject)=>{
+  started(); signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
+ });
+ const pending=awaitFloorPlanImport(id,noop);
+ await startedRequest;
+ deadlines.get(20_000).abort(timeoutReason());
+ await assert.rejects(pending,serviceError(/took too long to respond/i));
+});
+
+await withDeadlines(async()=>{
+ const upload=new AbortController();
+ const uploadTimeout=timeoutReason();
+ let started;
+ const startedRequest=new Promise(resolve=>{started=resolve;});
+ globalThis.fetch=async(_url,{signal})=>new Promise((resolve,reject)=>{
+  started(); signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
+ });
+ const pending=awaitFloorPlanImport(id,noop,upload.signal);
+ await startedRequest;
+ upload.abort(uploadTimeout);
+ await assert.rejects(pending,error=>error===uploadTimeout,
+  'The workspace upload deadline must remain authoritative while polling');
+});
+
 globalThis.fetch=originalFetch;
-console.log('Import polling checks passed: progress, floor plans/manual scale, backend errors, malformed service responses, network failures, and cancellation before/during/between polls.');
+console.log('Import polling checks passed: measured progress, floor plans/manual scale, backend errors, malformed responses, network failures, cancellation, and bounded upload/poll/response-body deadlines without retries.');

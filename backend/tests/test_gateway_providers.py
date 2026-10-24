@@ -82,6 +82,7 @@ class GatewayProviderTests(unittest.TestCase):
                     self.assertEqual(payload["model"], GATEWAY_MODELS[provider])
                     self.assertEqual(payload["stream"], False)
                     self.assertEqual(payload["max_tokens"], 16384)
+                    self.assertEqual(payload["reasoning_effort"], "low")
                     content = payload["messages"][0]["content"]
                     self.assertEqual(content[0]["type"], "image_url")
                     self.assertEqual(content[0]["image_url"]["url"], "data:image/png;base64," + base64.b64encode(b"synthetic-image").decode())
@@ -105,6 +106,8 @@ class GatewayProviderTests(unittest.TestCase):
                 with transport:
                     self.assertEqual(extract_drawing(provider, b"image", 1000, 500)[1], model)
                 self.assertEqual(json.loads(calls[0].content)["model"], model)
+                self.assertNotIn("reasoning_effort", json.loads(calls[0].content),
+                                 "Unknown custom models must retain their supported native defaults")
 
     def test_gateway_rejects_unqualified_or_wrong_provider_models_before_sending(self):
         for provider, variable, model in (
