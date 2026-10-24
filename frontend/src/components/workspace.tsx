@@ -206,7 +206,7 @@ export default function Workspace({
   }, [modal]);
 
   useEffect(() => {
-    if (modal !== "upload") return;
+    if (modal !== "upload" || calibratingExisting) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     async function refresh() {
@@ -229,7 +229,7 @@ export default function Workspace({
     }
     void refresh();
     return () => {controller.abort(); clearTimeout(timer);};
-  }, [modal]);
+  }, [modal, calibratingExisting]);
 
   useEffect(() => {
     if (!notice) return;
@@ -368,9 +368,10 @@ export default function Workspace({
   function acceptImport(data: {plan: unknown;warnings?:string[]}) {
     const next=validatePlan(data.plan);
     editPlan(next);setSelectedId(null);setGeometrySelection(null);setGeometryTool("select");
-    setMode("layout");setModal(null);setPendingCalibration(null);setError("");setRunError("");
+    setMode("layout");setModal(null);setPendingCalibration(null);setCalibratingExisting(false);setError("");setRunError("");
     const calibration=next.native?nativeLayout(next).source_image?.calibration:null;
-    setNotice((calibration?.method==="automatic"?`Scale detected from ${calibration.label}. `:"")+
+    setNotice((calibration?.method==="automatic"?`Scale detected from ${calibration.label}. `:
+      calibration?.method==="estimated"?"Scale estimated from doors and furniture. Edit scale to adjust it. ":"")+
       "Floor plan imported. Review walls, doors, and exits before running."+(data.warnings?.length?" "+data.warnings.join(" "):""));
   }
   async function finishScale(reference: Parameters<React.ComponentProps<typeof ScaleCalibrator>["onApply"]>[0]) {
@@ -636,6 +637,7 @@ export default function Workspace({
               className="plan-card"
               disabled={busy}
               onClick={() => {
+                setCalibratingExisting(false);setPendingCalibration(null);
                 setModal("upload");
                 setError("");
               }}
@@ -658,6 +660,7 @@ export default function Workspace({
               className="text-button upload-link"
               disabled={busy}
               onClick={() => {
+                setCalibratingExisting(false);setPendingCalibration(null);
                 setModal("upload");
                 setError("");
               }}
@@ -668,18 +671,25 @@ export default function Workspace({
             <div className="scale-row">
               <span>Plan scale</span>
               <span className="mono">
-                {(plan.native?.transform.pixels_per_metre ?? 32).toFixed(1)} px / m <Icon name="check" size={12} />
+                {(plan.native?.transform.pixels_per_metre ?? 32).toFixed(1)} px / m
+                {!(plan.native&&nativeLayout(plan).source_image?.calibration?.method==="estimated")&&<Icon name="check" size={12} />}
               </span>
             </div>
+            {plan.native&&nativeLayout(plan).source_image?.calibration?.method==="estimated"&&
+              <span className="estimated-scale-badge">Estimated scale</span>}
             {plan.native&&nativeLayout(plan).source_image?.calibration&&<p className="helper scale-evidence">
-              {nativeLayout(plan).source_image!.calibration!.method==="automatic"?"Detected from: ":"Calibrated from: "}
+              {nativeLayout(plan).source_image!.calibration!.method==="estimated"?"Estimated from: ":
+                nativeLayout(plan).source_image!.calibration!.method==="automatic"?"Detected from: ":"Calibrated from: "}
               {nativeLayout(plan).source_image!.calibration!.label}
             </p>}
+            {plan.native&&nativeLayout(plan).source_image?.calibration?.method==="estimated"&&
+              <p className="helper scale-estimate-note">Object sizes are assumptions. Distances, area, and evacuation results use this estimate. Use Edit scale to enter a known measurement.</p>}
             {plan.native?.image&&<button className="text-button" disabled={busy} onClick={()=>{
               const source=nativeLayout(plan).source_image!;
               setCalibratingExisting(true);setError("");setPendingCalibration({needs_scale:true,
                 extraction_id:"recalibrate",image_id:source.id,width_px:source.width_px,height_px:source.height_px,
-                reason:"Mark a known distance to correct the current scale. Your wall, door, and furniture edits will be preserved."});setModal("upload");
+                current_width_m:source.width_px*source.meters_per_pixel,
+                reason:"Mark a known distance or enter the full image width to correct the current scale. Your wall, door, and furniture edits will be preserved."});setModal("upload");
             }}>Edit scale</button>}
           </section>
           <section className="setup-section layout-section">
@@ -1174,6 +1184,8 @@ export default function Workspace({
                   : "Not run"}
             </span>
           </div>
+          {(result?.plan??plan).native&&nativeLayout(result?.plan??plan).source_image?.calibration?.method==="estimated"&&
+            <p className="scale-estimate-note">Estimated scale: these results use assumed object sizes. Calibrate with a known measurement for more reliable distances and density.</p>}
           <p className="results-subtitle">
             {result
               ? `${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`
@@ -1461,7 +1473,7 @@ export default function Workspace({
         <div className="dialog-header">
           <h2 id="workspace-dialog-title">
             {modal === "upload"
-              ? "Upload floor plan"
+              ? calibratingExisting ? "Edit scale" : "Upload floor plan"
               : modal === "reset"
                 ? "Restore the opening layout?"
                 : "Simulation assumptions"}
@@ -1476,6 +1488,7 @@ export default function Workspace({
         </div>
         {modal === "upload" ? (
           <>
+            {!calibratingExisting&&<>
             <p>
               Import a frontend or backend Crowdy JSON layout, or extract an image.
               Uploading replaces your layout; Undo restores it. Imported furniture stays editable.
@@ -1491,8 +1504,10 @@ export default function Workspace({
                   ? "This provider needs an API key in the server’s .env file."
                   : providerStatus[imageProvider] ? "This provider is ready for an image." : "Checking provider status…")}
             </p>
-            <p className="muted">Scale is detected from printed dimensions or a scale bar. If none is readable, you can mark one known distance afterward. Extraction sends the image to your selected provider.</p>
+            <p className="muted">Scale uses printed dimensions first, then an estimate from doors and furniture when several objects agree. You can adjust estimates with Edit scale. If neither is usable, mark a known distance. Extraction sends the image to your selected provider.</p>
+            </>}
             {pendingCalibration&&<ScaleCalibrator key={pendingCalibration.extraction_id} pending={pendingCalibration} busy={busy} onApply={finishScale}/>}
+            {!calibratingExisting&&<>
             <button
               className="upload-dropzone"
               disabled={busy}
@@ -1510,12 +1525,13 @@ export default function Workspace({
               aria-label="Choose floor plan file"
               onChange={(e) => upload(e.target.files?.[0])}
             />
+            </>}
             {error && (
               <div className="upload-error" role="alert">
                 {error}
               </div>
             )}
-            <button
+            {!calibratingExisting&&<><button
               className="text-button"
               onClick={() =>
                 downloadJson(
@@ -1531,6 +1547,7 @@ export default function Workspace({
               PNG, JPEG, and WebP extraction uses your server’s provider key.
               Export PDF pages as images first. Imported walls, doors, exits, and furniture can be corrected in this workspace.
             </p>
+            </>}
           </>
         ) : modal === "reset" ? (
           <>

@@ -26,7 +26,8 @@ def compile_layout(layout: Layout) -> Scenario:
     # Revalidate interactive callers and leave their editable document untouched.
     layout = Layout.model_validate(layout.model_dump())
     if layout.source_image:
-        if not layout.source_image.scale_confirmed:
+        estimated = layout.source_image.calibration and layout.source_image.calibration.method == "estimated"
+        if not layout.source_image.scale_confirmed and not estimated:
             raise ValueError("Set the image scale using two points and a known distance before simulation.")
         if layout.extraction is None:
             raise ValueError("Extract a layout from the uploaded image before simulation.")

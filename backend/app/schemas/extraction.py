@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.schemas.scenario import InputModel
 
@@ -41,10 +41,33 @@ class ScaleReference(InputModel):
     unit: Literal["m", "cm", "mm", "ft", "in"]
 
 
+class ScaleObject(InputModel):
+    object_id: str = Field(min_length=1, description="ID of an existing door, exterior exit, or furniture object. Use each physical object once.")
+    kind: Literal["single_door", "office_chair", "office_desk"] = Field(
+        description="Only clearly identifiable single-leaf doors, individual office chairs, or individual rectangular office desks; omit ambiguous objects.")
+
+
+class EstimatedObject(ScaleObject):
+    observed_pixels: float = Field(gt=0)
+    assumed_metres: float = Field(gt=0)
+
+
 class CalibrationInfo(InputModel):
-    method: Literal["automatic", "manual"]
+    method: Literal["automatic", "manual", "estimated"]
     label: str
     references: list[ScaleReference] = Field(default_factory=list)
+    estimated_objects: list[EstimatedObject] = Field(default_factory=list, max_length=30)
+    meters_per_pixel_range: tuple[float, float] | None = None
+
+    @model_validator(mode="after")
+    def estimated_evidence(self):
+        if self.method == "estimated":
+            if (len({obj.object_id for obj in self.estimated_objects}) < 3
+                    or len({obj.kind for obj in self.estimated_objects}) < 2):
+                raise ValueError("Estimated scale needs three distinct objects across two object types")
+            if self.meters_per_pixel_range is None or not 0 < self.meters_per_pixel_range[0] <= self.meters_per_pixel_range[1]:
+                raise ValueError("Estimated scale needs a positive, ordered assumption range")
+        return self
 
 
 class ExtractedDrawing(InputModel):
@@ -61,6 +84,8 @@ class ExtractedDrawing(InputModel):
         description="Ambiguous or unreadable features, identifying their object ID or location; do not invent geometry.")
     scale_references: list[ScaleReference] = Field(default_factory=list, max_length=20,
         description="Explicit dimension lines or graphical scale bars with readable lengths and units. Empty if absent; never estimate from objects or a paper-scale ratio alone.")
+    scale_objects: list[ScaleObject] = Field(default_factory=list, max_length=30,
+        description="Objects suitable for approximate scale when printed dimensions are absent. Identify existing IDs and types only; never invent measurements. Include multiple object types when visible.")
 
 
 class SourceImage(InputModel):

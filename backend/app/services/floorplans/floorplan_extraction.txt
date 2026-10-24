@@ -37,6 +37,9 @@ FURNITURE AND ROOMS
 Furniture polygons describe the outer solid footprint of visible desks, tables, cabinets,
 and other obstructions. Do not turn text, dimension lines, floor hatching, or swing arcs
 into furniture. Do not extract individual decorative lines as separate obstacles.
+When individual desk boundaries and chair outlines are visible, preserve individual
+desks/chairs rather than merging an entire workstation bank into one rectangle. In an
+office image, explicitly inspect these objects for the scale_objects fallback below.
 Room polygons and labels describe spaces but do not obstruct movement. Keep room polygons
 within the floor. Do not invent rooms, furniture, dimensions, exits, or connections.
 
@@ -56,7 +59,28 @@ dimension, use the extension-line endpoints at the measured features, not the te
 For a scale bar, use the endpoints of a labeled interval. Include several independent
 long measurements when visible, including horizontal and vertical spans. Convert mixed
 feet/inches labels to decimal feet (e.g. 10 feet 6 inches = 10.5 ft).
-Do not infer absolute scale from doors, furniture, room names, or a ratio such as 1:100
-alone: image resizing loses the paper size. If units, endpoints, or numbers are ambiguous,
+Do not put inferred door/furniture sizes into scale_references or infer scale from a ratio
+such as 1:100 alone: image resizing loses the paper size. If units, endpoints, or numbers are ambiguous,
 omit that reference and explain in warnings. Return an empty list when no usable scale
 evidence exists. The backend computes meters per pixel; do not rescale your coordinates.
+
+OBJECTS FOR APPROXIMATE SCALE
+Also return scale_objects as strings in the form kind:object_id, for example
+single_door:door_1, office_chair:chair_3, or office_desk:desk_2. Use existing IDs only.
+These observations allow a separate, explicitly labeled estimate when
+printed dimensions are absent. Do not supply real-world sizes: the backend owns those
+assumptions. Prefer several objects across different types; include up to 30 clear examples.
+single_door must be a clearly visible SINGLE-LEAF interior door ID or exterior exit ID;
+exclude double doors, wide archways, sliding openings, and unclear openings.
+office_chair must be an individual office/task chair's full solid footprint in furniture;
+do not measure only a seat or backrest, or use sofas, stools, plants, or combined groups.
+office_desk must be an individual rectangular office desk footprint in furniture; exclude
+conference tables, dining tables, entire desk banks, counters, and ambiguous rectangles.
+Include suitable chairs and desks as ordinary furniture geometry, not just scale_objects.
+If the plan visibly contains desks, chairs, and single doors, provide at least three
+clear examples across two or more types whenever those outlines can be distinguished.
+Do not omit all small chairs merely to shorten the output; their full outer outline is
+useful when it can be traced. A tiny backrest line alone is not a chair footprint.
+The backend measures each object's longest footprint dimension (door clear opening for
+single_door). Use an object once; never split it into several objects to create evidence.
+If these object types are absent or unclear, return an empty scale_objects list.

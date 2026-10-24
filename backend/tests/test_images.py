@@ -47,6 +47,7 @@ def drawing_fixture():
         "exits": [region("exit-west", 50, 70, 80, 130), region("exit-east", 920, 370, 950, 430)],
         "warnings": [],
         "scale_references": [],
+        "scale_objects": [],
     }
 
 

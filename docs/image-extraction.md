@@ -23,9 +23,23 @@ Run `python -m app.simulation.editor` and open its printed `http://127.0.0.1:...
 
 ### Main website
 
-Choose **Upload floor plan**, pick a provider, and upload the image. There is no up-front scale field. The model returns explicit dimension/scale-bar observations (endpoints, value, units, visible label); Python validates bounds, converts units, checks agreement, and uses the longest agreeing reference. No reference, short/unreadable evidence, or conflicting dimensions opens a source-image measurement tool. Mark two endpoints and enter the distance in metres, centimetres, millimetres, feet, or inches. The saved extraction is reused, without another model request.
+Choose **Upload floor plan**, pick a provider, and upload the image. There is no up-front scale field. The model returns explicit dimension/scale-bar observations (endpoints, value, units, visible label); Python validates bounds, converts units, checks agreement, and uses the longest agreeing reference. When no printed references are returned, the backend tries an object-size estimate. Short/unreadable or conflicting printed evidence still opens the measurement tool; it is never silently overridden by an object guess. Insufficient or conflicting objects also open that tool. Mark two endpoints and enter the distance in metres, centimetres, millimetres, feet, or inches. The saved extraction is reused, without another model request.
 
-The plan shows the calibration evidence beside its scale. **Edit scale** can correct a detected value without discarding furniture or structural edits. Agent size and walking speed remain physical simulation settings when the drawing scale changes.
+The plan shows the calibration evidence beside its scale. **Estimated scale** marks object-based estimates, with a note beside simulation results as well. **Edit scale** accepts either a two-point known measurement or the full source-image width in meters (including image margins), without another provider request or loss of furniture/structural edits. Entering a manual value replaces the estimate and removes its badge. Agent size and walking speed remain physical simulation settings when the drawing scale changes.
+
+#### Object-size fallback
+
+The model classifies existing object IDs into `single_door`, `office_chair`, or `office_desk` in `scale_objects`; it does not invent real-world dimensions. Provider responses use compact `kind:object_id` strings to stay within Claude’s grammar-compilation budget. The adapter restores `{kind, object_id}` records and validates their types before saving observations; malformed categories are rejected. Python measures door openings and the longest side of each furniture footprint’s minimum rotated rectangle in processed image pixels. It uses these **prototype assumptions**, not universal standards:
+
+| Object | Nominal size | Assumed size range |
+| --- | --- | --- |
+| Single-leaf door clear opening | 0.90 m | 0.75–1.05 m |
+| Individual office chair, longest full-footprint dimension | 0.60 m | 0.45–0.75 m |
+| Individual rectangular office desk, longest side | 1.40 m | 1.00–1.80 m |
+
+At least three distinct objects across two types are required. Unknown IDs, duplicate IDs/geometry, out-of-image/tiny spans, invalid polygons, and implausibly elongated furniture are ignored. Each category receives equal weight through its median implied scale, preventing repeated chairs from outvoting doors. All implied scales must be within 25% of the category-balanced estimate, and their assumed scale ranges must overlap. The estimate is clamped to that overlap and checked again. Otherwise, a known measurement is required. These are heuristic consistency checks, not calibrated confidence probabilities: repeated symbols can agree and still be drawn at the wrong size. Double doors, conference tables, counters, and grouped workstations are excluded by the extraction instructions.
+
+The saved source records `calibration.method="estimated"`, each object ID, observed pixel span, assumed length, and the intersected `meters_per_pixel_range`. That range describes compatible size assumptions, **not an accuracy guarantee or confidence interval**. `scale_confirmed` stays false; the compiler explicitly allows an estimated calibration with its recorded evidence. Uncalibrated image frames still cannot run. JSON exports preserve this provenance, including the plan attached to a completed run. Existing saved observations without `scale_objects` remain compatible and require a manual measurement when no printed scale exists.
 
 For imported layouts, **Walls & doors** provides Select, Draw wall, Add door, and Add exit tools. Draw a wall with two clicks (Shift constrains it to an axis); nearby existing endpoints snap together. Drag a wall, its endpoint handles, an interior door along its parent, or an exterior exit onto a boundary edge. Selection exposes metric coordinates, thickness, door width/offset/parent, and exit width/offset. Removing a wall also removes its attached doors. Undo restores the previous layout.
 
@@ -38,7 +52,7 @@ The **Source image overlay** is the original processed image at the exact image-
 3. Choose Gemini or Claude and **Extract layout**. **Compare both models** extracts sequentially with both providers against exactly the same processed image. Transient HTTP failures (408, 429, 500, 502, 503, 504, 529) get up to two retries with exponential backoff and jitter, within a shared 175-second request budget. Numeric `Retry-After` headers are honored when they fit in the budget. Invalid-key, access, and malformed-request errors are not retried. Network timeouts are not retried because the POST might already have been processed. There is no hidden fallback to the other provider. For a first test, `examples/sample_floorplan.png` has an 18-meter dimension marked along its top edge.
 4. For a comparison, choose **Use Gemini layout** or **Use Claude layout** to inspect that candidate. The cards show model names, wall/door/furniture counts, time, model notes, and geometry issues. These are observations and checks, not an accuracy score.
 5. Edit the clean geometry view. **Compare with original image (fixed reference)** shows the source pixels for alignment checks; printed tables, door swings, and walls cannot move with the editable objects. The reference hides when you edit to avoid leaving apparent duplicates behind. Correct furniture, wall endpoints, door offsets/widths, exterior exits, or polygon corners. Unrecognized exits remain empty; add exterior exit doors manually.
-6. Check the layout, set population/settings, and run. Image-derived layouts cannot simulate until scale is confirmed and an extraction has been selected. Normal geometry and population checks still apply.
+6. Check the layout, set population/settings, and run. Image-derived layouts require a confirmed scale or an explicit estimated calibration, and a selected extraction, before simulation. Normal geometry and population checks still apply.
 
 Uploading only displays an image-frame rectangle. This is not an inferred room, and cannot be simulated as if extraction had succeeded. Model observations may also produce a draft with disconnected rooms or a misplaced door; the draft stays editable and the check explains the problem. No general-purpose snapping or connection repair silently changes its topology.
 
@@ -52,7 +66,7 @@ The floor outline supplies the exterior boundary; wall records describe interior
 
 Room labels do not change population placement, which remains uniform in the selected interior spawn region. Each converted candidate goes through the existing layout compiler; JSON/schema validity alone does not establish geometric accuracy.
 
-Calibration rescales geometric coordinates, wall thicknesses, door openings, outside landings, and explicit occupant positions. It leaves agent radius, walking speed, and simulation time settings unchanged. Recalibrating after extraction uses the same image alignment.
+Calibration rescales geometric coordinates, wall thicknesses, door openings, and explicit occupant positions. Physical outside-landing settings are retained. It leaves agent radius, walking speed, and simulation time settings unchanged. Recalibrating after extraction uses the same image alignment.
 
 ## Improving extraction instructions
 
@@ -82,7 +96,7 @@ Images persist across server restarts in the same data directory. Exported layou
 
 The main Next.js workspace uses `POST /api/floorplans` on the Python service:
 
-- New image: `{filename, image_base64, provider}`. A usable calibration returns `{plan, warnings}`. Otherwise the response has `needs_scale`, `extraction_id`, `image_id`, `width_px`, `height_px`, and `reason`.
+- New image: `{filename, image_base64, provider}`. A measured or estimated calibration returns `{plan, warnings}`; estimates include the provenance and assumptions in `plan.native.layout.source_image.calibration`. Otherwise the response has `needs_scale`, `extraction_id`, `image_id`, `width_px`, `height_px`, and `reason`.
 - Complete a pending extraction: `{extraction_id, manual_scale: {kind: "dimension", label, start: {x,y}, end: {x,y}, distance, unit}}`. Manual endpoints are pixels in the processed source image for both providers.
 - Check the current editable plan: `{editor_plan}`. It reconstructs edited furniture polygons and retains canonical wall/door changes; issues are in `plan.native.issues`.
 - Recalibrate without losing edits: `{editor_plan, manual_scale}`.

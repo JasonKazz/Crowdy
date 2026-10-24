@@ -19,7 +19,7 @@ from app.schemas.layout import Layout
 from app.schemas.scenario import AgentDefaults, Population, Region, SimulationSettings
 from app.services.floorplans.layout import compile_layout
 from app.services.floorplans.providers import ProviderError, extract_drawing
-from app.services.floorplans.calibration import calibrate
+from app.services.floorplans.calibration import calibrate, calibrate_drawing
 
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -176,7 +176,7 @@ def extract_image(request: ExtractionRequest, root: Path) -> dict:
             (directory / "context.json").write_text(json.dumps({"source": original.model_dump(mode="json"),
                 "info": info.model_dump(mode="json"), "people_count": request.people_count}))
             if request.meters_per_pixel is None:
-                source, reason = calibrate(original, drawing.scale_references, provider)
+                source, reason = calibrate_drawing(original, drawing, provider)
                 if source is None:
                     results.append({"provider": provider, "needs_scale": True, "extraction_id": info.id,
                         "image_id": original.id, "width_px": original.width_px, "height_px": original.height_px,
@@ -198,13 +198,16 @@ def extract_image(request: ExtractionRequest, root: Path) -> dict:
 
 def save_candidate(drawing, source, info, people_count, directory):
     layout = drawing_to_layout(drawing, source, info.provider, info, people_count)
+    notes = list(layout.extraction.warnings)
+    if source.calibration and source.calibration.method == "estimated":
+        notes.append("Scale estimated from assumed object sizes. Use Edit scale to replace it with a known measurement.")
     issues = []
     try:
         compile_layout(layout)
     except ValueError as exc:
         issues.append(str(exc))
     result = {"provider": info.provider, "model": info.model, "layout": layout.model_dump(mode="json"),
-              "warnings": layout.extraction.warnings, "issues": issues,
+              "warnings": notes, "issues": issues,
               "elapsed_seconds": info.elapsed_seconds,
               "counts": {name: len(getattr(layout, name)) for name in ("rooms", "walls", "doors", "furniture", "exits")}}
     (directory / "candidate.json").write_text(json.dumps(result, indent=2, allow_nan=False))
