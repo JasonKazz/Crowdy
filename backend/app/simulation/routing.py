@@ -112,6 +112,21 @@ class RoutePlanner:
                 return path[index], index
         return path[cursor], cursor
 
+    def update_route(self, position, path, cursor, exit_polygon):
+        """Recover locally when a crowd displaces someone behind a door jamb.
+
+        An old visible corner may be far behind someone who already passed it.
+        Route from the actual position instead of walking back to that corner.
+        Keep the same destination so recovery does not change exit or door lane.
+        """
+        target, index = self.next_target(position, path, cursor)
+        if index < cursor or not self.visible_body_space.covers(LineString([position, target])):
+            replacement = self.route(position, exit_polygon, preferred=path[-1])
+            if replacement is not None:
+                _, path = replacement
+                target, index = self.next_target(position, path, 1)
+        return target, path, index
+
 
 def plan_routes(scenario, geometry=None, planner=None):
     planner = planner or RoutePlanner(geometry if geometry is not None else build_geometry(scenario), scenario.agent_defaults.radius)

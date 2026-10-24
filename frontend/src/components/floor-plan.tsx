@@ -319,6 +319,7 @@ export default function FloorPlanView({
   const viewWidth = plan.width || 900;
   const viewHeight = plan.height || 600;
   const metre = plan.native?.transform.pixels_per_metre ?? 32;
+  const personRadius = result?.agentRadius ?? .2;
   const cellWidth = 2 * metre;
   const visiblePeople = result
     ? result.agents.flatMap((agent) => {
@@ -752,7 +753,7 @@ export default function FloorPlanView({
                 key={agent.id}
                 cx={point.x}
                 cy={point.y}
-                r={plan.native ? metre * .2 : 3.15}
+                r={metre * personRadius}
                 fill={
                   agent.id % 7 === 0
                     ? "#bb8e61"

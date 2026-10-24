@@ -99,7 +99,8 @@ def run_simulation(scenario: Scenario) -> dict:
     for step in range(1, max_steps + 1):
         for agent in simulation.agents():
             if step == 1 or step % steering_interval == 0:
-                target, cursors[agent.id] = planner.next_target(agent.position, agent_paths[agent.id], cursors[agent.id])
+                target, agent_paths[agent.id], cursors[agent.id] = planner.update_route(
+                    agent.position, agent_paths[agent.id], cursors[agent.id], exit_shapes[agent_exits[agent.id]])
                 agent.target = target
         simulation.iterate()
 

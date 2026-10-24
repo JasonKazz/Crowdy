@@ -64,6 +64,31 @@ class BoundaryExit:
     label: str
     origin: tuple[float, float]
     normal: tuple[float, float]
+    width: float
+
+
+def _boundary_opening(plan, floor, origin, normal):
+    """Measure the actual gap between wall segments along this floor edge."""
+    tangent = (-normal[1], normal[0])
+    edge_points = [p for p in list(floor.exterior.coords)[:-1]
+                   if abs(sum((p[i] - origin[i]) * normal[i] for i in range(2))) < 1e-7]
+    collinear_walls = []
+    for wall in plan["walls"]:
+        points = [pixel_to_metres(wall["x1"], wall["y1"]), pixel_to_metres(wall["x2"], wall["y2"])]
+        if all(abs(sum((p[i] - origin[i]) * normal[i] for i in range(2))) < 1e-7 for p in points):
+            collinear_walls.append(LineString(points).buffer(WALL_HALF_WIDTH, cap_style=2))
+    # A bare boundary with only a point marker has no measured door width.
+    if len(edge_points) != 2 or not collinear_walls:
+        return origin, 1.4
+    edge_points.sort(key=lambda p: sum(p[i] * tangent[i] for i in range(2)))
+    opening = LineString(edge_points).difference(unary_union(collinear_walls))
+    pieces = [opening] if opening.geom_type == "LineString" else list(getattr(opening, "geoms", []))
+    for piece in pieces:
+        if piece.geom_type == "LineString" and piece.length > 0 and piece.distance(Point(origin)) < 1e-7:
+            centre = piece.interpolate(.5, normalized=True)
+            return (centre.x, centre.y), piece.length
+    # Keep the normal obstruction check's actionable error for a blocked marker.
+    return origin, 1.4
 
 
 def _editor_geometry(plan: dict):
@@ -93,17 +118,18 @@ def _editor_geometry(plan: dict):
         ]
         distance, normal, origin = min(candidates, key=lambda candidate: candidate[0])
         if distance <= 4.0:
+            origin, door_width = _boundary_opening(plan, base_floor, origin, normal)
             # Extend only the floor. Existing wall segments remain obstacles;
             # this never cuts a new opening through a solid wall.
-            landing = _along(origin, normal, -0.15, 1.5, 0.7)
+            landing = _along(origin, normal, -0.15, 1.5, door_width / 2)
             floor_parts.append(landing)
             areas.append(_region(f"editor-landing-{index}", landing))
-            stage = _along(origin, normal, AGENT_RADIUS + .02, AGENT_RADIUS + .20, .35)
+            stage = _along(origin, normal, AGENT_RADIUS + .02, AGENT_RADIUS + .20, door_width / 2 - .01)
             # RoutePlanner reads the first edge as the cross-door threshold.
             # Keep that edge tangent to the doorway, as the layout compiler does.
             corners = list(stage.exterior.coords)[:-1]
             stage = Polygon([corners[i] for i in (0, 3, 2, 1)])
-            boundary_exits.append(BoundaryExit(exit["id"], exit["label"], origin, normal))
+            boundary_exits.append(BoundaryExit(exit["id"], exit["label"], origin, normal, door_width))
         else:
             if not base_floor.contains(Point(centre)):
                 raise ValueError(f"Exit '{exit['label']}' lies outside the floor boundary")
@@ -193,8 +219,8 @@ def editor_to_scenario(plan: dict, settings: dict) -> Scenario:
         "obstacles": [region.model_dump() for region in obstacles],
         "exits": [region.model_dump() for region in exits],
         "exit_boundaries": [ExitBoundary(id=exit.identifier,
-            start=(exit.origin[0] - exit.normal[1] * .7, exit.origin[1] + exit.normal[0] * .7),
-            end=(exit.origin[0] + exit.normal[1] * .7, exit.origin[1] - exit.normal[0] * .7),
+            start=(exit.origin[0] - exit.normal[1] * exit.width / 2, exit.origin[1] + exit.normal[0] * exit.width / 2),
+            end=(exit.origin[0] + exit.normal[1] * exit.width / 2, exit.origin[1] - exit.normal[0] * exit.width / 2),
             outward=exit.normal, outside_space="open").model_dump() for exit in boundary_exits],
         "population": {"count": settings["occupancy"], "seed": POPULATION_SEED, "spawn_area_ids": ["editor-floor"]},
         "agent_defaults": {"radius": AGENT_RADIUS, "desired_speed": 1.2},

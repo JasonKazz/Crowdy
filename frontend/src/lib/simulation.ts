@@ -69,6 +69,8 @@ export type SimulationResult = {
   createdAt: number;
   engine?: "jupedsim" | "browser";
   engineVersion?: string;
+  /** Physical collision-body radius in metres from the native engine. */
+  agentRadius?: number;
   modelSettings?: {
     dt: number;
     sampleInterval: number;

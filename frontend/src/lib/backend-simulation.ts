@@ -80,6 +80,9 @@ export function adaptBackendSimulation(
     invalid("status is unsupported");
   const status = result.status;
   const backendScenario = record(result.scenario, "scenario");
+  const defaults = backendScenario.agent_defaults === undefined ? undefined : record(backendScenario.agent_defaults,"agent defaults");
+  const agentRadius = defaults === undefined ? .2 : finite(defaults.radius,"person radius",0);
+  if (agentRadius === 0) invalid("person radius must be positive");
   const engineVersion = result.engine_version === undefined
     ? undefined
     : identifier(result.engine_version, "engine version");
@@ -272,6 +275,7 @@ export function adaptBackendSimulation(
     hotspot,
     createdAt,
     engine: "jupedsim",
+    agentRadius,
     ...(engineVersion === undefined ? {} : { engineVersion }),
     ...(modelSettings === undefined ? {} : { modelSettings }),
     status,

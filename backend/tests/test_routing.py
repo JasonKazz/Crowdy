@@ -79,6 +79,23 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(planner.visible_body_space.covers(LineString([start, target])))
         self.assertLess(index, len(route['path']) - 1)
 
+    def test_displaced_agent_reroutes_locally_around_door_jamb(self):
+        scenario = compile_layout(room())
+        scenario.occupants = [Occupant(id='person', position=(2, 7))]
+        planner = RoutePlanner(build_geometry(scenario), .2)
+        path = plan_routes(scenario, planner=planner)[0]['path']
+        displaced = (9.75, 5.2)
+        self.assertFalse(planner.visible_body_space.covers(LineString([displaced, path[-1]])))
+        target, recovered, index = planner.update_route(displaced, path, len(path) - 1,
+                                                       Polygon(scenario.exits[0].polygon))
+        self.assertEqual(recovered[0], displaced)
+        self.assertEqual(recovered[-1], path[-1])
+        self.assertTrue(planner.visible_body_space.covers(LineString([displaced, target])))
+        self.assertGreaterEqual(target[0], 9.5)
+        self.assertLess(target[1], displaced[1])
+        self.assertLess(LineString(recovered).length, 2)
+        self.assertGreaterEqual(index, 1)
+
     def test_open_space_flares_but_corridor_keeps_door_width(self):
         open_layout = room()
         open_scenario = compile_layout(open_layout)

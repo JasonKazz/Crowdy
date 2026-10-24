@@ -60,6 +60,13 @@ assert.deepEqual(positionAt(transformed.agents[1],4),{x:170,y:280});
 assert.equal(transformed.agents[0].duration,2.5,"Coordinate conversion must preserve native departure times");
 assert.equal(result.engine, "jupedsim");
 assert.equal(result.engineVersion, "1.4.2");
+assert.equal(result.agentRadius,.2,"Older recorded fixtures retain the native default body radius");
+const sizedFixture = structuredClone(fixture);
+sizedFixture.scenario.agent_defaults = {radius:.32,desired_speed:1.2};
+assert.equal(adaptBackendSimulation(sizedFixture,planInput,scenarioInput,1234).agentRadius,.32,
+  "The person glyph must receive the native collision-body radius in metres");
+sizedFixture.scenario.agent_defaults.radius = 0;
+assert.throws(()=>adaptBackendSimulation(sizedFixture,planInput,scenarioInput,1234),/person radius/);
 assert.deepEqual(result.modelSettings, { dt: 0.01, sampleInterval: 0.2, maxTime: 60, seed: 42 });
 assert.equal(result.status, "timed_out");
 assert.equal(result.totalTime, 4, "Playback horizon must be the recorded simulation time");

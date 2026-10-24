@@ -2,6 +2,7 @@
 
 import copy
 import json
+import math
 import os
 import threading
 import unittest
@@ -10,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from shapely.geometry import Point
+from shapely.geometry import LineString, Point, Polygon
 
 from app import api
 from app.simulation.editor_adapter import editor_to_scenario, pixel_to_metres
@@ -45,6 +46,30 @@ def room_request(count=12):
 
 
 class EditorAdapterTests(unittest.TestCase):
+    def test_exit_width_matches_the_wall_opening(self):
+        payload = room_request()
+        scenario = editor_to_scenario(payload['plan'], payload['scenario'])
+        for boundary, exit in zip(scenario.exit_boundaries, scenario.exits):
+            self.assertAlmostEqual(math.dist(boundary.start, boundary.end), 2)
+            self.assertAlmostEqual(Polygon(exit.polygon).bounds[3] - Polygon(exit.polygon).bounds[1], 1.98)
+
+    def test_86_person_queue_recovers_without_walking_to_back_of_line(self):
+        payload = copy.deepcopy(SAMPLE)
+        payload['scenario']['occupancy'] = 86
+        result = run_simulation(editor_to_scenario(payload['plan'], payload['scenario']))
+        self.assertEqual(result['summary']['evacuated_count'], 86)
+        boundaries = {b['id']: LineString([b['start'], b['end']]) for b in result['scenario']['exit_boundaries']}
+        exits = {a['agent_id']: a['exit_id'] for a in result['assignments']}
+        closest = {}
+        for frame in result['frames']:
+            for person in frame['agents']:
+                identifier = person['id']
+                distance = boundaries[exits[identifier]].distance(Point(person['x'], person['y']))
+                closest[identifier] = min(closest.get(identifier, math.inf), distance)
+                if closest[identifier] < 2:
+                    self.assertLess(distance - closest[identifier], .5,
+                                    f'{identifier} retreated from the doorway at {frame["time"]} s')
+
     def test_units_walls_and_placement_clearance(self):
         payload = room_request()
         original = copy.deepcopy(payload)
