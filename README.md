@@ -35,7 +35,7 @@ examples/
 docs/
 ```
 
-The backend directories currently contain `.gitkeep` placeholders.
+Unused backend directories retain `.gitkeep` placeholders.
 
 ## Local configuration
 
@@ -61,3 +61,19 @@ A scenario supplies either explicit `occupants` or `population` settings. The la
 Agents choose an exit once, by shortest routed distance to an interior target point in each exit zone. This accounts for obstacles but does not optimize for congestion or dynamically change destinations. The result records initial `assignments`, departure `evacuations`, and `summary.per_exit_counts`. `clearance_time` is null if anyone remains at the time limit.
 
 The example uses meters, with x increasing right and y increasing up. The current geometry validator requires one connected walkable polygon; population placement also requires one connected spawn polygon.
+
+## Blocked-exit comparison
+
+From `backend/`, compare the same starting population with both exits available and with the east exit unavailable:
+
+```bash
+python -m app.simulation.compare_exits ../examples/two_exit_room.json --block-exit exit-east
+python -m app.simulation.animate data/two_exit_room_baseline_result.json
+python -m app.simulation.animate data/two_exit_room_blocked_result.json
+open data/two_exit_room_baseline_animation.html
+open data/two_exit_room_blocked_animation.html
+```
+
+This writes two result snapshots and `data/two_exit_room_comparison.json`. The comparison resolves the population once and reuses the exact IDs, positions, geometry, speeds, and time settings. The clearance-time difference is only reported when both runs evacuate everyone. Repeating a comparison for the same input filename replaces its previous comparison files.
+
+For an individual run, set `settings.blocked_exit_ids` to a list of exit IDs. Unknown IDs, duplicate IDs, and blocking every exit are rejected. Closure means the exit is unavailable as a destination for the entire simulation; it does not remove its landing from the floor or model a physical barricade, changing hazard, or timed closure. People choose among the available exits at the start. Playback shows blocked exit zones in red and counts departures per exit.

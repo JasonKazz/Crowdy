@@ -26,6 +26,7 @@ class SimulationSettings(InputModel):
     dt: float = Field(gt=0)
     sample_interval: float = Field(gt=0)
     max_time: float = Field(gt=0)
+    blocked_exit_ids: list[str] = Field(default_factory=list)
 
 
 class Population(InputModel):
@@ -57,4 +58,12 @@ class Scenario(InputModel):
             ids = [item.id for item in getattr(self, name)]
             if len(ids) != len(set(ids)):
                 raise ValueError(f"{name} IDs must be unique")
+        blocked = self.settings.blocked_exit_ids
+        if len(blocked) != len(set(blocked)):
+            raise ValueError("Blocked exit IDs must be unique")
+        unknown = sorted(set(blocked) - {region.id for region in self.exits})
+        if unknown:
+            raise ValueError(f"Unknown blocked exit IDs: {', '.join(unknown)}")
+        if len(blocked) == len(self.exits):
+            raise ValueError("At least one exit must remain available")
         return self

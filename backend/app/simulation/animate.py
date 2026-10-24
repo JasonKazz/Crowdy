@@ -64,14 +64,17 @@ HTML = r'''<!doctype html>
         <option value="4">4×</option>
       </select>
     </div>
+    <div id="exit-counts" class="legend muted"></div>
     <div class="legend muted">Blue: people &nbsp; · &nbsp; Gray: furniture
-      &nbsp; · &nbsp; Green: exit &nbsp; · &nbsp; Distances in meters</div>
+      &nbsp; · &nbsp; Green: available exit &nbsp; · &nbsp; Red: blocked exit
+      &nbsp; · &nbsp; Distances in meters</div>
   </section>
 </main>
 <script id="simulation-data" type="application/json">__DATA__</script>
 <script>
 const data = JSON.parse(document.getElementById('simulation-data').textContent);
 const scenario = data.scenario;
+const blockedExits = new Set(scenario.settings.blocked_exit_ids || []);
 const frames = data.frames;
 const duration = frames[frames.length - 1].time;
 const exitedAt = new Map(data.evacuations.map(e => [e.agent_id, e.time]));
@@ -162,7 +165,9 @@ function render() {
   ctx.fillStyle = '#fff'; ctx.fill('evenodd');
   ctx.strokeStyle = '#46556b'; ctx.lineWidth = 2; ctx.stroke();
   scenario.obstacles.forEach(o => polygon(o.polygon, '#b7c2d2', '#70829a'));
-  scenario.exits.forEach(e => polygon(e.polygon, '#b4efcf', '#248258'));
+  scenario.exits.forEach(e => polygon(e.polygon,
+    blockedExits.has(e.id) ? '#fecaca' : '#b4efcf',
+    blockedExits.has(e.id) ? '#b42318' : '#248258'));
 
   for (const agent of positionsAt(time)) {
     const [x, y] = screen(agent.x, agent.y);
@@ -176,6 +181,11 @@ function render() {
 
   const exited = data.evacuations.filter(e => e.time <= time).length;
   counts.textContent = `${scenario.occupants.length - exited} remaining · ${exited} exited`;
+  document.getElementById('exit-counts').textContent = scenario.exits.map(e => {
+    const count = data.evacuations.filter(event => event.exit_id === e.id && event.time <= time).length;
+    const label = blockedExits.has(e.id) ? ' (blocked)' : '';
+    return `${e.id}${label}: ${count} exited`;
+  }).join(' · ');
   clock.textContent = `${time.toFixed(2)} / ${duration.toFixed(2)} s`;
   timeline.value = duration > 0 ? Math.round(time / duration * 10000) : 0;
   play.textContent = playing ? 'Pause' : 'Play';

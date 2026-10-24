@@ -8,6 +8,8 @@ from app.simulation.geometry import build_geometry, region_to_polygon
 
 
 def run_simulation(scenario: Scenario) -> dict:
+    # Revalidate in case an interactive caller changed a model in place.
+    scenario = Scenario.model_validate(scenario.model_dump())
     population_config = scenario.population
     scenario = resolve_population(scenario)
 
@@ -38,11 +40,14 @@ def run_simulation(scenario: Scenario) -> dict:
     router = jps.RoutingEngine(geometry)
     exit_options = []
     exit_polygons = []
+    blocked_exits = set(settings.blocked_exit_ids)
     for exit_region in sorted(scenario.exits, key=lambda region: region.id):
         polygon = region_to_polygon(exit_region)
         if any(polygon.intersects(other) for other in exit_polygons):
             raise ValueError("Exit regions must not overlap or touch")
         exit_polygons.append(polygon)
+        if exit_region.id in blocked_exits:
+            continue
         stage = simulation.add_exit_stage(polygon)
         journey = simulation.add_journey(jps.JourneyDescription([stage]))
         target = polygon.representative_point()
