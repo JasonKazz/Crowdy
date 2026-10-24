@@ -86,6 +86,4 @@ class Scenario(InputModel):
         unknown = sorted(set(blocked) - {region.id for region in self.exits})
         if unknown:
             raise ValueError(f"Unknown blocked exit IDs: {', '.join(unknown)}")
-        if len(blocked) == len(self.exits):
-            raise ValueError("At least one exit must remain available")
         return self

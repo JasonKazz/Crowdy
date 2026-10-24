@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   adaptBackendSimulation,
   runBackendSimulation,
+  sameStartingPopulation,
 } from "../src/lib/backend-simulation.ts";
 import {
   SAMPLE_PLAN,
@@ -255,7 +256,7 @@ try {
   const run = runBackendSimulation(plan, scenario, { signal: controller.signal });
   plan.items[0].x += 100;
   const fetched = await run;
-  assert.deepEqual(submitted, { plan: SAMPLE_PLAN, scenario });
+  assert.deepEqual(submitted, { plan: SAMPLE_PLAN, scenario: {...scenario,blocked_exit_ids:[]} });
   assert.deepEqual(fetched.plan, SAMPLE_PLAN, "Async requests must retain their submitted snapshot");
   globalThis.fetch = async () => Response.json({ error: "This plan has no reachable exits." }, { status: 422 });
   await assert.rejects(runBackendSimulation(SAMPLE_PLAN, scenario), /This plan has no reachable exits\./);
@@ -272,3 +273,28 @@ try {
 }
 
 console.log(`Backend simulation checks passed: native completed/timeout fixtures, measured pauses, timeout motion, exact departures, coordinates, density, snapshots, HTTP errors, and ${invalidChecks} invalid responses.`);
+
+// Trapped people remain measured, visible, and distinct from timed-out movers.
+const trappedFixture = structuredClone(fixture);
+trappedFixture.status = "trapped";
+trappedFixture.summary.trapped_count = 1;
+trappedFixture.summary.moving_remaining_count = 0;
+trappedFixture.assignments[0] = {agent_id:"source-a",exit_id:null,route_length:null,status:"trapped"};
+for (const frame of trappedFixture.frames) for (const agent of frame.agents)
+  if (agent.id === "source-a") {agent.x=2.5; agent.y=10;}
+const trappedResult = adaptBackendSimulation(trappedFixture,SAMPLE_PLAN,scenario);
+assert.equal(trappedResult.trapped,1);
+assert.equal(trappedResult.movingRemaining,0);
+assert.equal(trappedResult.agents[1].outcome,"trapped");
+assert.deepEqual(positionAt(trappedResult.agents[1],4),positionAt(trappedResult.agents[1],0));
+assert.equal(trappedResult.clearanceTime,null);
+const same = structuredClone(trappedResult);
+same.startingOccupants.reverse();
+assert.ok(sameStartingPopulation(trappedResult,same));
+same.startingOccupants[0].position[0]+=.01;
+assert.ok(!sameStartingPopulation(trappedResult,same));
+const falseTrapped = structuredClone(trappedFixture);
+falseTrapped.summary.moving_remaining_count=1;
+assert.throws(()=>adaptBackendSimulation(falseTrapped,SAMPLE_PLAN,scenario),/remaining outcomes/);
+assert.throws(()=>adaptBackendSimulation(fixture,SAMPLE_PLAN,{...scenario,blockedExitIds:["exit-a"]}),/blocked exit/);
+console.log("Trapped playback, outcome totals, blocked assignments and matched-start comparison checks passed.");

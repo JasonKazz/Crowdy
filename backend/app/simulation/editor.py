@@ -31,7 +31,7 @@ def validate_layout(layout: Layout) -> dict:
     return {
         "area_m2": geometry.area,
         "occupants": [person.model_dump(mode="json") for person in resolved.occupants],
-        "routes": plan_routes(resolved, geometry),
+        "routes": plan_routes(resolved, geometry, allow_trapped=True),
         "scenario": scenario.model_dump(mode="json"),
     }
 

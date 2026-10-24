@@ -40,7 +40,8 @@ def run_simulation(scenario: Scenario) -> dict:
     )
 
     planner = RoutePlanner(geometry, scenario.agent_defaults.radius)
-    assignments = plan_routes(scenario, planner=planner)
+    assignments = plan_routes(scenario, planner=planner, allow_trapped=True)
+    trapped = {assignment["agent_id"] for assignment in assignments if assignment["exit_id"] is None}
     steering_stage = simulation.add_direct_steering_stage()
     steering_journey = simulation.add_journey(jps.JourneyDescription([steering_stage]))
     exit_shapes = {}
@@ -61,12 +62,14 @@ def run_simulation(scenario: Scenario) -> dict:
     cursors = {}
     for occupant, assignment in zip(scenario.occupants, assignments):
         exit_id = assignment["exit_id"]
+        speed = occupant.desired_speed if occupant.desired_speed is not None else scenario.agent_defaults.desired_speed
+        if occupant.id in trapped:
+            speed = 0
         engine_id = simulation.add_agent(
             jps.CollisionFreeSpeedModelAgentParameters(
                 position=occupant.position,
                 radius=scenario.agent_defaults.radius,
-                desired_speed=(occupant.desired_speed if occupant.desired_speed is not None
-                               else scenario.agent_defaults.desired_speed),
+                desired_speed=speed,
                 journey_id=steering_journey,
                 stage_id=steering_stage,
             )
@@ -75,6 +78,8 @@ def run_simulation(scenario: Scenario) -> dict:
         agent_exits[engine_id] = exit_id
         agent_paths[engine_id] = assignment["path"]
         cursors[engine_id] = 1
+        if occupant.id in trapped:
+            simulation.agent(engine_id).target = occupant.position
 
     def capture_frame():
         return {
@@ -96,8 +101,11 @@ def run_simulation(scenario: Scenario) -> dict:
     boundaries = {boundary.id: boundary for boundary in scenario.exit_boundaries}
     steering_interval = max(1, round(.1 / settings.dt))
 
-    for step in range(1, max_steps + 1):
+    steps_to_run = 0 if len(trapped) == len(ids) else max_steps
+    for step in range(1, steps_to_run + 1):
         for agent in simulation.agents():
+            if agent_ids[agent.id] in trapped:
+                continue
             if step == 1 or step % steering_interval == 0:
                 target, agent_paths[agent.id], cursors[agent.id] = planner.update_route(
                     agent.position, agent_paths[agent.id], cursors[agent.id], exit_shapes[agent_exits[agent.id]])
@@ -105,6 +113,8 @@ def run_simulation(scenario: Scenario) -> dict:
         simulation.iterate()
 
         for agent in list(simulation.agents()):
+            if agent_ids[agent.id] in trapped:
+                continue
             boundary = boundaries.get(agent_exits[agent.id])
             position = agent.position
             if boundary is not None and agent.id not in crossed:
@@ -118,7 +128,7 @@ def run_simulation(scenario: Scenario) -> dict:
                                     "time": round(simulation.elapsed_time(), 8)})
                 simulation.mark_agent_for_removal(agent.id)
 
-        finished = simulation.agent_count() == 0
+        finished = simulation.agent_count() == len(trapped)
         if step % sample_steps == 0 or finished or step == max_steps:
             frames.append(capture_frame())
 
@@ -126,19 +136,24 @@ def run_simulation(scenario: Scenario) -> dict:
             break
 
     completed = simulation.agent_count() == 0
+    moving_remaining = simulation.agent_count() - len(trapped)
     return {
-        "status": "completed" if completed else "timed_out",
+        "status": "completed" if completed else "trapped" if moving_remaining == 0 else "timed_out",
         "scenario": scenario.model_dump(mode="json"),
         "population_generation": (
             population_config.model_dump(mode="json") if population_config else None
         ),
         "assignments": assignments,
+        "trapped": [{"agent_id": identifier, "reason": "No body-clear route to an available exit"}
+                    for identifier in sorted(trapped)],
         "frames": frames,
         "evacuations": evacuations,
         "door_crossings": door_crossings,
         "summary": {
             "evacuated_count": len(evacuations),
             "remaining_count": simulation.agent_count(),
+            "trapped_count": len(trapped),
+            "moving_remaining_count": moving_remaining,
             "simulation_time": round(simulation.elapsed_time(), 8),
             "clearance_time": (
                 round(simulation.elapsed_time(), 8) if completed else None

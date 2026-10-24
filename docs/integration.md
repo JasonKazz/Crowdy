@@ -36,7 +36,7 @@ Keep an existing `.env.local`. If none exists, copy `frontend/.env.example` to `
 
 People are drawn using the native collision-body radius and the canvas metre scale, including the original sample. Boundary exits in the original pixel-plan format use the measured gap between exterior wall segments; an unmeasured bare-edge marker retains a 1.4 m default opening. If crowd movement blocks a person's current route near a door jamb, the engine replans locally from their actual position to the same destination instead of retreating to an old waypoint. Short avoidance movements can still occur; this is not an explicit first-in-first-out queue model.
 
-The UI currently supports 10–200 people. Backend files may contain larger populations, but the scenario controls determine the submitted population. Imported manual starts are regenerated for interactive editing; original source files remain untouched. The standalone editor supports explicit fixed starts for comparisons.
+The UI currently supports 10–200 people. Backend files may contain larger populations, but the scenario controls determine the submitted population. Imported manual starts are regenerated for interactive editing; original source files remain untouched. Pinning a native run in the integrated workspace freezes its starting IDs, positions, body radius, and per-person speeds for subsequent layout/exit comparisons. The standalone editor also supports explicit fixed starts.
 
 ## Remaining limitations
 
@@ -54,3 +54,17 @@ From `backend/`: `python -m unittest discover -s tests`, plus the four `node tes
 From `frontend/`: `npm run lint`, `npm run build`, `npm run test:simulation`, `npm run test:backend-simulation`, `npm run test:workspaces`, and `npm run test:native-editor`. With both services running, run `npm run test:backend-api` and `npm run test:auth`.
 
 The checks include real native evacuation through both geometry formats, edited polygon furniture, calibrated playback, stable seeds, mixed speeds, retained workspace geometry, invalid input recovery, and image extraction using a mocked provider. Synthetic Auth0 sessions test the application's session handling; they do not verify the team's actual login/callback configuration. Real image-provider requests are not needed for the integration regression suite.
+
+## Blocked exits and matched comparisons
+
+In Scenario, mark exits unavailable for the entire run. Every exit may be blocked. This removes destinations from routing without adding a physical barricade or simulating a timed closure. Automatic initial placement considers the original floor and all entrances, independent of which exits are blocked; blocking an exit therefore does not regenerate people in more favorable locations.
+
+People with no body-clear route to an available exit at the start are `trapped`: they remain stationary as collision bodies and remain in every recorded frame. Other people continue evacuating. Summary fields separate `trapped_count` and `moving_remaining_count`, with their sum equal to `remaining_count`. `moving_remaining_count` means a person has a route but has not evacuated by the time limit, including waiting in a queue. It does not guarantee nonzero instantaneous velocity.
+
+Status is `completed` if everyone leaves, `trapped` when only trapped people remain, or `timed_out` when routed people remain at the configured limit. An all-trapped run is classified at time zero. Full clearance time is null whenever anyone remains; it is never reported as a successful zero-second evacuation. Trapped is geometric reachability for the configured circular body, not injury, survivability, panic, or a prediction of human decisions. Geometry must still form one connected walkable polygon; disconnected-floor support is not added here.
+
+Run with all exits available, then choose **Pin current run as baseline**. Population controls freeze while exit availability and geometry remain editable. The next request sends `starting_population` (occupants, radius, mobility, distribution, seed) to Python. The backend validates the settings and original positions against the edited geometry; it does not relocate a person who now overlaps furniture. A new image import or layout reset clears the baseline.
+
+The frontend verifies identical starting IDs, positions, per-person speeds and radius before enabling comparison. Playback uses one shared clock. The comparison shows evacuated/trapped/still-moving counts, peak sampled density, per-exit totals, and clearance-time change only when both runs fully evacuate. Export includes both run snapshots and the matched initial population. Starts and baselines remain session-only; saved workspace setup retains exit selections.
+
+The simulation POST scenario accepts `blocked_exit_ids` (unique known exit IDs) and an optional `starting_population`. The native CLI comparison also supports all-exits-blocked cases and reports outcome-count changes.

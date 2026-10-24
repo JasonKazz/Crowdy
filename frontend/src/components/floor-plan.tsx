@@ -21,6 +21,7 @@ type Props = {
   zoom: number;
   reference?: string | null;
   showReference?: boolean;
+  blockedExitIds?: string[];
   referenceOpacity?: number;
   geometrySelection?: GeometrySelection;
   geometryTool?: GeometryTool;
@@ -328,6 +329,7 @@ export default function FloorPlanView({
   onGeometrySelect,
   onGeometryChange,
   onGeometryToolDone,
+  blockedExitIds = [],
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -761,6 +763,13 @@ export default function FloorPlanView({
           })}
         </g>
 
+        <g aria-label="Blocked exits">{plan.exits.filter(exit =>
+          (mode === "layout" ? blockedExitIds : result?.scenario.blockedExitIds ?? []).includes(exit.id)).map(exit =>
+          <g key={exit.id} transform={`translate(${exit.x} ${exit.y})`}>
+            <rect x="-14" y="-25" width="28" height="50" rx="3" fill="#f9e6df" stroke="#a43f32" />
+            <path d="M-8-10 8 10M8-10-8 10" stroke="#a43f32" strokeWidth="3" />
+            <title>{exit.label} blocked</title>
+          </g>)}</g>
         {mode==="layout"&&plan.native&&onGeometrySelect&&onGeometryChange&&onGeometryToolDone&&<GeometryEditorLayer
           key={geometryTool} plan={plan} selection={geometrySelection} tool={geometryTool}
           onSelect={onGeometrySelect} onChange={onGeometryChange} onPreview={setGeometryPreview} onToolDone={onGeometryToolDone}/>}
@@ -776,7 +785,7 @@ export default function FloorPlanView({
                 cy={point.y}
                 r={metre * personRadius}
                 fill={
-                  agent.id % 7 === 0
+                  agent.outcome === "trapped" ? "#b64235" : agent.id % 7 === 0
                     ? "#bb8e61"
                     : agent.id % 3 === 0
                       ? "#81978b"
@@ -785,7 +794,7 @@ export default function FloorPlanView({
                 stroke="#fff"
                 strokeWidth="1"
                 opacity="0.95"
-              />
+              ><title>{`${agent.sourceId ?? agent.id}${agent.outcome === "trapped" ? ": trapped, no available route" : ""}`}</title></circle>
             ))}
           </g>
         ) : null}

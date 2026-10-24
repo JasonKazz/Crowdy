@@ -276,7 +276,7 @@ $('auto-population').addEventListener('change',async()=>{
 });
 $('run').addEventListener('click',async()=>{setBusy(true);status('Running the backend simulation…');$('downloads').replaceChildren();
   try{const result=await post('/api/simulate',layout),s=result.summary;
-    status(`${result.status==='completed'?'Completed':'Time limit reached'} · ${s.evacuated_count} exited · ${s.remaining_count} remaining · `+
+    status(`${result.status==='completed'?'Completed':result.status==='trapped'?'Trapped':'Time limit reached'} · ${s.evacuated_count} exited · ${s.trapped_count||0} trapped · ${s.moving_remaining_count||0} still awaiting evacuation · `+
       (s.clearance_time===null?'Evacuation incomplete':`${s.clearance_time.toFixed(2)} s to evacuate`)+
       (s.building_clearance_time==null?'':` · Building empty at ${s.building_clearance_time.toFixed(2)} s`));
     for(const [name,path]of [['Open animation',result.playback_url],['Layout JSON',`/runs/${result.run_id}/layout`],

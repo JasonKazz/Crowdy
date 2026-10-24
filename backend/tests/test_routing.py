@@ -64,10 +64,10 @@ class RoutingTests(unittest.TestCase):
         # Point geometry is connected; the only paths to the door are 10 cm
         # around the ends or a 25 cm gap behind this table. A 40 cm body cannot fit.
         self.assertTrue(build_geometry(compile_layout(layout)).is_valid)
-        with self.assertRaisesRegex(ValueError, 'No body-clear route'):
-            validate_layout(layout)
-        with self.assertRaisesRegex(ValueError, 'No body-clear route'):
-            run_simulation(compile_layout(layout))
+        self.assertEqual(validate_layout(layout)['routes'][0]['status'], 'trapped')
+        result = run_simulation(compile_layout(layout))
+        self.assertEqual(result['summary']['trapped_count'], 1)
+        self.assertEqual(result['status'], 'trapped')
 
     def test_displaced_agent_can_return_to_an_earlier_safe_corner(self):
         scenario = compile_layout(regression_layout())
