@@ -15,7 +15,19 @@ Open the `http://127.0.0.1:...` address printed by the Python server. Opening `e
 7. Choose **Run simulation**, then **Open animation**. Results come from the existing Python/JuPedSim engine.
 8. Export editable JSON before closing if you want to keep unfinished edits. The original example file is never changed.
 
-**Undo** and **Redo** apply to object edits, settings changes, and imports. Furniture polygons can be resized and rotated in 15-degree steps. The Add menu creates furniture, walls, interior door openings, or exterior exit doors. New exterior exits attach to the first floor edge; choose another edge in the inspector and drag along it. Other new objects start near the middle of the first floor polygon.
+**Undo** and **Redo** apply to object edits, settings changes, and imports. Use the toolbar to draw furniture rectangles and wall segments directly on the canvas, or click to place a door on the nearest wall or an exit on the nearest boundary. The Add menu selects the corresponding placement tool.
+
+| Tool | Interaction |
+| --- | --- |
+| Select / Move (`V`) | Drag whole objects. Doors attach to the nearest appropriate wall or boundary edge. |
+| Resize (`S`) | Drag a square handle; the opposite corner stays fixed and every vertex scales. Hold Shift to keep proportions. Door handles adjust opening width. |
+| Rotate (`R`) | Drag the round handle; Shift snaps to 15-degree steps. Walls rotate with their attached doors. |
+| Vertices (`E`) | Edit individual polygon corners or wall endpoints deliberately. |
+| Pan (`H`) | Drag the canvas, or hold Space from another tool. Wheel zooms about the pointer. Fit view resets the viewport. |
+| Draw furniture (`F`), wall (`W`) | Drag the new shape on the canvas. Escape cancels. |
+| Place door (`D`), exit (`X`) | Click near the desired wall or exterior boundary. |
+
+The object list selects small objects without needing a precise canvas click. Layers can be hidden or locked; floors start locked to prevent accidental building edits. Arrow keys nudge by 0.1 m, or 1 m with Shift. Delete/Backspace removes a selected unlocked object. Cmd/Ctrl+D duplicates furniture or a wall and its doors. Cmd/Ctrl+Z undoes, and Shift+Cmd/Ctrl+Z redoes. Viewport pan/zoom does not change geometry or add undo entries. Resize is distinct from vertex editing, so dragging a resize handle cannot accidentally warp only one corner of a table.
 
 ## Editable format
 
@@ -25,7 +37,7 @@ Open the `http://127.0.0.1:...` address printed by the Python server. Opening `e
 - `furniture`: polygon obstacles, with stable IDs.
 - `walls`: a start point, end point, and thickness in meters.
 - `doors`: a parent `wall_id`, center distance `offset` measured along that wall, and clear opening `width`, all in meters.
-- `exits`: exterior door records with `id`, `floor_id`, zero-based `edge_index`, center distance `offset` from that edge's starting corner, opening `width`, and `landing_depth` (default 2 meters). The compiler connects a landing outside the building through that opening and puts the removal zone at the far end. Legacy scenario imports can retain polygon destinations and their existing explicit landings.
+- `exits`: exterior door records with `id`, `floor_id`, zero-based `edge_index`, center distance `offset`, opening `width`, `landing_depth`, `outside_space` (`open` by default or `corridor`), and optional `outside_width`. Open space widens through a short door-frame transition (at most 25 cm) into a wide clearing. Its default width is the door width plus twice its depth. Corridors retain the door width. People have different stable targets across open space, so they can disperse. Legacy scenario imports retain polygon destinations and their explicit exterior floor geometry.
 - `occupants` or `population`: explicit starting people or seeded placement settings, as in the existing scenarios.
 - `agent_defaults` and `settings`: the existing movement defaults and time/exit settings.
 
@@ -38,6 +50,10 @@ Old scenario imports preserve their simulation inputs exactly. Existing obstacle
 ## Validation and results
 
 Checks reject invalid polygons, walls or furniture outside the floor, missing parent walls, overlapping door intervals, doors beyond wall ends, obstructed door openings, disconnected walking geometry, invalid exit settings, and invalid starting people. Exterior exits must attach to actual exterior edges, fit the configured people's diameter, and have unobstructed landings outside the building that do not overlap other landings. Generated populations are checked for capacity and clearance. Errors describe the object or geometry that needs correction.
+
+Checks also plan a body-clear route for every starting person. Round offsets model the space a circular body needs at wall corners; a visibility graph routes around furniture and excludes gaps too narrow for that body. Runs use look-ahead steering along those routes while retaining JuPedSim's local collision-free speed model. Steering can return to an earlier corner when a neighbor pushes someone away from a previously visible route. **Show planned routes** overlays the checked paths. These routes do not dynamically choose a different exit or model behavioral knowledge/panic.
+
+`door_crossings` records each person's full body leaving the building. `summary.building_clearance_time` is the last crossing when everyone has crossed; it is null for legacy scenarios without boundary metadata or incomplete building evacuation. `summary.clearance_time` includes walking through the exterior clearing/corridor to the removal area. Thus a long outside area does not silently redefine the time the building becomes empty. Outside regions are finite approximations; a real exterior with obstacles needs explicit modeling rather than an unbounded-open-space claim.
 
 Doors are always open gaps in this version. Closing an exit makes that destination unavailable but does not insert a barricade. There is no timed door closure or door-swing simulation. Image import and Gemini/Claude extraction are described in [the image guide](image-extraction.md). The editor inherits the simulator's requirement for one connected walkable polygon and the population generator's requirement for one connected spawn polygon.
 

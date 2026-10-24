@@ -17,6 +17,7 @@ from app.services.population.generate import resolve_population
 from app.simulation.animate import render_html
 from app.simulation.engine import run_simulation
 from app.simulation.geometry import build_geometry
+from app.simulation.routing import plan_routes
 
 
 MAX_BODY = 2 * 1024 * 1024
@@ -30,6 +31,7 @@ def validate_layout(layout: Layout) -> dict:
     return {
         "area_m2": geometry.area,
         "occupants": [person.model_dump(mode="json") for person in resolved.occupants],
+        "routes": plan_routes(resolved, geometry),
         "scenario": scenario.model_dump(mode="json"),
     }
 
@@ -94,7 +96,7 @@ class EditorHandler(BaseHTTPRequestHandler):
         if path == "/":
             page = Path(__file__).with_name("editor.html").read_bytes()
             return self.send_content(200, page, "text/html; charset=utf-8")
-        if path in {"/editor-geometry.js", "/editor-image-tools.js"}:
+        if path in {"/editor-geometry.js", "/editor-image-tools.js", "/editor-app.js"}:
             script = Path(__file__).with_name(path[1:]).read_bytes()
             return self.send_content(200, script, "text/javascript; charset=utf-8")
         if path == "/api/layout":

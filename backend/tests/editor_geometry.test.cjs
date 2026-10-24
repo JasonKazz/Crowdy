@@ -35,3 +35,16 @@ close(G.doorOffset(exterior.wall,exit,[20,6]),6);
 const reversed=G.bounds(G.exitGeometry(exit,[{...floor,polygon:[...floor.polygon].reverse()}]).apron);
 for(const key of Object.keys(reversed))close(reversed[key],G.bounds(exterior.apron)[key]);
 console.log('Editor geometry checks passed: whole-object moves, wall cuts, attached doors, and outside exit geometry.');
+// Resizing keeps the opposite corner fixed and transforms every vertex.
+const corner=G.resizeCorner(rectangle,2,[8,7]);
+assert.deepEqual(corner,[[2,3],[8,3],[8,7],[2,7]]);
+const proportional=G.bounds(G.resizeCorner(rectangle,2,[8,6],true));
+close((proportional.maxX-proportional.minX)/(proportional.maxY-proportional.minY),1.5);
+assert.deepEqual(rectangle,[[2,3],[5,3],[5,5],[2,5]]);
+const attachment=G.nearestEdge([floor],[12,6],1.2);
+assert.equal(attachment.edge_index,1);close(attachment.offset,6);
+assert.equal(G.nearestEdge([floor],[5,-1],1.2).edge_index,0);
+assert.deepEqual(G.zoomBox([0,0,20,10],.5,[5,5]),[2.5,2.5,10,5]);
+const open=G.exitGeometry(exit,[floor]),corridor=G.exitGeometry({...exit,outside_space:'corridor'},[floor]);
+assert.ok(G.bounds(open.apron).maxY>G.bounds(corridor.apron).maxY+1);
+console.log('Canvas tool checks passed: anchored resizing, aspect ratio, boundary attachment, zoom, and open/corridor discharge.');

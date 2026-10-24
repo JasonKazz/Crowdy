@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const geometry = require('../app/simulation/editor-geometry.js');
 const html = fs.readFileSync(path.join(__dirname,'../app/simulation/editor.html'),'utf8');
-const script = html.split('<script>')[1].split('</script>')[0];
+const script = fs.readFileSync(path.join(__dirname,'../app/simulation/editor-app.js'),'utf8');
 
 async function startup(protocol) {
   const elements = new Map([...html.matchAll(/id="([^"]+)"/g)].map(([,id]) => [id, {

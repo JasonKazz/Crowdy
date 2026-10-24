@@ -58,7 +58,7 @@ The original `simple_room.json` and commands without arguments still work. Resul
 
 A scenario supplies either explicit `occupants` or `population` settings. The latter contains `count`, `seed`, and `spawn_area_ids` referencing walkable-area IDs. Placement is uniform within the selected connected area, excluding furniture and exit zones, with clearance between bodies and boundaries. It does not infer activities or seating. The saved result includes the resolved starting positions and the generation settings.
 
-Agents choose an exit once, by shortest routed distance to an interior target point in each exit zone. This accounts for obstacles but does not optimize for congestion or dynamically change destinations. The result records initial `assignments`, departure `evacuations`, and `summary.per_exit_counts`. `clearance_time` is null if anyone remains at the time limit.
+Agents choose an available exit using routes that leave room for their full body radius around walls and furniture. A visibility graph on the clearance geometry supplies safe corners; look-ahead steering follows the route while JuPedSim handles local movement and interactions. Routes are checked before simulation, so a point-sized gap cannot silently trap people. Exit choice is fixed for the run and does not optimize congestion. Results include planned paths in `assignments`, exterior-door `door_crossings`, final `evacuations`, and per-exit counts. `building_clearance_time` records when the last full body crosses the building boundary; `clearance_time` includes discharge through the modeled exterior area and is null if anyone remains.
 
 The example uses meters, with x increasing right and y increasing up. The current geometry validator requires one connected walkable polygon; population placement also requires one connected spawn polygon.
 
@@ -100,7 +100,9 @@ python -m app.simulation.editor ../examples/two_exit_room.json
 
 Each run saves `layout.json`, `scenario.json`, `result.json`, and `playback.html` in a separate `backend/data/editor/<run_id>/` directory. Existing saved files remain after restarting; run links are available during the current server session. Source examples are never overwritten. See [the editor guide](docs/layout-editor.md) for the geometry format and limitations.
 
-Run the Python checks with `python -m unittest discover -s tests -v`. If Node.js is available, the editor's coordinate and door-dragging helpers can also be checked with `node tests/editor_geometry.test.cjs`.
+The canvas offers Select/Move, Resize, Rotate, Vertices, Pan, drawing furniture and walls, placing doors and exits, zoom, layers/locks, duplicate/delete, and undo/redo. Floors start locked. **Check layout** can display the planned routes. Exterior exits support **Open area** (a wide clearing with spread destinations) or **Corridor** (door-width discharge). Open clearings are finite local approximations; model a real constrained exterior as a corridor or explicit geometry.
+
+Run the Python checks with `python -m unittest discover -s tests -v`. Node checks: `node tests/editor_geometry.test.cjs`, `node tests/editor_startup.test.cjs`, and `node tests/editor_image_tools.test.cjs`. `examples/narrow_table_regression.json` preserves the 40 starting people from the formerly stuck table layout; run it in the editor to inspect the detours.
 
 ## Start from an image
 

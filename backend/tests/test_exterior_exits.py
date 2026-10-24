@@ -34,7 +34,7 @@ class ExteriorExitTests(unittest.TestCase):
         geometry = build_geometry(scenario)
         self.assertGreaterEqual(target.bounds[0], 11.6)
         self.assertTrue(geometry.contains(Point(10.5, 4)))
-        self.assertFalse(geometry.contains(Point(10.5, 2)))
+        self.assertFalse(geometry.contains(Point(10.01, 2)))
         self.assertFalse(target.intersects(Polygon(room().walkable_areas[0].polygon)))
 
     def test_agent_crosses_outside_before_being_counted_as_evacuated(self):
@@ -43,7 +43,8 @@ class ExteriorExitTests(unittest.TestCase):
         positions = [a for f in result["frames"] for a in f["agents"]]
         self.assertGreater(positions[-1]["x"], 11.5)
         self.assertTrue(any(p["x"] > 10.2 for p in positions))
-        self.assertTrue(all(3.4 <= p["y"] <= 4.6 for p in positions if p["x"] >= 10))
+        self.assertTrue(all(3.4 <= p["y"] <= 4.6 for p in positions if 9.95 <= p["x"] <= 10.05))
+        self.assertLess(result["summary"]["building_clearance_time"], result["summary"]["clearance_time"])
 
     def test_sliding_exit_closes_old_opening_and_moves_outside_destination(self):
         layout = room()

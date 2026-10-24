@@ -7,7 +7,8 @@
     for(const kind of ['walkable_areas','furniture','exits','rooms'])
       for(const region of next[kind]||[]){
         if(region.polygon)region.polygon=region.polygon.map(point);
-        else if(kind==='exits'){region.offset*=factor;region.width*=factor;region.landing_depth*=factor;}
+        else if(kind==='exits'){region.offset*=factor;region.width*=factor;region.landing_depth*=factor;
+          if(region.outside_width)region.outside_width*=factor;}
       }
     for(const wall of next.walls){wall.start=point(wall.start);wall.end=point(wall.end);wall.thickness*=factor;}
     for(const door of next.doors){door.offset*=factor;door.width*=factor;}

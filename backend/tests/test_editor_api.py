@@ -88,7 +88,7 @@ class EditorAPITests(unittest.TestCase):
         status, result = self.request("POST", "/api/validate", document)
         self.assertEqual(status, 200)
         self.assertEqual(len(result["occupants"]), 40)
-        self.assertAlmostEqual(result["area_m2"], 152.24)
+        self.assertAlmostEqual(result["area_m2"], 167.24)
 
     def test_invalid_edits_return_readable_errors_and_save_nothing(self):
         document = self.layout.model_dump(mode="json")

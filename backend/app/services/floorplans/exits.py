@@ -3,7 +3,7 @@
 import math
 
 from app.schemas.layout import ExitDoor
-from app.schemas.scenario import Region
+from app.schemas.scenario import ExitBoundary, Region
 
 
 def exit_geometry(door: ExitDoor, floor: Region) -> tuple[Region, Region, Region]:
@@ -21,15 +21,36 @@ def exit_geometry(door: ExitDoor, floor: Region) -> tuple[Region, Region, Region
     signed_area = sum(p[0] * q[1] - q[0] * p[1] for p, q in zip(points, points[1:] + points[:1]))
     nx, ny = (uy, -ux) if signed_area > 0 else (-uy, ux)
 
+    outside_width = door.outside_width or door.width + 2 * door.landing_depth
+    if door.outside_space == "open" and outside_width < door.width:
+        raise ValueError(f"Exit '{door.id}' open outside width cannot be narrower than its doorway")
+    spread = (outside_width - door.width) / 2 if door.outside_space == "open" else 0
+    transition = min(.25, door.landing_depth * .2)
+
+    def position(along, depth):
+        return (a[0] + ux * along + nx * depth, a[1] + uy * along + ny * depth)
+
     def rectangle(inner, outer, inset=0):
-        return [(a[0] + ux * along + nx * depth, a[1] + uy * along + ny * depth)
-                for along, depth in ((start + inset, inner), (end - inset, inner),
-                                     (end - inset, outer), (start + inset, outer))]
+        return [position(along + side * spread * min(1, max(0, depth) / transition), depth)
+                for along, depth, side in ((start + inset, inner, -1), (end - inset, inner, 1),
+                                           (end - inset, outer, 1), (start + inset, outer, -1))]
 
     # A small overlap with the interior prevents a numerical seam at the door.
-    apron = Region(id=f"exit-apron:{door.id}", polygon=rectangle(-0.05, door.landing_depth))
+    apron = Region(id=f"exit-apron:{door.id}", polygon=[position(start, -0.05), position(end, -0.05),
+        position(end, 0), position(end + spread, transition), position(end + spread, door.landing_depth),
+        position(start - spread, door.landing_depth), position(start - spread, transition), position(start, 0)])
     # Keep the removal stage just inside its apron, avoiding floating-point
     # boundary disagreements when a diagonal apron is unioned with the floor.
     target = Region(id=door.id, polygon=rectangle(door.landing_depth * 0.8, door.landing_depth - 0.01, 0.01))
-    threshold = Region(id=door.id, polygon=rectangle(-0.05, 0.05))
+    threshold = Region(id=door.id, polygon=[position(start, -.05), position(end, -.05),
+                                           position(end, .05), position(start, .05)])
     return apron, target, threshold
+
+
+def exit_boundary(door: ExitDoor, floor: Region) -> ExitBoundary:
+    _, _, threshold = exit_geometry(door, floor)
+    a, b, c, d = threshold.polygon
+    start = tuple((a[i] + d[i]) / 2 for i in range(2))
+    end = tuple((b[i] + c[i]) / 2 for i in range(2))
+    outward = tuple((d[i] - a[i]) / 0.1 for i in range(2))
+    return ExitBoundary(id=door.id, start=start, end=end, outward=outward, outside_space=door.outside_space)

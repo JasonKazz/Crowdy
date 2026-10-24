@@ -8,7 +8,7 @@ from pydantic import Field, model_validator
 from app.schemas.extraction import ExtractionInfo, SourceImage
 
 from app.schemas.scenario import (
-    AgentDefaults, InputModel, Occupant, Point, Population, Region,
+    AgentDefaults, ExitBoundary, InputModel, Occupant, Point, Population, Region,
     Scenario, SimulationSettings,
 )
 
@@ -42,6 +42,8 @@ class ExitDoor(InputModel):
     offset: float = Field(ge=0)
     width: float = Field(gt=0)
     landing_depth: float = Field(default=2.0, gt=0)
+    outside_space: Literal["open", "corridor"] = "open"
+    outside_width: float | None = Field(default=None, gt=0)
 
 
 def exit_from_marker(marker: Region, floors: list[Region]) -> ExitDoor:
@@ -86,6 +88,7 @@ class Layout(InputModel):
     # Polygon exits remain supported for imported simulation scenarios with
     # explicit doorway/landing floor polygons. New editor exits are ExitDoors.
     exits: list[ExitDoor | Region] = Field(default_factory=list)
+    exit_boundaries: list[ExitBoundary] = Field(default_factory=list)
     rooms: list[Region] = Field(default_factory=list)
     room_labels: dict[str, str] = Field(default_factory=dict)
     source_image: SourceImage | None = None

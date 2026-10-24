@@ -7,7 +7,7 @@ from shapely.ops import unary_union
 
 from app.schemas.layout import ExitDoor, Layout, Wall
 from app.schemas.scenario import Region, Scenario
-from app.services.floorplans.exits import exit_geometry
+from app.services.floorplans.exits import exit_boundary, exit_geometry
 from app.simulation.geometry import build_geometry, region_to_polygon
 
 
@@ -35,6 +35,7 @@ def compile_layout(layout: Layout) -> Scenario:
     floor = unary_union([region_to_polygon(r) for r in layout.walkable_areas])
     floors = {region.id: region for region in layout.walkable_areas}
     walkable_areas, exits, exit_openings = list(layout.walkable_areas), [], []
+    exit_boundaries = list(layout.exit_boundaries)
     for door in layout.exits:
         if not isinstance(door, ExitDoor):
             exits.append(door)
@@ -62,6 +63,7 @@ def compile_layout(layout: Layout) -> Scenario:
             raise ValueError(f"Reserved floor ID '{apron.id}' conflicts with an exterior exit")
         walkable_areas.append(apron)
         exits.append(target)
+        exit_boundaries.append(exit_boundary(door, floors[door.floor_id]))
         exit_openings.append((door.id, shape))
     walls = {wall.id: wall for wall in layout.walls}
     intervals = {wall.id: [] for wall in layout.walls}
@@ -110,6 +112,7 @@ def compile_layout(layout: Layout) -> Scenario:
         "walkable_areas": [r.model_dump() for r in walkable_areas],
         "obstacles": [r.model_dump() for r in obstacles],
         "exits": [r.model_dump() for r in exits],
+        "exit_boundaries": [boundary.model_dump() for boundary in exit_boundaries],
         "occupants": [p.model_dump() for p in layout.occupants],
         "population": layout.population.model_dump() if layout.population else None,
         "agent_defaults": layout.agent_defaults.model_dump(),
