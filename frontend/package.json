@@ -12,6 +12,7 @@
     "test:backend-api": "node --experimental-strip-types scripts/check-backend-api.mjs",
     "test:auth": "node scripts/check-auth.mjs",
     "test:workspaces": "node --experimental-strip-types scripts/check-workspaces.mjs",
+    "test:floorplan-import": "node --experimental-strip-types scripts/check-floorplan-import.mjs",
     "test:native-editor": "node --experimental-strip-types scripts/check-native-editor.mjs"
   },
   "dependencies": {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppHeader from "./app-header";
 import AppFooter from "./app-footer";
+import { awaitFloorPlanImport } from "@/lib/floorplan-import";
 import { validatePlan } from "@/lib/plan-validation";
 import { runBackendSimulation, sameStartingPopulation } from "@/lib/backend-simulation";
 import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
@@ -375,7 +376,8 @@ export default function Workspace({
     const calibration=next.native?nativeLayout(next).source_image?.calibration:null;
     setNotice((calibration?.method==="automatic"?`Scale detected from ${calibration.label}. `:
       calibration?.method==="estimated"?"Scale estimated from doors and furniture. Edit scale to adjust it. ":"")+
-      "Floor plan imported. Review walls, doors, and exits before running."+(data.warnings?.length?" "+data.warnings.join(" "):""));
+      "Floor plan imported. Review walls, doors, and exits before running."+(data.warnings?.length?
+        " "+data.warnings.slice(0,2).join(" ")+" See Extraction notes under Walls & doors for all observations.":""));
   }
   async function finishScale(reference: Parameters<React.ComponentProps<typeof ScaleCalibrator>["onApply"]>[0]) {
     if(!pendingCalibration||busy)return;
@@ -469,14 +471,15 @@ export default function Workspace({
           const reader = new FileReader(); reader.onload=()=>resolve(String(reader.result).split(",")[1]);
           reader.onerror=()=>reject(new Error("Could not read this image.")); reader.readAsDataURL(file);
         });
-        data = {filename:file.name,image_base64:encoded,provider:imageProvider};
+        data = {filename:file.name,image_base64:encoded,provider:imageProvider,async_import:true};
       } else data = JSON.parse(await file.text());
       const raw = data.plan ?? data;
       let warnings: string[] = [];
       if (image || raw.walkable_areas) {
         const response = await fetch("/api/floorplans",{method:"POST",headers:{"Content-Type":"application/json"},
           body:JSON.stringify(image ? data : {layout:raw})});
-        const imported = await response.json();
+        let imported = await response.json();
+        if (response.ok && imported.job_id) imported = await awaitFloorPlanImport(imported.job_id, setNotice);
         if(!response.ok) throw new Error(imported.error || "The floor plan could not be imported.");
         if(imported.needs_scale){setPendingCalibration(imported);setNotice("");return;}
         data = imported; warnings=imported.warnings ?? [];
@@ -1573,7 +1576,7 @@ export default function Workspace({
             </select>
             <p className="muted" role="status">
               {providerStatusError || (providerStatus[imageProvider]?.busy
-                ? `${imageProvider === "gemini" ? "Gemini" : "Claude"} is processing an image (${providerStatus[imageProvider].elapsed_seconds}s elapsed). Image requests stop after about 3 minutes. ${busy ? "Wait for this request to finish." : "Choose the other provider or import JSON while this image is processing."}`
+                ? `${imageProvider === "gemini" ? "Gemini" : "Claude"} is processing an image (${providerStatus[imageProvider].elapsed_seconds}s elapsed). Large plans use several structure, scale and detail passes. ${busy ? "Wait for this request to finish." : "Choose the other provider or import JSON while this image is processing."}`
                 : providerStatus[imageProvider]?.configured === false
                   ? "This provider needs an API key in the server’s .env file."
                   : providerStatus[imageProvider] ? "This provider is ready for an image." : "Checking provider status…")}
@@ -1589,6 +1592,7 @@ export default function Workspace({
             >
               <Icon name="upload" size={26} />
               <strong>{busy ? "Importing floor plan…" : "Choose a floor plan"}</strong>
+              {busy && notice && <span role="status">{notice}</span>}
               <span>JSON up to 1 MB · PNG, JPEG, WebP up to 10 MB</span>
             </button>
             <input

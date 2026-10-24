@@ -125,18 +125,17 @@ function validPlan(value: unknown): value is FloorPlan {
     value.width !== 900 ||
     value.height !== 600 ||
     !finite(value.area) ||
-    value.area <= 0 ||
-    value.area > 10000
+    value.area <= 0
   )
     return false;
   if (
     !Array.isArray(value.items) ||
-    value.items.length > 100 ||
+    value.items.length > 1200 ||
     !Array.isArray(value.walls) ||
-    value.walls.length > 100 ||
+    value.walls.length > 1200 ||
     !Array.isArray(value.exits) ||
     (!value.native && !value.exits.length) ||
-    value.exits.length > 12
+    value.exits.length > 30
   )
     return false;
 

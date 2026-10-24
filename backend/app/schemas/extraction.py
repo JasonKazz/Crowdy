@@ -76,10 +76,10 @@ class ExtractedDrawing(InputModel):
     floor_outline: list[DrawingPoint] = Field(min_length=3, max_length=300,
         description="Usable interior building boundary in vertex order, including connected rooms and corridors.")
     rooms: list[DrawingRegion] = Field(max_length=100)
-    furniture: list[DrawingRegion] = Field(max_length=200,
+    furniture: list[DrawingRegion] = Field(max_length=1200,
         description="ALL visible substantial solid furniture footprints: every desk/table unit in repeated clusters, round/rotated tables, counters, cabinets, storage and sofas. Not just representative scale examples. Small chairs optional; preserve real aisles.")
-    walls: list[DrawingWall] = Field(max_length=200)
-    doors: list[DrawingDoor] = Field(max_length=200)
+    walls: list[DrawingWall] = Field(max_length=600)
+    doors: list[DrawingDoor] = Field(max_length=600)
     exits: list[DrawingRegion] = Field(max_length=30,
         description="Thin full-width markers at clear exterior entrances/openings, including gaps between outer-wall ends with no door leaf or swing symbol. Entry/Welcome labels may corroborate. Never interior doors, windows, or unsupported gaps.")
     warnings: list[str] = Field(max_length=30,
@@ -92,8 +92,8 @@ class ExtractedDrawing(InputModel):
 
 class SourceImage(InputModel):
     id: str = Field(pattern=r"^[a-f0-9]{32}$")
-    width_px: int = Field(ge=1, le=1092)
-    height_px: int = Field(ge=1, le=1092)
+    width_px: int = Field(ge=1, le=3072)
+    height_px: int = Field(ge=1, le=3072)
     meters_per_pixel: float = Field(gt=0, le=100)
     scale_confirmed: bool = False
     calibration: CalibrationInfo | None = None

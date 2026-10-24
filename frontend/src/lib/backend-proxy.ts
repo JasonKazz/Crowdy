@@ -23,7 +23,7 @@ export async function forwardBackendImage(request: Request, imageId: string) {
     if (!response.ok) return failure("Source image unavailable on this server. Upload it again to restore the overlay.", response.status);
     if (!response.headers.get("content-type")?.startsWith("image/png")) return failure("Invalid source image.", 502);
     const image = await response.arrayBuffer();
-    if (image.byteLength > 4 * 1024 * 1024) return failure("Source image is too large.", 502);
+    if (image.byteLength > 32 * 1024 * 1024) return failure("Source image is too large.", 502);
     return new Response(image, {headers: {...headers, "Content-Type": "image/png", "X-Content-Type-Options": "nosniff"}});
   } catch {
     return failure("Source image unavailable on this server.", 503);
@@ -97,12 +97,16 @@ export async function forwardBackend(request: Request, path: string, body?: unkn
       return failure(message, response.status >= 500 ? 502 : response.status);
     }
     const payload = JSON.stringify(data);
-    if (Buffer.byteLength(payload) > 4 * 1024 * 1024)
+    // Long venue runs retain their full trajectory samples. Imports and
+    // health responses keep the smaller existing response budget.
+    const responseLimit = (path === "/api/simulations" ? 16 : 4) * 1024 * 1024;
+    if (Buffer.byteLength(payload) > responseLimit)
       return failure(
         "This run produced too much playback data. Reduce occupancy and try again.",
         502,
       );
     return new Response(payload, {
+      status: response.status,
       headers: { ...headers, "Content-Type": "application/json" },
     });
   } catch (error) {

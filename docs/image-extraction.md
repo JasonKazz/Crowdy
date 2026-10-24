@@ -4,7 +4,7 @@ This feature starts from a PNG, JPEG, or WebP floor-plan image and produces the 
 
 ## Setup
 
-From `backend/`, activate `.venv` and install `requirements.txt`. The additions are Pillow for decoding/resizing images and python-dotenv for local configuration. HTTP calls use Python's standard library.
+From `backend/`, activate `.venv` and install `requirements.txt`. The additions are Pillow for decoding/resizing images and python-dotenv for local configuration. Provider HTTP calls use httpx.
 
 Keep real credentials in the repository root `.env`, which Git ignores:
 
@@ -58,23 +58,23 @@ Uploading only displays an image-frame rectangle. This is not an inferred room, 
 
 ## Coordinates and geometry
 
-Both models receive an EXIF-corrected, white-backed PNG resized to at most 1092 pixels per side. This fits within Claude's standard-tier native patch budget, so its returned pixel coordinates can be mapped without another server-side resize. This limit favors a quick prototype; dense plans can lose small details and need a clearer crop.
+Uploads are EXIF-corrected and composited onto white. Compact images use one provider frame; large images retain a canonical frame up to 3072 pixels and use overview/detail crops capped at 1092 pixels per side. Crop observations are mapped back into the canonical source frame.
 
 The provider-neutral observation schema records the interior floor outline, labeled room polygons, furniture polygons, wall centerlines with thickness, interior door endpoints and parent wall IDs, exterior exit zones, and ambiguity notes. Gemini is prompted for independently normalized 0–1000 axes and thickness in thousandths of the shorter image dimension. Claude is prompted for absolute pixels and thickness in pixels. The converter then scales to meters and flips image y-down into simulation y-up. Door endpoints are projected onto their parent centerline to compute an editable offset and opening width; doors far from that line are rejected. If a model returns wall fragments ending at an observed door, the virtual parent centerline may be extended only through that door's own interval. The compiler cuts that full interval out, so this normalization adds no solid wall; it is recorded in the candidate notes.
 
-The floor outline supplies the exterior boundary; wall records describe interior partitions. Each observed exit marker is projected onto the nearest boundary edge, using its width along that edge as the clear door width. The editable exit stays attached to that edge. Its thin green removal strip sits immediately outside the doorway, one body radius plus 2 cm beyond the wall. People leave the simulation when their full body clears the building; they do not have to walk to a far outside destination. Review the selected edge and width: automatic attachment is a geometric estimate, not evidence that a door is an approved emergency exit. Markers far from a boundary are rejected. Previously saved image layouts upgrade their markers on import without another model call.
+The floor outline supplies the exterior boundary; wall records describe interior partitions. Before attaching exits on a newly extracted image, repeated closing/consecutive points and redundant collinear boundary vertices are removed. This preserves the physical perimeter while allowing an entrance to span artificial subdivisions of the same straight exterior wall. Real corners and existing editable floor edge indices are preserved. Each observed exit marker is projected onto the nearest boundary edge, using its width along that edge as the clear door width. The editable exit stays attached to that edge. Its thin green removal strip sits immediately outside the doorway, one body radius plus 2 cm beyond the wall. Outside dispersal space is fitted around nearby building wings; removal strips are also clipped to ensure body clearance from adjacent walls. Separate doorways may share outside space, but overlapping threshold openings are rejected. People leave the simulation when their full body clears the building; they do not have to walk to a far outside destination. Review the selected edge and width: automatic attachment is a geometric estimate, not evidence that a door is an approved emergency exit. Markers far from a boundary are rejected. Previously saved image layouts upgrade their markers on import without another model call.
 
 Room labels do not change population placement, which remains uniform in the selected interior spawn region. Each converted candidate goes through the existing layout compiler; JSON/schema validity alone does not establish geometric accuracy.
 
 Calibration rescales geometric coordinates, wall thicknesses, door openings, and explicit occupant positions. Physical outside-landing settings are retained. It leaves agent radius, walking speed, and simulation time settings unchanged. Recalibrating after extraction uses the same image alignment.
 
-Small images are presented at a longest side of 1000 pixels (larger images remain capped at 1092). The overlay and provider observations share this processed frame. Upscaling improves symbol presentation but does not recover missing source detail.
+Small images are presented at a longest side of 1000 pixels. Larger uploads preserve a canonical frame up to 3072 pixels and use separate overview, scale and overlapping detail passes; every provider observation maps back into that frame. Individual provider inputs stay at or below 1092 pixels per side. Upscaling improves symbol presentation but does not recover missing source detail. See [staged extraction and evaluation](staged-extraction.md) for bounds, saved artifacts and the supplied venue-image results.
 
 Extraction includes clear outer-wall entrances without drawn door leaves, using wall endpoints as evidence and labels only as corroboration. Repeated desk units and substantial tables, counters, cabinets, and sofas take priority over small chairs. A closed cavity bounded entirely by touching furniture is joined into one solid editable furniture item, with a warning; this avoids treating a sink or inaccessible cabinet interior as a separate spawn room. Open U-shaped counter work areas and wall-bounded rooms are not filled. Automatic editor placement uses the same body-clear connected regions as routing, and places occupants only in regions connected to an exit. Results report the excluded region area and display a review note when any area was excluded. A fully enclosed room or a pocket behind a gap narrower than a person therefore receives no automatic starting occupants; this is a placement assumption, not proof that the room is safe. Explicitly supplied trapped occupants are retained, reported as trapped, and kept visible; they are never silently moved.
 
 ## Improving extraction instructions
 
-Edit `backend/app/services/floorplans/floorplan_extraction.txt` to change the instructions sent to both providers. `{coordinates}` is filled with the provider-specific coordinate contract; leave that placeholder intact. Instructions cover the full-image frame, shared junction coordinates, wall thickness, continuous parent walls, aligned door jambs, exterior-only exits, polygon validity, and explicit ambiguity warnings. Field descriptions in `backend/app/schemas/extraction.py` also go into the structured-output schema. The prompt file is read for every extraction, so text-only changes do not require a server restart. Python/schema changes do.
+Edit `backend/app/services/floorplans/floorplan_extraction.txt` for compact-image instructions, or the task prompts and observation schemas in `backend/app/services/floorplans/staged.py` for staged imports. `{coordinates}` is filled with the provider-specific coordinate contract; leave that placeholder intact. Instructions cover the full-image frame, shared junction coordinates, wall thickness, continuous parent walls, aligned door jambs, exterior-only exits, polygon validity, and explicit ambiguity warnings. Field descriptions in `backend/app/schemas/extraction.py` also go into the structured-output schema. The prompt file is read for every extraction, so text-only changes do not require a server restart. Python/schema changes do.
 
 The API already requests schema-constrained JSON. That controls its structure, not whether the geometry matches the source. Continue validating in Python and reviewing the image overlay. The compiler tolerates at most `1e-8` meters of numerical boundary overshoot, clipping it only in the local simulation geometry; it does not move stored walls, enlarge the floor, or repair genuinely misplaced objects.
 
@@ -86,7 +86,7 @@ Useful references: [Claude coordinates](https://platform.claude.com/docs/en/buil
 
 All artifacts live in the ignored `backend/data/editor/` directory:
 
-- `images/<image_id>/source.png`: the processed image both providers see.
+- `images/<image_id>/source.png`: the canonical processed image underlying both providers’ crops.
 - `images/<image_id>/metadata.json`: image ID, pixel dimensions, and initial unconfirmed scale.
 - `extractions/<extraction_id>/observations.json`: validated provider observations in that provider's coordinate units.
 - `extractions/<extraction_id>/candidate.json`: converted editable layout, model/time metadata, warnings, and geometry issues.
@@ -100,7 +100,7 @@ Images persist across server restarts in the same data directory. Exported layou
 
 The main Next.js workspace uses `POST /api/floorplans` on the Python service:
 
-- New image: `{filename, image_base64, provider}`. A measured or estimated calibration returns `{plan, warnings}`; estimates include the provenance and assumptions in `plan.native.layout.source_image.calibration`. Otherwise the response has `needs_scale`, `extraction_id`, `image_id`, `width_px`, `height_px`, and `reason`.
+- New image: `{filename, image_base64, provider}`. The website adds `async_import: true`, receiving HTTP 202 with `job_id`. Poll `GET /api/floorplans/jobs/<job_id>` on Python, or `GET /api/floorplans?job_id=<job_id>` through Next.js, for `running`/`complete`/`failed`, progress and the final `result`. Synchronous callers omit that flag. A measured or estimated calibration returns `{plan, warnings}`; estimates include the provenance and assumptions in `plan.native.layout.source_image.calibration`. Otherwise the response has `needs_scale`, `extraction_id`, `image_id`, `width_px`, `height_px`, and `reason`.
 - Complete a pending extraction: `{extraction_id, manual_scale: {kind: "dimension", label, start: {x,y}, end: {x,y}, distance, unit}}`. Manual endpoints are pixels in the processed source image for both providers.
 - Check the current editable plan: `{editor_plan}`. It reconstructs edited furniture polygons and retains canonical wall/door changes; issues are in `plan.native.issues`.
 - Recalibrate without losing edits: `{editor_plan, manual_scale}`.
@@ -118,3 +118,5 @@ The standalone editor endpoints remain:
 | POST | `/api/extract` | Image ID, provider (`gemini`, `claude`, `both`), meters-per-pixel, scale-confirmed flag, and population count. |
 
 Image-upload JSON has a 14 MiB request limit to accommodate base64; individual source files are limited to 10 MiB. Other JSON endpoints retain their 2 MiB limit. A second extraction returns 409 while one is active. Individual provider failures are returned in the comparison results so the other provider's successful candidate remains usable. No comparison declares a winner without reference geometry or human review.
+
+Floor area has no fixed upper limit. Import, simulation requests and saved workspaces accept any finite positive area in square metres. The 900 × 600 editor canvas is independent of the building’s physical dimensions. Validation reports the failing name, canvas, area or collection field rather than a combined template error.

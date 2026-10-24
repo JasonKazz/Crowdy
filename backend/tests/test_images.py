@@ -126,15 +126,15 @@ class ImageTests(unittest.TestCase):
     def test_upload_decodes_resizes_and_persists_a_known_image(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            upload = ImageUpload(filename="large.jpg", image_base64=base64.b64encode(image_bytes((2200, 1100), "JPEG")).decode())
+            upload = ImageUpload(filename="large.jpg", image_base64=base64.b64encode(image_bytes((6144, 3072), "JPEG")).decode())
             saved = save_image(upload, root)
-            self.assertEqual((saved.width_px, saved.height_px), (1092, 546))
+            self.assertEqual((saved.width_px, saved.height_px), (3072, 1536))
             self.assertFalse(saved.scale_confirmed)
             loaded, raw = load_image(root, saved.id)
             self.assertEqual(saved, loaded)
             with Image.open(io.BytesIO(raw)) as image:
                 self.assertEqual(image.format, "PNG")
-                self.assertEqual(image.size, (1092, 546))
+                self.assertEqual(image.size, (3072, 1536))
 
     def test_invalid_images_and_large_dimensions_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

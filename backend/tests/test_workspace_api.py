@@ -186,6 +186,24 @@ class EditorApiTests(unittest.TestCase):
         self.assertTrue(all(count > 0 for count in result["summary"]["per_exit_counts"].values()))
         self.assertLess(len(response.content), 4_000_000)
 
+    def test_large_floor_area_does_not_block_simulation(self):
+        payload = room_request(count=1)
+        payload["plan"]["area"] = 14813.587936797483
+        response = self.client.post("/api/simulations", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["summary"]["evacuated_count"], 1)
+
+    def test_invalid_area_error_identifies_the_field_without_reflecting_input(self):
+        payload = room_request()
+        payload["plan"].update(area=0, name="private floor plan name")
+        with patch("app.api.run_editor_simulation") as run:
+            response = self.client.post("/api/simulations", json=payload)
+            self.assertEqual(response.status_code, 422)
+            self.assertIn("plan.area", response.json()["detail"])
+            self.assertIn("greater than 0", response.json()["detail"])
+            self.assertNotIn("private floor plan name", response.text)
+            run.assert_not_called()
+
     def test_invalid_parameters_are_422_without_engine_run(self):
         mutations = [
             lambda p: p["scenario"].update(occupancy=201),
