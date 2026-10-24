@@ -104,6 +104,29 @@ class LayoutTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Wall.*outside"):
             compile_layout(layout)
 
+    def test_numerical_obstacle_overshoot_is_clipped_without_mutating_input(self):
+        layout = office()
+        layout.furniture.append(Region(id="roundoff", polygon=[
+            (-1e-10, 6), (.2, 6), (.2, 7), (-1e-10, 7),
+        ]))
+        before = layout.model_dump()
+        geometry = build_geometry(compile_layout(layout))
+        self.assertFalse(geometry.contains(Point(.1, 6.5)))
+        self.assertEqual(layout.model_dump(), before)
+
+    def test_real_obstacle_and_wall_overshoots_still_fail(self):
+        layout = office()
+        layout.furniture.append(Region(id="outside", polygon=[
+            (-1e-6, 6), (.2, 6), (.2, 6.001), (-1e-6, 6.001),
+        ]))
+        # Small outside AREA is insufficient: distance outside must be numerical.
+        with self.assertRaisesRegex(ValueError, "Obstacle 'outside'.*outside"):
+            compile_layout(layout)
+        layout = office()
+        layout.walls[0].start = (8, -1e-6)
+        with self.assertRaisesRegex(ValueError, "Wall.*outside"):
+            compile_layout(layout)
+
     def test_duplicate_ids_and_nonfinite_coordinates_rejected(self):
         layout = office()
         layout.walls.append(layout.walls[0])

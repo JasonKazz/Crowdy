@@ -8,7 +8,7 @@ from shapely.ops import unary_union
 from app.schemas.layout import ExitDoor, Layout, Wall
 from app.schemas.scenario import Region, Scenario
 from app.services.floorplans.exits import exit_boundary, exit_geometry
-from app.simulation.geometry import build_geometry, region_to_polygon
+from app.simulation.geometry import GEOMETRY_TOLERANCE, build_geometry, region_to_polygon
 
 
 def wall_polygon(wall: Wall, start: float, end: float) -> list[tuple[float, float]]:
@@ -87,7 +87,7 @@ def compile_layout(layout: Layout) -> Scenario:
         full_wall = region_to_polygon(Region(
             id=wall.id, polygon=wall_polygon(wall, 0, math.dist(wall.start, wall.end)),
         ))
-        if not floor.covers(full_wall):
+        if not floor.covers(full_wall) and not floor.buffer(GEOMETRY_TOLERANCE).covers(full_wall):
             raise ValueError(f"Wall '{wall.id}' extends outside the floor")
         cursor = 0.0
         segments = []
