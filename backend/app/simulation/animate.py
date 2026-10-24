@@ -1,5 +1,6 @@
 """Build a standalone browser playback from a saved simulation result."""
 
+import argparse
 import json
 from pathlib import Path
 
@@ -218,7 +219,13 @@ requestAnimationFrame(tick);
 def main():
     repo_root = Path(__file__).resolve().parents[3]
     data_dir = repo_root / "backend" / "data"
-    input_path = data_dir / "simple_room_result.json"
+    parser = argparse.ArgumentParser(description="Build HTML playback from a Crowdy result")
+    parser.add_argument(
+        "result", nargs="?", type=Path,
+        default=data_dir / "simple_room_result.json",
+    )
+    args = parser.parse_args()
+    input_path = args.result.resolve()
 
     if not input_path.exists():
         raise SystemExit(
@@ -238,7 +245,8 @@ def main():
 
     payload = json.dumps(result, separators=(",", ":"), allow_nan=False)
     payload = payload.replace("<", "\\u003c")
-    output_path = data_dir / "simple_room_animation.html"
+    stem = input_path.stem.removesuffix("_result")
+    output_path = data_dir / f"{stem}_animation.html"
     output_path.write_text(HTML.replace("__DATA__", payload), encoding="utf-8")
     print(f"Saved animation: {output_path}")
 
