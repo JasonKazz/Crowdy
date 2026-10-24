@@ -23,7 +23,7 @@ export async function forwardBackendImage(request: Request, imageId: string) {
     if (!response.ok) return failure("Source image unavailable on this server. Upload it again to restore the overlay.", response.status);
     if (!response.headers.get("content-type")?.startsWith("image/png")) return failure("Invalid source image.", 502);
     const image = await response.arrayBuffer();
-    if (image.byteLength > 4 * 1024 * 1024) return failure("Source image is too large.", 502);
+    if (image.byteLength > 32 * 1024 * 1024) return failure("Source image is too large.", 502);
     return new Response(image, {headers: {...headers, "Content-Type": "image/png", "X-Content-Type-Options": "nosniff"}});
   } catch {
     return failure("Source image unavailable on this server.", 503);
@@ -103,6 +103,7 @@ export async function forwardBackend(request: Request, path: string, body?: unkn
         502,
       );
     return new Response(payload, {
+      status: response.status,
       headers: { ...headers, "Content-Type": "application/json" },
     });
   } catch (error) {

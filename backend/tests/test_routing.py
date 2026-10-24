@@ -2,7 +2,8 @@ import json
 import unittest
 from pathlib import Path
 
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, Point, Polygon, box
+from shapely.ops import unary_union
 
 from app.schemas.layout import ExitDoor, load_layout
 from app.schemas.scenario import Occupant, Region
@@ -10,7 +11,7 @@ from app.services.floorplans.layout import compile_layout
 from app.simulation.editor import validate_layout
 from app.simulation.engine import run_simulation
 from app.simulation.geometry import build_geometry
-from app.simulation.routing import RoutePlanner, plan_routes
+from app.simulation.routing import RoutePlanner, plan_routes, MeshGraph
 from test_exterior_exits import room
 
 
@@ -27,6 +28,16 @@ def regression_layout():
 
 
 class RoutingTests(unittest.TestCase):
+    def test_dense_tables_use_navmesh_and_keep_body_clearance(self):
+        floor=box(0,0,40,30).difference(unary_union([
+            Point(x,y).buffer(.6,quad_segs=3) for x in range(4,37,3) for y in range(4,27,3)]))
+        planner=RoutePlanner(floor,.23)
+        self.assertTrue(all(isinstance(graph,MeshGraph) for graph in planner.graphs))
+        planned=planner.route((1,1),box(38,27,39,29))
+        self.assertIsNotNone(planned)
+        self.assertTrue(planner.visible_body_space.covers(LineString(planned[1])))
+
+
     def test_exact_failed_layout_evacuates_all_40_original_people(self):
         layout = regression_layout()
         scenario = compile_layout(layout)

@@ -133,6 +133,25 @@ try {
   passed++;
   await rejected({plan:nativePlan,scenario:{...seededScenario,blocked_exit_ids:["unknown"]}},400);
   passed+=3;
+  const jobResponse=await fetch(new URL("/api/floorplans",base),{method:"POST",
+    headers:{"Content-Type":"application/json",Origin:base.origin},
+    body:JSON.stringify({filename:"invalid-test.png",image_base64:"bm90LWFuLWltYWdl",provider:"claude",async_import:true})});
+  assert.equal(jobResponse.status,202,"Image jobs must return before extraction finishes");
+  const job=await jobResponse.json();
+  assert.match(job.job_id,/^[a-f0-9]{32}$/);
+  let jobStatus;
+  for(let attempt=0;attempt<20;attempt++){
+    const polled=await fetch(new URL(`/api/floorplans?job_id=${job.job_id}`,base));
+    assert.equal(polled.status,200);
+    jobStatus=await polled.json();
+    if(jobStatus.status!=="running")break;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  assert.equal(jobStatus.status,"failed");
+  assert.match(jobStatus.error,/decode|readable/i,"Invalid images must fail before making provider calls");
+  const invalidJob=await fetch(new URL("/api/floorplans?job_id=invalid",base));
+  assert.equal(invalidJob.status,400);
+  passed+=2;
   console.log(`Backend integration checks passed: ${passed} HTTP checks, real JuPedSim playback, two exit summaries, validation, and blocked-geometry recovery.`);
 } catch (error) {
   console.error(`Backend integration checks failed: ${error instanceof Error ? error.message : "unknown failure"}`);

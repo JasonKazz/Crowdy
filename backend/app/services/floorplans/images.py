@@ -17,7 +17,7 @@ from shapely.ops import unary_union
 from app.schemas.extraction import (
     CalibrationInfo, ExtractedDrawing, ExtractionInfo, ExtractionRequest, ImageUpload, ScaleReference, SourceImage,
 )
-from app.schemas.layout import Layout
+from app.schemas.layout import Layout, exit_from_marker
 from app.schemas.scenario import AgentDefaults, Population, Region, SimulationSettings
 from app.services.floorplans.layout import compile_layout
 from app.services.floorplans.providers import ProviderError, extract_drawing
@@ -50,9 +50,9 @@ def save_image(upload: ImageUpload, root: Path) -> SourceImage:
                 if original.width * original.height > MAX_IMAGE_PIXELS:
                     raise ValueError("The image is too large. Resize it below 30 million pixels.")
                 corrected = ImageOps.exif_transpose(original).convert("RGBA")
-                # Both providers see the identical image, within Claude's standard-tier
-                # native pixel budget: at most 39 x 39 patches of 28 pixels.
-                corrected.thumbnail((1092, 1092), Image.Resampling.LANCZOS)
+                # Preserve detail for tiled extraction. Individual provider inputs
+                # are resized separately; the editor always uses this one frame.
+                corrected.thumbnail((3072, 3072), Image.Resampling.LANCZOS)
                 # Small plans contain tiny repeated desks and door symbols.
                 # Present them at a consistent readable size to both providers;
                 # all observations and the overlay use this same stored frame.
@@ -94,7 +94,7 @@ def draft_layout(source: SourceImage) -> Layout:
 
 
 def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: str,
-                      info: ExtractionInfo, people_count: int) -> Layout:
+                      info: ExtractionInfo, people_count: int, allow_review=False) -> Layout:
     info = info.model_copy(deep=True)
     def pixel(point):
         x, y = point.x, point.y
@@ -175,11 +175,30 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
             furniture = [item for item in furniture if item.id not in member_ids]
             furniture.append(Region(id=members[0].id, polygon=list(piece.exterior.coords)[:-1]))
             info.warnings.append("Joined touching furniture around an enclosed cavity into one solid editable barrier; open aisles were preserved.")
+    floors = [Region(id="floor", polygon=[position(point) for point in drawing.floor_outline])]
+    exits = []
+    for item in drawing.exits:
+        marker = region(item)
+        if not allow_review:
+            exits.append(marker)
+            continue
+        try:
+            opening = exit_from_marker(marker, floors)
+        except ValueError:
+            info.warnings.insert(0,f"Review required: exit '{item.id}' does not align with a usable exterior edge; omitted from the draft. Add/correct it over the image.")
+            continue
+        if any(other.floor_id==opening.floor_id and other.edge_index==opening.edge_index
+               and min(other.offset+other.width/2,opening.offset+opening.width/2)
+                   -max(other.offset-other.width/2,opening.offset-opening.width/2) > .5*min(other.width,opening.width)
+               for other in exits):
+            info.warnings.append(f"Merged duplicate exterior opening observation '{item.id}'.")
+            continue
+        exits.append(opening)
     return Layout(
         name=drawing.name or "Extracted floor plan", source_image=source, extraction=info,
-        walkable_areas=[Region(id="floor", polygon=[position(point) for point in drawing.floor_outline])],
+        walkable_areas=floors,
         furniture=furniture, walls=walls, doors=doors,
-        exits=[region(item) for item in drawing.exits],
+        exits=exits,
         rooms=[region(item) for item in drawing.rooms],
         room_labels={item.id: item.label for item in drawing.rooms},
         population=Population(count=people_count, spawn_area_ids=["floor"]),
@@ -188,20 +207,27 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
     )
 
 
-def extract_image(request: ExtractionRequest, root: Path) -> dict:
+def extract_image(request: ExtractionRequest, root: Path, progress=None) -> dict:
     original, image = load_image(root, request.image_id)
     results = []
     providers = ("gemini", "claude") if request.provider == "both" else (request.provider,)
     for provider in providers:
         started = time.perf_counter()
-        directory = None
+        extraction_id = uuid.uuid4().hex
+        directory = root / "extractions" / extraction_id
+        directory.mkdir(parents=True)
         try:
-            drawing, model = extract_drawing(provider, image, original.width_px, original.height_px)
-            info = ExtractionInfo(id=uuid.uuid4().hex, provider=provider, model=model,
+            if max(original.width_px, original.height_px) > 1092:
+                from app.services.floorplans.staged import extract_staged
+                drawing, model = extract_staged(provider, image, original.width_px, original.height_px,
+                                                directory / "stages", progress)
+            else:
+                if progress:
+                    progress("Reading compact floor plan")
+                drawing, model = extract_drawing(provider, image, original.width_px, original.height_px)
+            info = ExtractionInfo(id=extraction_id, provider=provider, model=model,
                                   elapsed_seconds=round(time.perf_counter() - started, 3),
                                   warnings=drawing.warnings)
-            directory = root / "extractions" / info.id
-            directory.mkdir(parents=True)
             (directory / "observations.json").write_text(drawing.model_dump_json(indent=2))
             (directory / "context.json").write_text(json.dumps({"source": original.model_dump(mode="json"),
                 "info": info.model_dump(mode="json"), "people_count": request.people_count}))
@@ -219,7 +245,7 @@ def extract_image(request: ExtractionRequest, root: Path) -> dict:
             result = save_candidate(drawing, source, info, request.people_count, directory)
             results.append(result)
         except (ProviderError, ValueError) as exc:
-            error = {"provider": provider, "error": str(exc)}
+            error = {"provider": provider, "error": str(exc), "extraction_id": extraction_id}
             if directory is not None:
                 (directory / "error.json").write_text(json.dumps(error, indent=2))
             results.append(error)
@@ -227,7 +253,8 @@ def extract_image(request: ExtractionRequest, root: Path) -> dict:
 
 
 def save_candidate(drawing, source, info, people_count, directory):
-    layout = drawing_to_layout(drawing, source, info.provider, info, people_count)
+    layout = drawing_to_layout(drawing, source, info.provider, info, people_count,
+                               allow_review=(directory / "stages" / "report.json").is_file())
     notes = list(layout.extraction.warnings)
     if source.calibration and source.calibration.method == "estimated":
         notes.append("Scale estimated from assumed object sizes. Use Edit scale to replace it with a known measurement.")
@@ -236,7 +263,7 @@ def save_candidate(drawing, source, info, people_count, directory):
         compile_layout(layout)
     except ValueError as exc:
         issues.append(str(exc))
-    result = {"provider": info.provider, "model": info.model, "layout": layout.model_dump(mode="json"),
+    result = {"provider": info.provider, "model": info.model, "extraction_id": info.id, "layout": layout.model_dump(mode="json"),
               "warnings": notes, "issues": issues,
               "elapsed_seconds": info.elapsed_seconds,
               "counts": {name: len(getattr(layout, name)) for name in ("rooms", "walls", "doors", "furniture", "exits")}}

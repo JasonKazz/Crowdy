@@ -6,6 +6,7 @@ export type NativeDoor = {id: string; wall_id: string; offset: number; width: nu
 export type NativeExit = {id: string; floor_id: string; edge_index: number; offset: number; width: number;
   landing_depth: number; outside_space: "open" | "corridor"; outside_width?: number | null};
 export type NativeLayout = {
+  extraction?: {warnings: string[]} | null;
   walls: NativeWall[]; doors: NativeDoor[]; exits: (NativeExit | {id: string; polygon: XY[]})[];
   walkable_areas: {id: string; polygon: XY[]}[]; furniture: {id: string; polygon: XY[]}[];
   agent_defaults: {radius: number; desired_speed: number};

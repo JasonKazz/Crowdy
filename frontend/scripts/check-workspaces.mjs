@@ -292,6 +292,12 @@ for (const id of [plan.id, SAMPLE_WORKSPACE_ID]) {
   }), /geometry/, "Pixel plans still require an exit before saving");
 }
 
+const densePlan = structuredClone(restored.plan);
+densePlan.items = Array.from({length:300},(_,index)=>({...densePlan.items[0],id:`table-${index}`}));
+const denseRecord = createWorkspace(ownerB,{name:"Dense venue extraction",plan:densePlan,scenario:restored.scenario});
+assert.equal(getWorkspace(ownerB,denseRecord.id).plan.items.length,300,
+  "Dense extracted furniture must survive persistence above the old 100-item limit");
+
 console.log(
   "Workspace checks passed: account isolation, sample protection, cloned inputs, update ordering, corruption preservation, storage failures, change notifications, and native draft persistence.",
 );

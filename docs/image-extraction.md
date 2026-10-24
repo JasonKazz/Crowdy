@@ -4,7 +4,7 @@ This feature starts from a PNG, JPEG, or WebP floor-plan image and produces the 
 
 ## Setup
 
-From `backend/`, activate `.venv` and install `requirements.txt`. The additions are Pillow for decoding/resizing images and python-dotenv for local configuration. HTTP calls use Python's standard library.
+From `backend/`, activate `.venv` and install `requirements.txt`. The additions are Pillow for decoding/resizing images and python-dotenv for local configuration. Provider HTTP calls use httpx.
 
 Keep real credentials in the repository root `.env`, which Git ignores:
 
@@ -68,13 +68,13 @@ Room labels do not change population placement, which remains uniform in the sel
 
 Calibration rescales geometric coordinates, wall thicknesses, door openings, and explicit occupant positions. Physical outside-landing settings are retained. It leaves agent radius, walking speed, and simulation time settings unchanged. Recalibrating after extraction uses the same image alignment.
 
-Small images are presented at a longest side of 1000 pixels (larger images remain capped at 1092). The overlay and provider observations share this processed frame. Upscaling improves symbol presentation but does not recover missing source detail.
+Small images are presented at a longest side of 1000 pixels. Larger uploads preserve a canonical frame up to 3072 pixels and use separate overview, scale and overlapping detail passes; every provider observation maps back into that frame. Individual provider inputs stay at or below 1092 pixels per side. Upscaling improves symbol presentation but does not recover missing source detail. See [staged extraction and evaluation](staged-extraction.md) for bounds, saved artifacts and the supplied venue-image results.
 
 Extraction includes clear outer-wall entrances without drawn door leaves, using wall endpoints as evidence and labels only as corroboration. Repeated desk units and substantial tables, counters, cabinets, and sofas take priority over small chairs. A closed cavity bounded entirely by touching furniture is joined into one solid editable furniture item, with a warning; this avoids treating a sink or inaccessible cabinet interior as a separate spawn room. Open U-shaped counter work areas and wall-bounded rooms are not filled. Automatic editor placement uses the same body-clear connected regions as routing, and places occupants only in regions connected to an exit. Results report the excluded region area and display a review note when any area was excluded. A fully enclosed room or a pocket behind a gap narrower than a person therefore receives no automatic starting occupants; this is a placement assumption, not proof that the room is safe. Explicitly supplied trapped occupants are retained, reported as trapped, and kept visible; they are never silently moved.
 
 ## Improving extraction instructions
 
-Edit `backend/app/services/floorplans/floorplan_extraction.txt` to change the instructions sent to both providers. `{coordinates}` is filled with the provider-specific coordinate contract; leave that placeholder intact. Instructions cover the full-image frame, shared junction coordinates, wall thickness, continuous parent walls, aligned door jambs, exterior-only exits, polygon validity, and explicit ambiguity warnings. Field descriptions in `backend/app/schemas/extraction.py` also go into the structured-output schema. The prompt file is read for every extraction, so text-only changes do not require a server restart. Python/schema changes do.
+Edit `backend/app/services/floorplans/floorplan_extraction.txt` for compact-image instructions, or the task prompts and observation schemas in `backend/app/services/floorplans/staged.py` for staged imports. `{coordinates}` is filled with the provider-specific coordinate contract; leave that placeholder intact. Instructions cover the full-image frame, shared junction coordinates, wall thickness, continuous parent walls, aligned door jambs, exterior-only exits, polygon validity, and explicit ambiguity warnings. Field descriptions in `backend/app/schemas/extraction.py` also go into the structured-output schema. The prompt file is read for every extraction, so text-only changes do not require a server restart. Python/schema changes do.
 
 The API already requests schema-constrained JSON. That controls its structure, not whether the geometry matches the source. Continue validating in Python and reviewing the image overlay. The compiler tolerates at most `1e-8` meters of numerical boundary overshoot, clipping it only in the local simulation geometry; it does not move stored walls, enlarge the floor, or repair genuinely misplaced objects.
 
@@ -86,7 +86,7 @@ Useful references: [Claude coordinates](https://platform.claude.com/docs/en/buil
 
 All artifacts live in the ignored `backend/data/editor/` directory:
 
-- `images/<image_id>/source.png`: the processed image both providers see.
+- `images/<image_id>/source.png`: the canonical processed image underlying both providers’ crops.
 - `images/<image_id>/metadata.json`: image ID, pixel dimensions, and initial unconfirmed scale.
 - `extractions/<extraction_id>/observations.json`: validated provider observations in that provider's coordinate units.
 - `extractions/<extraction_id>/candidate.json`: converted editable layout, model/time metadata, warnings, and geometry issues.
@@ -100,7 +100,7 @@ Images persist across server restarts in the same data directory. Exported layou
 
 The main Next.js workspace uses `POST /api/floorplans` on the Python service:
 
-- New image: `{filename, image_base64, provider}`. A measured or estimated calibration returns `{plan, warnings}`; estimates include the provenance and assumptions in `plan.native.layout.source_image.calibration`. Otherwise the response has `needs_scale`, `extraction_id`, `image_id`, `width_px`, `height_px`, and `reason`.
+- New image: `{filename, image_base64, provider}`. The website adds `async_import: true`, receiving HTTP 202 with `job_id`. Poll `GET /api/floorplans/jobs/<job_id>` on Python, or `GET /api/floorplans?job_id=<job_id>` through Next.js, for `running`/`complete`/`failed`, progress and the final `result`. Synchronous callers omit that flag. A measured or estimated calibration returns `{plan, warnings}`; estimates include the provenance and assumptions in `plan.native.layout.source_image.calibration`. Otherwise the response has `needs_scale`, `extraction_id`, `image_id`, `width_px`, `height_px`, and `reason`.
 - Complete a pending extraction: `{extraction_id, manual_scale: {kind: "dimension", label, start: {x,y}, end: {x,y}, distance, unit}}`. Manual endpoints are pixels in the processed source image for both providers.
 - Check the current editable plan: `{editor_plan}`. It reconstructs edited furniture polygons and retains canonical wall/door changes; issues are in `plan.native.issues`.
 - Recalibrate without losing edits: `{editor_plan, manual_scale}`.

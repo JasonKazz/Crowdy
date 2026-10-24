@@ -131,12 +131,12 @@ function validPlan(value: unknown): value is FloorPlan {
     return false;
   if (
     !Array.isArray(value.items) ||
-    value.items.length > 100 ||
+    value.items.length > 1200 ||
     !Array.isArray(value.walls) ||
-    value.walls.length > 100 ||
+    value.walls.length > 1200 ||
     !Array.isArray(value.exits) ||
     (!value.native && !value.exits.length) ||
-    value.exits.length > 12
+    value.exits.length > 30
   )
     return false;
 

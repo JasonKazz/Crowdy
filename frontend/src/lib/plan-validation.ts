@@ -53,12 +53,12 @@ export function validatePlan(value: unknown): FloorPlan {
     plan.area <= 0 ||
     plan.area > 10000 ||
     !Array.isArray(plan.items) ||
-    plan.items.length > 100 ||
+    plan.items.length > 1200 ||
     !Array.isArray(plan.walls) ||
-    plan.walls.length > 100 ||
+    plan.walls.length > 1200 ||
     !Array.isArray(plan.exits) ||
     (!plan.native && plan.exits.length < 1) ||
-    plan.exits.length > 12
+    plan.exits.length > 30
   )
     throw new Error(
       "This plan needs a name, a 900 × 600 canvas, valid area, and at least one exit. Use the sample JSON as a template.",

@@ -3,6 +3,7 @@
 import hashlib
 import heapq
 import math
+import jupedsim
 
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import nearest_points
@@ -65,6 +66,28 @@ class VisibilityGraph:
         return None
 
 
+class MeshGraph:
+    """Use the installed engine's navmesh for plans with many table vertices.
+
+    Building an all-pairs visibility graph is quadratic in obstacle corners.
+    The mesh uses the same already-eroded, body-clear polygon as the small-plan
+    planner, so choosing it does not change physical body clearance.
+    """
+    def __init__(self, polygon):
+        self.polygon = polygon
+        self.engine = jupedsim.RoutingEngine(polygon.buffer(1e-8))
+
+    def path(self, start, goal):
+        if not self.engine.is_routable(start) or not self.engine.is_routable(goal):
+            return None
+        return self.engine.compute_waypoints(start, goal)
+
+
+def routing_graph(component):
+    vertices = len(component.exterior.coords) + sum(len(ring.coords) for ring in component.interiors)
+    return MeshGraph(component) if vertices > 160 else VisibilityGraph(component)
+
+
 def body_clear_components(geometry, radius):
     """The same passable floor components for placement and route planning."""
     safe = geometry.buffer(-(radius + 0.02), quad_segs=3)
@@ -79,7 +102,7 @@ class RoutePlanner:
         # Round offsets represent circular bodies at sharp door jambs. Mitre
         # offsets can create artificial spikes that close a perfectly usable door.
         self.components = body_clear_components(geometry, radius)
-        self.graphs = [VisibilityGraph(component) for component in self.components if not component.is_empty]
+        self.graphs = [routing_graph(component) for component in self.components if not component.is_empty]
 
     def route(self, start, exit_polygon, preferred=None):
         start_point = Point(start)
