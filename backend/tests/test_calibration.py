@@ -104,6 +104,7 @@ class CalibrationAPITests(unittest.TestCase):
     def test_recalibration_preserves_edits_and_physical_agent_size(self):
         drawing = drawing_fixture(); drawing["scale_references"] = [reference().model_dump()]
         plan = self.import_drawing(drawing)["plan"]
+        plan["native"]["layout"]["agent_defaults"]["radius"] = .3
         plan["items"][0]["x"] += 10
         plan["native"]["layout"]["doors"][0]["offset"] = 3.5
         response = self.client.post("/api/floorplans", json={"editor_plan": plan, "manual_scale": reference(distance=36).model_dump()})
@@ -111,7 +112,7 @@ class CalibrationAPITests(unittest.TestCase):
         corrected = response.json()["plan"]
         self.assertAlmostEqual(corrected["items"][0]["x"], plan["items"][0]["x"])
         self.assertEqual(corrected["native"]["layout"]["doors"][0]["offset"], 7)
-        self.assertEqual(corrected["native"]["layout"]["agent_defaults"]["radius"], .2)
+        self.assertEqual(corrected["native"]["layout"]["agent_defaults"]["radius"], .3)
 
     def test_invalid_door_offset_remains_editable_without_extending_preview_wall(self):
         drawing = drawing_fixture(); drawing["scale_references"] = [reference().model_dump()]

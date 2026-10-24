@@ -71,7 +71,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
     def test_editor_comparison_preserves_people_and_allows_all_exits_blocked(self):
         settings = {**self.settings,"mobility":"mixed"}
         before = self.client.post("/api/simulations", json={"plan":self.plan,"scenario":settings}).json()
-        reference = {"occupants":before["scenario"]["occupants"],"radius":.2,
+        reference = {"occupants":before["scenario"]["occupants"],"radius":before["scenario"]["agent_defaults"]["radius"],
                      "mobility":"mixed","distribution":"uniform","seed":7}
         self.assertEqual(sum(person["desired_speed"] == .72 for person in reference["occupants"]),5)
         blocked = [e["id"] for e in self.plan["exits"]]

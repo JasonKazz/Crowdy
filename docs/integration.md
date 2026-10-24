@@ -68,3 +68,31 @@ Run with all exits available, then choose **Pin current run as baseline**. Popul
 The frontend verifies identical starting IDs, positions, per-person speeds and radius before enabling comparison. Playback uses one shared clock. The comparison shows evacuated/trapped/still-moving counts, peak sampled density, per-exit totals, and clearance-time change only when both runs fully evacuate. Export includes both run snapshots and the matched initial population. Starts and baselines remain session-only; saved workspace setup retains exit selections.
 
 The simulation POST scenario accepts `blocked_exit_ids` (unique known exit IDs) and an optional `starting_population`. The native CLI comparison also supports all-exits-blocked cases and reports outcome-count changes.
+
+## Directional people and evacuation modes
+
+The integrated workspace draws shoulder ellipses facing the measured direction of travel. Their lateral semi-axis equals the native collision radius; front/back depth is 0.68 times that radius. The entire ellipse fits inside the circular collision body. Heading is smoothed with turns bounded to 180°/s, retains the previous direction during a stop, and is deterministic when seeking backward or replaying. This is a visual change; collision and route clearance still use circles, with no sideways squeezing or orientation-dependent doorway clearance.
+
+The selector offers **Idealized** (immediate response, unchanged base desired speeds) and **Behavioral** (individual response delays and speed factors). Both retain the same shortest-route exit assignment and native collision-free crowd interactions; neither globally optimizes evacuation or changes exit knowledge. Behavioral assumptions are illustrative, not empirically calibrated:
+
+- Response delay: triangular distribution, minimum 0 s, maximum 12 s, mode 3 s.
+- Desired-speed factor: triangular distribution, minimum 0.85, maximum 1.15, mode 1, multiplied by each person's base speed (including the selected mixed mobility profile).
+- SHA-256 of behavior version, seed and stable person ID seeds each person's independent random generator. The same seed/IDs repeat across processes, geometry edits and exit closures; changing person order does not change individual parameters.
+
+Waiting people remain stationary native collision bodies, then begin following their route on the first simulation step at or after their sampled delay. Additional measured frames record these release instants so interpolation does not start them early. Amber indicates a person still responding, ordinary colors indicate walking/queuing, and red indicates a trapped person. Hover shows delay and desired speed. Routed people still inside at the time limit include anyone still responding.
+
+Frontend `Scenario.behaviorMode` persists with the workspace and defaults to `idealized` for older workspaces. The same-origin proxy forwards backend `behavior_mode`; editor requests use the population seed for `behavior_seed`. Native JSON scenarios can set `settings.behavior_mode` and `settings.behavior_seed` directly (defaults `idealized`, 42). Results contain `behavior: {version: 1, mode, seed, agents: [{agent_id, response_delay, speed_factor, desired_speed}]}`. Original `scenario.occupants[].desired_speed` values remain the base abilities, so reused populations never compound variation. Export records mode, per-person response delay and desired speed.
+
+Pin a run, change evacuation mode, and run again to compare the same people and base speeds. Mode stays editable while placement/mobility controls freeze. Repeat Behavioral runs with the same seed to compare geometry or closures with identical individual behavior; use several seeds for a range of outcomes rather than treating one realization as a prediction.
+
+## Body width and doorway proportions
+
+Interactive runs now default to a **0.46 m body diameter / shoulder width** (radius 0.23 m), replacing the earlier 0.40 m diameter. The Scenario control allows 40–70 cm. `Scenario.bodyWidth` is persisted and forwarded as `EditorSettings.body_width`; the control is frozen when a baseline is pinned. The renderer uses the returned radius, and the adapter checks an explicitly requested width against the response. Changing body width invalidates matched-population reuse rather than silently shrinking or relocating people.
+
+Both pixel and imported-plan runs use the selected radius for native collisions, body-clear routing, placement eligibility, spawn clearance (radius + 5 cm), initial separation (diameter + 5 cm), and the near-door removal strip (radius + 2 cm). Interactive runs override an older imported document's agent-radius default without changing the drawing's metres, furniture, or door widths. New image layouts also default to radius 0.23 m. Standalone/native JSON simulations continue honoring their explicit agent defaults.
+
+The Berkeley sample's exits are **1.75 m wide**, so they legitimately permit people abreast. They are not 90 cm single-door examples. Run overview reports the simulated body width and each boundary exit's actual width, computed from its endpoints; those measurements and compiled target polygons remain separate from decorative exit icons. Imported playback uses the run's compiled removal strips, which can move slightly when body size changes, rather than stale strips from the imported default. These are modeling settings, not calibrated population measurements. An incorrectly estimated drawing scale can still produce incorrect physical doorway widths; review scale evidence when proportions look wrong.
+
+Native regressions compare the same two 46 cm bodies approaching 0.80 m and 0.90 m doorways versus a 1.40 m doorway. The narrow case passes single file, the wide case permits simultaneous passage, and recorded bodies remain non-overlapping. Placement regressions cover both geometry formats and 46/60 cm bodies.
+
+Upload `examples/single_door_room.json` and select 20 people to inspect a measured 90 cm doorway in an 8 m × 6 m room. Larger bodies can lengthen queues or expose deadlocks in the current local-avoidance model. A stress run with 200 people configured at 50 cm width left two people unresolved even after 120 s. Such runs retain their incomplete status rather than reporting successful clearance.

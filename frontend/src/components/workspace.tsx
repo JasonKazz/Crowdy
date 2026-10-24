@@ -281,6 +281,7 @@ export default function Workspace({
   const shownPlan = mode === "layout" ? plan : (result?.plan ?? plan);
   const shownResult = mode === "layout" ? (!stale && result ? result : preview) : result;
   const evacuated = result ? getEvacuatedCount(result, time) : 0;
+  const responding = result?.agents.filter(agent => agent.outcome !== "trapped" && time < agent.delay).length ?? 0;
   const duration = Math.max(
     result?.totalTime ?? 60,
     mode === "compare" ? (baseline?.totalTime ?? 0) : 0,
@@ -430,7 +431,7 @@ export default function Workspace({
         next.trapped && !next.movingRemaining
           ? `${next.exited} evacuated; ${next.trapped} trapped with no available route. Trapped people remain visible in red.`
           : next.remaining
-          ? `Time limit reached: ${next.trapped ?? 0} trapped and ${next.movingRemaining ?? next.remaining} still moving; ${next.remaining} ${next.remaining === 1 ? "person" : "people"} remaining. Inspect the recorded movement and exits.`
+          ? `Time limit reached: ${next.trapped ?? 0} trapped and ${next.movingRemaining ?? next.remaining} with a route still inside; ${next.remaining} ${next.remaining === 1 ? "person" : "people"} remaining. Inspect the recorded movement and exits.`
           : "Run complete. Inspect playback or pin this run as your baseline.",
       );
     } catch (error) {
@@ -522,10 +523,14 @@ export default function Workspace({
               engine: result.engine,
               engineVersion: result.engineVersion,
               modelSettings: result.modelSettings,
+              bodyWidthMetres: result.agentRadius === undefined ? undefined : 2 * result.agentRadius,
+              exitWidthsMetres: result.exitWidths,
               placementExcludedArea: result.placementExcludedArea,
               trapped: result.trapped,
               movingRemaining: result.movingRemaining,
               startingOccupants: result.startingOccupants,
+              behaviorVersion: result.behaviorVersion,
+              individualBehavior: result.agents.map(agent => ({id:agent.sourceId, responseDelay:agent.delay, desiredSpeed:agent.desiredSpeed})),
               status: result.status,
               plan: result.plan,
               scenario: result.scenario,
@@ -877,6 +882,12 @@ export default function Workspace({
                 </select>
                 <Icon name="chevron" size={13} />
               </div>
+              <label className="field-label" htmlFor="body-width">Body width (cm)</label>
+              <input id="body-width" type="number" min="40" max="70" step="1" value={Math.round((scenario.bodyWidth ?? .46)*100)}
+                onChange={event => {const width=Number(event.target.value);if(Number.isInteger(width)&&width>=40&&width<=70)
+                  setScenario({...scenario,bodyWidth:width/100});}} />
+              <p className="field-note">Shoulder width and collision diameter use the same size. Default: 46 cm.
+                {isSample ? " Sample exits are 1.75 m wide, so two abreast can fit in these wide openings." : " Check the drawing’s scale if doors look too wide."}</p>
               <label className="field-label" htmlFor="mobility">
                 Walking profile
               </label>
@@ -902,7 +913,22 @@ export default function Workspace({
                   : "Includes slower walkers. Speed: 0.7–1.2 m/s."}
               </p>
             </fieldset>
-            {baseline && <p className="helper">Baseline starting people are fixed. Clear the baseline to change occupancy, seed or walking profile.</p>}
+            {baseline && <p className="helper">Baseline starting people, body width and base walking speeds are fixed. You can change evacuation mode below.</p>}
+            <fieldset disabled={busy}>
+              <label className="field-label" htmlFor="behavior-mode">Evacuation mode</label>
+              <div className="select-wrap">
+                <select id="behavior-mode" value={scenario.behaviorMode ?? "idealized"}
+                  onChange={event => setScenario({...scenario,behaviorMode:event.target.value as Scenario["behaviorMode"]})}>
+                  <option value="idealized">Idealized · immediate response</option>
+                  <option value="behavioral">Behavioral · varied response</option>
+                </select>
+                <Icon name="chevron" size={13}/>
+              </div>
+              <p className="field-note">{scenario.behaviorMode === "behavioral"
+                ? "Response delays: 0–12 s, most likely 3 s. Desired speeds vary ±15% around each person’s base speed. Amber people are still responding."
+                : "Everyone responds immediately and uses their base walking speed. This is not a globally optimal evacuation."}</p>
+              <p className="field-note">Behavioral assumptions are illustrative. The seed repeats the same individual differences.</p>
+            </fieldset>
             <fieldset disabled={busy} className="exit-availability">
               <legend>Blocked exits</legend>
               <p className="helper">Unavailable for the entire run. Blocking every exit is allowed. Doorway geometry stays unchanged.</p>
@@ -1002,7 +1028,7 @@ export default function Workspace({
               <div className="compare-plans">
                 <div>
                   <div className="compare-label">
-                    <span>BASELINE</span>
+                    <span>BASELINE · {baseline.scenario.behaviorMode === "behavioral" ? "BEHAVIORAL" : "IDEALIZED"}</span>
                     <strong>{clearanceLabel(baseline)}</strong>
                   </div>
                   <FloorPlanView
@@ -1014,7 +1040,7 @@ export default function Workspace({
                 </div>
                 <div>
                   <div className="compare-label">
-                    <span>PROPOSED</span>
+                    <span>PROPOSED · {result.scenario.behaviorMode === "behavioral" ? "BEHAVIORAL" : "IDEALIZED"}</span>
                     <strong>{clearanceLabel(result)}</strong>
                   </div>
                   <FloorPlanView
@@ -1118,6 +1144,12 @@ export default function Workspace({
                 <>
                   <span className="legend-person" />
                   Person
+                  {(result?.scenario.behaviorMode === "behavioral" || (mode === "compare" && baseline?.scenario.behaviorMode === "behavioral")) && <>
+                    <span className="legend-person" style={{background:"#b98a3e"}}/>Responding
+                  </>}
+                  {Boolean(result?.trapped || (mode === "compare" && baseline?.trapped)) && <>
+                    <span className="legend-person" style={{background:"#b64235"}}/>Trapped
+                  </>}
                   <span className="legend-exit" />
                   Exit
                 </>
@@ -1133,7 +1165,7 @@ export default function Workspace({
                 </strong>
                 <span>
                   {result
-                    ? `${evacuated} / ${result.scenario.occupancy} exited`
+                    ? `${evacuated} / ${result.scenario.occupancy} exited${mode !== "layout" && responding ? ` · ${responding} responding` : ""}`
                     : "Run a scenario to inspect movement"}
                 </span>
               </div>
@@ -1219,7 +1251,7 @@ export default function Workspace({
             <p className="scale-estimate-note">Automatic placement excluded {result.placementExcludedArea!.toFixed(1)} m² with no body-clear route to an exit. These areas had no starting occupants; review narrow gaps and enclosed rooms before interpreting the results.</p>}
           <p className="results-subtitle">
             {result
-              ? `${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`
+              ? `${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.behaviorMode === "behavioral" ? "Behavioral" : "Idealized"} · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`
               : "Your scenario, at a glance."}
           </p>
           {stale && (
@@ -1244,12 +1276,13 @@ export default function Workspace({
             <p>
               {result
                 ? result.remaining
-                  ? `${result.exited} exited · ${result.trapped ?? 0} trapped · ${result.movingRemaining ?? result.remaining} still moving at ${formatTime(result.totalTime)}`
+                  ? `${result.exited} exited · ${result.trapped ?? 0} trapped · ${result.movingRemaining ?? result.remaining} with a route still inside at ${formatTime(result.totalTime)}`
                   : `${result.exited} people reached an exit`
                 : "Time until everyone reaches an exit"}
             </p>
           </div>
           <div className="secondary-metrics">
+            <div><span>Body width · collision diameter</span><strong>{result?.agentRadius === undefined ? "—" : `${Math.round(2*result.agentRadius*100)} cm`}</strong></div>
             <div>
               <span>Average exit time</span>
               <strong>
@@ -1276,10 +1309,10 @@ export default function Workspace({
               </strong>
             </div>
             <div><span>Trapped · no available route</span><strong className={result?.trapped ? "warning-text" : ""}>{result?.trapped ?? "—"}</strong></div>
-            <div><span>Still moving at time limit</span><strong>{result?.movingRemaining ?? "—"}</strong></div>
+            <div><span>With a route at time limit</span><strong>{result?.movingRemaining ?? "—"}</strong></div>
             {result?.perExitCounts && Object.entries(result.perExitCounts).map(([id, count]) => (
               <div key={id}>
-                <span>Via {result.plan.exits.find((exit) => exit.id === id)?.label ?? id}</span>
+                <span>Via {result.plan.exits.find((exit) => exit.id === id)?.label ?? id}{result.exitWidths?.[id] === undefined ? "" : ` · ${result.exitWidths[id].toFixed(2)} m wide`}</span>
                 <strong>{count}<small> {count === 1 ? "person" : "people"}</small></strong>
               </div>
             ))}
@@ -1398,16 +1431,17 @@ export default function Workspace({
                     ? baseline &&
                       result &&
                       (baseline.remaining || result.remaining)
-                      ? "Identical starting people. Compare evacuated, trapped, and still moving; full evacuation time is unavailable when anyone remains."
+                      ? "Identical starting people. Compare evacuated, trapped, and people still inside with a route; full evacuation time is unavailable when anyone remains."
                       : sameScenario
                         ? `${layoutChanges} layout object${layoutChanges === 1 ? "" : "s"} changed. Identical starting people and walking speeds.`
-                        : "Identical starting people; exit availability changed."
-                    : "Edit the layout and run again to compare."}
+                        : "Identical starting people and base speeds; evacuation mode or exit availability changed."
+                    : "Change evacuation mode, block exits or edit the layout, then run again."}
                 </p>
                 {canCompare && result && <dl className="comparison-outcomes">
+                  <div><dt>Mode · before → after</dt><dd>{baseline.scenario.behaviorMode === "behavioral" ? "Behavioral" : "Idealized"} → {result.scenario.behaviorMode === "behavioral" ? "Behavioral" : "Idealized"}</dd></div>
                   <div><dt>Evacuated · before → after</dt><dd>{baseline.exited} → {result.exited}</dd></div>
                   <div><dt>Trapped · before → after</dt><dd>{baseline.trapped ?? 0} → {result.trapped ?? 0}</dd></div>
-                  <div><dt>Still moving · before → after</dt><dd>{baseline.movingRemaining ?? baseline.remaining} → {result.movingRemaining ?? result.remaining}</dd></div>
+                  <div><dt>With a route · before → after</dt><dd>{baseline.movingRemaining ?? baseline.remaining} → {result.movingRemaining ?? result.remaining}</dd></div>
                   <div><dt>Peak density · before → after</dt><dd>{baseline.peakDensity.toFixed(1)} → {result.peakDensity.toFixed(1)} people/m²</dd></div>
                   {Object.entries(result.perExitCounts ?? {}).map(([id, total]) => <div key={id}><dt>{result.plan.exits.find(e=>e.id===id)?.label ?? id} · before → after</dt><dd>{baseline.perExitCounts?.[id] ?? 0} → {total}</dd></div>)}
                 </dl>}
@@ -1453,7 +1487,7 @@ export default function Workspace({
             ) : (
               <>
                 <p className="helper">
-                  Keep a run as a baseline, then test a change to the layout.
+                  Keep a run as a baseline, then test another mode, blocked exits or a layout change.
                 </p>
                 <button
                   className="button subtle pin-button"
@@ -1461,7 +1495,7 @@ export default function Workspace({
                   onClick={() => {
                     setBaseline(result);
                     setNotice(
-                      "Baseline pinned. Starting positions and walking speeds will be reused exactly. Block exits or edit the layout, then run again.",
+                      "Baseline pinned. Starting positions and base speeds are fixed. Change evacuation mode, block exits or edit the layout, then run again.",
                     );
                   }}
                 >
@@ -1630,6 +1664,10 @@ export default function Workspace({
                   JuPedSim uses a collision-free speed model. People choose an
                   exit once using the shortest routed distance around obstacles;
                   they do not switch destinations to avoid congestion.
+                  Idealized mode starts everyone immediately at their base desired speed.
+                  Behavioral mode samples response delays from a triangular 0–12 s distribution (mode 3 s)
+                  and speed multipliers from a triangular 0.85–1.15 distribution (mode 1).
+                  These are illustrative assumptions, not calibrated predictions. Waiting people remain physical obstacles.
                 </dd>
               </div>
               <div>
@@ -1648,6 +1686,10 @@ export default function Workspace({
                   Playback follows recorded positions and their simulation
                   timestamps. 1× advances one simulated second per real second.
                   Reduced motion starts runs paused.
+                  Shoulder ellipses face the measured walking direction with smoothed turns;
+                  collision and route clearance still use circular bodies. Amber means waiting to respond; red means trapped.
+                  Body width defaults to 46 cm (a 23 cm radius), is adjustable from 40–70 cm, and sets both the shoulder span and collision diameter.
+                  Door widths come from the floor geometry; wide exits can support people abreast. Estimated drawing scale affects their measured width.
                 </dd>
               </div>
               <div>

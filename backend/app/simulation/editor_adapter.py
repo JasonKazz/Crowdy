@@ -18,9 +18,9 @@ from app.simulation.routing import body_clear_components
 
 PIXELS_PER_METRE = 32.0
 CANVAS_HEIGHT = 600.0
-AGENT_RADIUS = 0.2
-SPAWN_CLEARANCE = 0.25
-AGENT_SEPARATION = 0.45
+AGENT_RADIUS = 0.23
+SPAWN_MARGIN = 0.05
+SEPARATION_MARGIN = 0.05
 WALL_HALF_WIDTH = 3.5 / PIXELS_PER_METRE
 POPULATION_SEED = 42
 
@@ -92,7 +92,7 @@ def _boundary_opening(plan, floor, origin, normal):
     return origin, 1.4
 
 
-def _editor_geometry(plan: dict):
+def _editor_geometry(plan: dict, radius=AGENT_RADIUS):
     walls = plan["walls"]
     xs = [wall[key] for wall in walls for key in ("x1", "x2")]
     ys = [wall[key] for wall in walls for key in ("y1", "y2")]
@@ -125,7 +125,7 @@ def _editor_geometry(plan: dict):
             landing = _along(origin, normal, -0.15, 1.5, door_width / 2)
             floor_parts.append(landing)
             areas.append(_region(f"editor-landing-{index}", landing))
-            stage = _along(origin, normal, AGENT_RADIUS + .02, AGENT_RADIUS + .20, door_width / 2 - .01)
+            stage = _along(origin, normal, radius + .02, radius + .20, door_width / 2 - .01)
             # RoutePlanner reads the first edge as the cross-door threshold.
             # Keep that edge tangent to the doorway, as the layout compiler does.
             corners = list(stage.exterior.coords)[:-1]
@@ -167,15 +167,17 @@ def placement_access(walkable, exits, radius=AGENT_RADIUS):
     return unary_union(reachable), excluded
 
 
-def _positions(plan: dict, settings: dict, walkable, base_floor, exits, convert=pixel_to_metres):
+def _positions(plan: dict, settings: dict, walkable, base_floor, exits, convert=pixel_to_metres, radius=AGENT_RADIUS):
+    clearance = radius + SPAWN_MARGIN
+    separation = 2 * radius + SEPARATION_MARGIN
     spawn = walkable.intersection(base_floor)
-    exit_buffer = unary_union([Polygon(exit.polygon) for exit in exits]).buffer(SPAWN_CLEARANCE)
+    exit_buffer = unary_union([Polygon(exit.polygon) for exit in exits]).buffer(clearance)
     spawn = spawn.difference(exit_buffer)
-    usable = spawn.buffer(-SPAWN_CLEARANCE)
+    usable = spawn.buffer(-clearance)
     if usable.is_empty or usable.area <= 0:
         raise ValueError("The layout has no clear space for people; move obstacles away from walls and exits")
     prepared = prep(spawn)
-    reachable, _ = placement_access(walkable, exits)
+    reachable, _ = placement_access(walkable, exits, radius)
     accessible = prep(reachable)
     boundary = spawn.boundary
     count = settings["occupancy"]
@@ -197,14 +199,14 @@ def _positions(plan: dict, settings: dict, walkable, base_floor, exits, convert=
         else:
             candidate = (rng.uniform(min_x, max_x), rng.uniform(min_y, max_y))
         point = Point(candidate)
-        if not prepared.contains(point) or point.distance(boundary) < SPAWN_CLEARANCE:
+        if not prepared.contains(point) or point.distance(boundary) < clearance:
             continue
         # Automatic occupants cannot enter furniture pockets through gaps
         # narrower than their bodies. Explicit starting positions still retain
         # the route planner's normal trapped-occupant error.
         if not accessible.covers(point):
             continue
-        if any(math.dist(candidate, other) < AGENT_SEPARATION for other in positions):
+        if any(math.dist(candidate, other) < separation for other in positions):
             continue
         positions.append(candidate)
         if len(positions) == count:
@@ -216,19 +218,25 @@ def _positions(plan: dict, settings: dict, walkable, base_floor, exits, convert=
 
 
 def editor_to_scenario(plan: dict, settings: dict, starting_population=None) -> Scenario:
+    radius = settings.get("body_width", 2 * AGENT_RADIUS) / 2
     if plan.get("native"):
         from app.services.floorplans.layout import compile_layout
         from app.simulation.workspace_layout import editor_native_layout, world_point
         layout, transform = editor_native_layout(plan)
+        # Interactive scenario controls set physical bodies independently of
+        # drawing scale or defaults in an older imported document.
+        layout.agent_defaults.radius = radius
         scenario = compile_layout(layout)
         scenario.settings.blocked_exit_ids = settings.get("blocked_exit_ids", [])
+        scenario.settings.behavior_mode = settings.get("behavior_mode", "idealized")
+        scenario.settings.behavior_seed = settings.get("seed", POPULATION_SEED)
         base_floor = unary_union([Polygon(r.polygon) for r in layout.walkable_areas])
         if starting_population is not None:
             return _reuse_people(scenario, starting_population, settings)
         starts = _positions(plan, settings, build_geometry(scenario), base_floor, scenario.exits,
-                            convert=lambda x, y: world_point(x, y, transform))
+                            convert=lambda x, y: world_point(x, y, transform), radius=radius)
         return _with_people(scenario, starts, settings)
-    base_floor, areas, obstacles, exits, boundary_exits = _editor_geometry(plan)
+    base_floor, areas, obstacles, exits, boundary_exits = _editor_geometry(plan, radius)
     # Population is a temporary schema-valid placeholder. Explicit starts below
     # let mixed walking profiles keep per-person model parameters.
     scenario = Scenario.model_validate({
@@ -242,8 +250,10 @@ def editor_to_scenario(plan: dict, settings: dict, starting_population=None) -> 
             end=(exit.origin[0] + exit.normal[1] * exit.width / 2, exit.origin[1] - exit.normal[0] * exit.width / 2),
             outward=exit.normal, outside_space="open").model_dump() for exit in boundary_exits],
         "population": {"count": settings["occupancy"], "seed": POPULATION_SEED, "spawn_area_ids": ["editor-floor"]},
-        "agent_defaults": {"radius": AGENT_RADIUS, "desired_speed": 1.2},
+        "agent_defaults": {"radius": radius, "desired_speed": 1.2},
         "settings": {"dt": 0.01, "sample_interval": 0.2, "max_time": 60.0,
+                     "behavior_mode": settings.get("behavior_mode", "idealized"),
+                     "behavior_seed": settings.get("seed", POPULATION_SEED),
                      "blocked_exit_ids": settings.get("blocked_exit_ids", [])},
     })
     try:
@@ -252,18 +262,18 @@ def editor_to_scenario(plan: dict, settings: dict, starting_population=None) -> 
         raise ValueError(f"Review the layout geometry: {exc}") from exc
 
     for exit in boundary_exits:
-        corridor = _along(exit.origin, exit.normal, -0.5, 0.85, SPAWN_CLEARANCE)
+        corridor = _along(exit.origin, exit.normal, -0.5, 0.85, radius + SPAWN_MARGIN)
         if not walkable.covers(corridor):
             raise ValueError(
-                f"Exit '{exit.label}' is blocked or has less than 0.5 m clear width. "
+                f"Exit '{exit.label}' is blocked or has less than {2 * (radius + SPAWN_MARGIN):g} m clear width for the selected body size. "
                 "Place it in a real wall opening and move nearby obstacles."
             )
-    body_space = walkable.buffer(-AGENT_RADIUS)
+    body_space = walkable.buffer(-radius)
     if body_space.is_empty or body_space.geom_type != "Polygon":
         raise ValueError("Walls or furniture leave disconnected areas or passages too narrow for people")
     if starting_population is not None:
         return _reuse_people(scenario, starting_population, settings)
-    starts = _positions(plan, settings, walkable, base_floor, exits)
+    starts = _positions(plan, settings, walkable, base_floor, exits, radius=radius)
     return _with_people(scenario, starts, settings)
 
 
@@ -273,7 +283,7 @@ def _reuse_people(scenario, reference, settings):
             or reference.distribution != settings["distribution"]
             or reference.seed != settings.get("seed", POPULATION_SEED)
             or not math.isclose(reference.radius, scenario.agent_defaults.radius, abs_tol=1e-9)):
-        raise ValueError("Baseline population settings differ. Keep occupancy, seed, distribution and walking profile unchanged, or clear the baseline.")
+        raise ValueError("Baseline population settings differ. Keep occupancy, seed, distribution, walking profile and body width unchanged, or clear the baseline.")
     data = scenario.model_dump()
     data.update(occupants=[person.model_dump() for person in reference.occupants], population=None)
     resolved = Scenario.model_validate(data)

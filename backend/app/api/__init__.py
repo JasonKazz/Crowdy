@@ -180,6 +180,8 @@ class EditorSettings(InputModel):
     distribution: Literal["uniform", "workstations"]
     seed: int = Field(default=42, ge=0, le=2**32 - 1)
     blocked_exit_ids: list[str] = Field(default_factory=list, max_length=30)
+    behavior_mode: Literal["idealized", "behavioral"] = "idealized"
+    body_width: float = Field(default=.46, ge=.4, le=.7)
 
 
 class StartingPopulation(InputModel):

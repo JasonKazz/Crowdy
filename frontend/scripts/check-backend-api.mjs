@@ -41,6 +41,9 @@ try {
   await rejected("{", 400);
   await rejected("null", 400);
   await rejected({ ...input, scenario: { ...scenario, occupancy: 201 } }, 400);
+  await rejected({ ...input, scenario: { ...scenario, behaviorMode: "optimal" } }, 400);
+  await rejected({ ...input, scenario: { ...scenario, bodyWidth: .39 } }, 400);
+  await rejected({ ...input, scenario: { ...scenario, bodyWidth: "0.5" } }, 400);
   await rejected({ ...input, plan: { ...SAMPLE_PLAN, exits: [] } }, 400);
   await rejected(" ".repeat(1024 * 1024 + 1), 413);
 
@@ -53,6 +56,8 @@ try {
   assert.equal(result.status, "completed");
   assert.equal(result.exited, scenario.occupancy);
   assert.equal(result.remaining, 0);
+  assert.equal(result.agentRadius,.23,"Interactive runs default to a 46 cm body diameter");
+  assert.deepEqual(result.exitWidths,{"exit-a":1.75,"exit-b":1.75},"Door widths must come from geometry, not exit icons");
   assert.ok(result.clearanceTime > 0);
   assert.equal(Object.values(result.perExitCounts).reduce((a, b) => a + b, 0), scenario.occupancy);
   assert.equal(Object.keys(result.perExitCounts).length, 2);
@@ -106,6 +111,26 @@ try {
   assert.equal(closedResult.status,"trapped");
   assert.deepEqual(closedPayload.scenario.occupants,nativePayload.scenario.occupants);
   assert.ok(closedPayload.editor_metadata.reused_starting_population);
+  const behavioralScenario = {...seededScenario,behaviorMode:"behavioral"};
+  const behavioralResponse=await post({plan:nativePlan,scenario:behavioralScenario,starting_population:reference});
+  assert.equal(behavioralResponse.status,200);
+  const behavioralPayload=await behavioralResponse.json();
+  const behavioralResult=adaptBackendSimulation(behavioralPayload,nativePlan,behavioralScenario);
+  assert.equal(behavioralResult.exited,20);
+  assert.deepEqual(behavioralResult.startingOccupants,nativeResult.startingOccupants);
+  assert.ok(behavioralResult.reusedStarts);
+  assert.ok(behavioralResult.agents.every(agent=>agent.delay>0 && agent.desiredSpeed>0));
+  assert.ok(new Set(behavioralResult.agents.map(agent=>agent.desiredSpeed)).size>1);
+  passed++;
+  await rejected({plan:nativePlan,scenario:{...seededScenario,bodyWidth:.6},starting_population:reference},422);
+  const sizedScenario={...scenario,bodyWidth:.6};
+  const sizedResponse=await post({plan:SAMPLE_PLAN,scenario:sizedScenario});
+  assert.equal(sizedResponse.status,200);
+  const sizedRun=adaptBackendSimulation(await sizedResponse.json(),SAMPLE_PLAN,sizedScenario);
+  assert.equal(sizedRun.agentRadius,.3);
+  assert.equal(sizedRun.exited,20);
+  assert.equal(sizedRun.exitWidths["exit-a"],1.75,"Changing bodies must not resize the doorway");
+  passed++;
   await rejected({plan:nativePlan,scenario:{...seededScenario,blocked_exit_ids:["unknown"]}},400);
   passed+=3;
   console.log(`Backend integration checks passed: ${passed} HTTP checks, real JuPedSim playback, two exit summaries, validation, and blocked-geometry recovery.`);
