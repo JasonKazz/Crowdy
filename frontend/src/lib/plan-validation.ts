@@ -1,5 +1,38 @@
 import type { FloorPlan } from "./simulation";
 
+function record(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function named(value: unknown): value is Record<string, unknown> {
+  return record(value) && typeof value.id === "string" && Boolean(value.id.trim());
+}
+
+function validNativeLayout(value: unknown): boolean {
+  const number = (item: unknown) => typeof item === "number" && Number.isFinite(item);
+  const point = (item: unknown) => Array.isArray(item) && item.length === 2 && item.every(number);
+  const polygon = (item: unknown) => Array.isArray(item) && item.length >= 3 && item.every(point);
+  const regions = (items: unknown) => Array.isArray(items) && items.every(item => named(item) && polygon(item.polygon));
+  if (!record(value) || !regions(value.walkable_areas) || !regions(value.furniture) ||
+    !Array.isArray(value.walls) || !value.walls.every(wall => named(wall) &&
+      point(wall.start) && point(wall.end) && number(wall.thickness)) ||
+    !Array.isArray(value.doors) || !value.doors.every(door => named(door) &&
+      typeof door.wall_id === "string" && number(door.offset) && number(door.width)) ||
+    !Array.isArray(value.exits) || !value.exits.every(exit => named(exit) && ("polygon" in exit
+      ? polygon(exit.polygon)
+      : typeof exit.floor_id === "string" && number(exit.edge_index) &&
+        number(exit.offset) && number(exit.width) && number(exit.landing_depth))) ||
+    !record(value.agent_defaults) || !number(value.agent_defaults.radius))
+    return false;
+  const source = value.source_image;
+  if (source !== undefined && source !== null && (!named(source) ||
+    !number(source.width_px) || !number(source.height_px) || !number(source.meters_per_pixel) ||
+    (source.calibration !== undefined && source.calibration !== null &&
+      (!record(source.calibration) || typeof source.calibration.label !== "string"))))
+    return false;
+  return true;
+}
+
 export function validatePlan(value: unknown): FloorPlan {
   if (!value || typeof value !== "object")
     throw new Error(
@@ -98,10 +131,11 @@ export function validatePlan(value: unknown): FloorPlan {
     const native = plan.native, transform = native.transform;
     const validPoints = (points: unknown): boolean => Array.isArray(points) && points.length >= 3 && points.length <= 300 &&
       points.every(p => p && finite(p.x, p.y));
-    if (!native.layout || !transform || !finite(transform.pixels_per_metre,transform.offset_x,transform.offset_y) ||
+    if (!validNativeLayout(native.layout) || !transform || !finite(transform.pixels_per_metre,transform.offset_x,transform.offset_y) ||
       transform.pixels_per_metre <= 0 || !Array.isArray(native.floors) || !native.floors.every(validPoints) ||
       !Array.isArray(native.walls) || !native.walls.every(validPoints) || !Array.isArray(native.exit_zones) ||
-      !native.exit_zones.every(zone => typeof zone.id === "string" && validPoints(zone.polygon)))
+      !native.exit_zones.every(zone => zone && typeof zone.id === "string" && validPoints(zone.polygon)) ||
+      (native.issues !== undefined && (!Array.isArray(native.issues) || !native.issues.every(issue => typeof issue === "string"))))
       throw new Error("The imported layout is missing its geometry or scale. Import it again.");
   }
   return structuredClone(plan);
