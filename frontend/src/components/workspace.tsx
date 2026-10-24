@@ -1,7 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import AppHeader from "./app-header";
+import AppFooter from "./app-footer";
+import { validatePlan } from "@/lib/plan-validation";
+import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
 import FloorPlanView from "./floor-plan";
 import Icon, { type IconName } from "./icon";
 import {
@@ -15,106 +19,11 @@ import {
 } from "@/lib/simulation";
 
 type Mode = "layout" | "simulation" | "compare";
-const DEFAULT_SCENARIO: Scenario = {
-  occupancy: 80,
-  mobility: "standard",
-  distribution: "uniform",
-};
-const STORAGE_KEY = "crowdy-workspace-v1";
 const signature = (plan: FloorPlan, scenario: Scenario) =>
   JSON.stringify({ plan, scenario });
 const formatTime = (n: number) => `${n.toFixed(1)} s`;
 const clonePlan = (plan: FloorPlan) =>
   JSON.parse(JSON.stringify(plan)) as FloorPlan;
-
-function validatePlan(value: unknown): FloorPlan {
-  if (!value || typeof value !== "object")
-    throw new Error(
-      "Choose a Crowdy JSON floor plan. Download the sample to see the format.",
-    );
-  const plan = value as FloorPlan;
-  const finite = (...numbers: number[]) => numbers.every(Number.isFinite);
-  if (
-    typeof plan.id !== "string" ||
-    !plan.id.trim() ||
-    plan.id.length > 80 ||
-    typeof plan.name !== "string" ||
-    !plan.name.trim() ||
-    plan.name.length > 80 ||
-    plan.width !== 900 ||
-    plan.height !== 600 ||
-    !Number.isFinite(plan.area) ||
-    plan.area <= 0 ||
-    plan.area > 10000 ||
-    !Array.isArray(plan.items) ||
-    plan.items.length > 100 ||
-    !Array.isArray(plan.walls) ||
-    plan.walls.length > 100 ||
-    !Array.isArray(plan.exits) ||
-    plan.exits.length < 1 ||
-    plan.exits.length > 12
-  )
-    throw new Error(
-      "This plan needs a name, a 900 × 600 canvas, valid area, and at least one exit. Use the sample JSON as a template.",
-    );
-  const ids = new Set<string>();
-  for (const item of plan.items) {
-    if (
-      !item ||
-      typeof item.id !== "string" ||
-      ids.has(item.id) ||
-      typeof item.label !== "string" ||
-      item.label.length > 80 ||
-      !["desk", "table", "shelf", "sofa", "plant", "obstacle"].includes(
-        item.kind,
-      ) ||
-      !finite(item.x, item.y, item.width, item.height) ||
-      item.width < 8 ||
-      item.height < 8 ||
-      item.x < 0 ||
-      item.y < 0 ||
-      item.x + item.width > 900 ||
-      item.y + item.height > 600
-    )
-      throw new Error(
-        "An object has invalid dimensions or a duplicate ID. Check its coordinates in the JSON and upload again.",
-      );
-    ids.add(item.id);
-  }
-  for (const wall of plan.walls)
-    if (
-      !wall ||
-      !finite(wall.x1, wall.y1, wall.x2, wall.y2) ||
-      Math.min(wall.x1, wall.x2) < 0 ||
-      Math.max(wall.x1, wall.x2) > 900 ||
-      Math.min(wall.y1, wall.y2) < 0 ||
-      Math.max(wall.y1, wall.y2) > 600
-    )
-      throw new Error(
-        "A wall is outside the 900 × 600 canvas. Correct its coordinates and upload again.",
-      );
-  const exitIds = new Set<string>();
-  for (const exit of plan.exits) {
-    if (
-      !exit ||
-      typeof exit.id !== "string" ||
-      !exit.id.trim() ||
-      exitIds.has(exit.id) ||
-      typeof exit.label !== "string" ||
-      exit.label.length > 80 ||
-      !finite(exit.x, exit.y) ||
-      exit.x < 0 ||
-      exit.x > 900 ||
-      exit.y < 0 ||
-      exit.y > 600
-    )
-      throw new Error(
-        "An exit has invalid coordinates or a duplicate ID. Correct it and upload again.",
-      );
-    exitIds.add(exit.id);
-  }
-  return clonePlan(plan);
-}
 
 function downloadJson(data: unknown, name: string) {
   const url = URL.createObjectURL(
@@ -127,9 +36,28 @@ function downloadJson(data: unknown, name: string) {
   URL.revokeObjectURL(url);
 }
 
-export default function Workspace() {
-  const [plan, setPlan] = useState<FloorPlan>(SAMPLE_PLAN);
-  const [scenario, setScenario] = useState<Scenario>(DEFAULT_SCENARIO);
+type WorkspaceProps = {
+  workspaceId: string;
+  workspaceName: string;
+  initialPlan: FloorPlan;
+  initialScenario: Scenario;
+  isSample: boolean;
+  ownerId: string | null;
+};
+
+export default function Workspace({
+  workspaceId,
+  workspaceName,
+  initialPlan,
+  initialScenario,
+  isSample,
+  ownerId,
+}: WorkspaceProps) {
+  const router = useRouter();
+  const [plan, setPlan] = useState<FloorPlan>(() => clonePlan(initialPlan));
+  const [scenario, setScenario] = useState<Scenario>(() => ({
+    ...initialScenario,
+  }));
   const [mode, setMode] = useState<Mode>("layout");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [history, setHistory] = useState<FloorPlan[]>([]);
@@ -153,62 +81,102 @@ export default function Workspace() {
   const [modal, setModal] = useState<"upload" | "help" | "reset" | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [saveState, setSaveState] = useState("Loading workspace");
-  const [hydrated, setHydrated] = useState(false);
-  const [savedSetup, setSavedSetup] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [copyError, setCopyError] = useState("");
+  const [savedSetup, setSavedSetup] = useState(() =>
+    signature(initialPlan, initialScenario),
+  );
+  const savedSignature = useRef(signature(initialPlan, initialScenario));
+  const pendingSetup = useRef({ plan, scenario });
+  const openingSetup = useRef({
+    plan: clonePlan(initialPlan),
+    scenario: { ...initialScenario },
+  });
   const runTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentTime = useRef(0);
   const uploadRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) return;
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) {
-          const data = JSON.parse(stored);
-          const next = validatePlan(data.plan);
-          const s = data.scenario as Scenario;
-          if (
-            s &&
-            Number.isInteger(s.occupancy) &&
-            s.occupancy >= 10 &&
-            s.occupancy <= 200 &&
-            ["standard", "mixed"].includes(s.mobility) &&
-            ["uniform", "workstations"].includes(s.distribution)
-          ) {
-            setPlan(next);
-            setScenario(s);
-          }
-        }
-      } catch {
-        setNotice(
-          "Your previous setup could not be restored. The sample plan is ready.",
-        );
-      }
-      setHydrated(true);
-    });
-    return () => {
-      cancelled = true;
-      if (runTimer.current) clearTimeout(runTimer.current);
-    };
-  }, []);
+  const persistWorkspace = useCallback(() => {
+    if (isSample || !ownerId) return true;
+    const currentSignature = signature(plan, scenario);
+    if (currentSignature === savedSignature.current) return true;
+    try {
+      updateWorkspace(ownerId, workspaceId, { plan, scenario });
+      savedSignature.current = currentSignature;
+      setSavedSetup(currentSignature);
+      setSaveError("");
+      return true;
+    } catch (error) {
+      setSaveError(
+        error instanceof Error
+          ? error.message
+          : "This workspace could not be saved. Export a copy before leaving.",
+      );
+      return false;
+    }
+  }, [isSample, ownerId, workspaceId, plan, scenario]);
 
   useEffect(() => {
-    if (!hydrated) return;
-    const timer = setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ plan, scenario }));
-        setSaveState("Saved in this browser");
-      } catch {
-        setSaveState("Browser storage unavailable");
-      }
-      setSavedSetup(signature(plan, scenario));
-    }, 100);
+    pendingSetup.current = { plan, scenario };
+    if (isSample || signature(plan, scenario) === savedSetup) return;
+    const timer = setTimeout(persistWorkspace, 150);
     return () => clearTimeout(timer);
-  }, [hydrated, plan, scenario]);
+  }, [isSample, plan, scenario, savedSetup, persistWorkspace]);
+
+  useEffect(() => {
+    if (isSample || !ownerId) return;
+    function flush() {
+      const pending = pendingSetup.current;
+      const currentSignature = signature(pending.plan, pending.scenario);
+      if (currentSignature === savedSignature.current) return true;
+      try {
+        updateWorkspace(ownerId!, workspaceId, pending);
+        savedSignature.current = currentSignature;
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    function beforeUnload(event: BeforeUnloadEvent) {
+      if (!flush()) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    }
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("beforeunload", beforeUnload);
+      flush();
+    };
+  }, [isSample, ownerId, workspaceId]);
+
+  useEffect(
+    () => () => {
+      if (runTimer.current) clearTimeout(runTimer.current);
+    },
+    [],
+  );
+
+  function saveCopy() {
+    if (!ownerId) return;
+    try {
+      const record = createWorkspace(ownerId, {
+        name: `${workspaceName} copy`.slice(0, 80),
+        plan,
+        scenario,
+      });
+      router.push(`/workspaces/${record.id}`);
+    } catch (error) {
+      setCopyError(
+        error instanceof Error
+          ? error.message
+          : "The copy could not be saved. Export this workspace to keep your work.",
+      );
+    }
+  }
 
   useEffect(() => {
     if (modal) dialogRef.current?.showModal();
@@ -394,13 +362,13 @@ export default function Workspace() {
     if (uploadRef.current) uploadRef.current.value = "";
   }
   function reset() {
-    editPlan(clonePlan(SAMPLE_PLAN));
-    setScenario(DEFAULT_SCENARIO);
+    editPlan(clonePlan(openingSetup.current.plan));
+    setScenario({ ...openingSetup.current.scenario });
     setSelectedId(null);
     setMode("layout");
     setModal(null);
     setNotice(
-      "Sample layout restored. Your previous layout is available with Undo.",
+      "Opening layout restored. Your previous layout is available with Undo.",
     );
   }
   function exportSetup() {
@@ -439,48 +407,23 @@ export default function Workspace() {
 
   return (
     <div className="app-shell">
-      <header className="app-header">
-        <Link className="brand" href="/" aria-label="Crowdy home">
-          <span className="brand-symbol">
-            <i />
-            <i />
-            <i />
-            <i />
-          </span>
-          crowdy<span className="brand-period">.</span>
-        </Link>
-        <span className="header-divider" />
-        <div className="breadcrumb">
-          <span>Workspace</span>
-          <Icon name="chevron" size={13} />
-          <strong>Untitled project</strong>
-        </div>
-        <div className="header-right">
-          <span className="demo-badge">
-            <span />
-            Interactive demo
-          </span>
-          <button
-            className="icon-button help-button"
-            aria-label="About this demo"
-            onClick={() => setModal("help")}
-          >
-            <Icon name="help" />
-          </button>
-          <span className="avatar" aria-label="Local workspace">
-            C
-          </span>
-        </div>
-      </header>
+      <AppHeader
+        workspaceName={workspaceName}
+        onHelp={() => setModal("help")}
+        onNavigate={persistWorkspace}
+      />
       <div className="project-bar">
         <div>
-          <div className="project-kicker">EVACUATION PLANNING</div>
-          <h1>{plan.name.replace(/\.json$/i, "")}</h1>
+          <h1>{workspaceName}</h1>
           <p>
             <span className="status-dot" />
-            {hydrated && savedSetup !== signature(plan, scenario)
-              ? "Saving changes…"
-              : saveState}
+            {isSample
+              ? "Sample workspace"
+              : saveError
+                ? "Changes not saved"
+                : savedSetup !== signature(plan, scenario)
+                  ? "Saving changes…"
+                  : "Saved on this device"}
             <span className="text-separator">/</span>Ground floor
           </p>
         </div>
@@ -498,6 +441,36 @@ export default function Workspace() {
           </button>
         </div>
       </div>
+      {isSample && (
+        <div className="workspace-context-strip">
+          <p>
+            This sample is available to everyone. Changes here are temporary.
+          </p>
+          {ownerId ? (
+            <button className="button secondary" onClick={saveCopy}>
+              <Icon name="plus" size={15} />
+              Make a copy
+            </button>
+          ) : (
+            <a className="button secondary" href="/auth/login?returnTo=/">
+              Sign in to create a workspace
+            </a>
+          )}
+        </div>
+      )}
+      {(saveError || copyError) && (
+        <div className="workspace-save-error" role="alert">
+          <span>{saveError || copyError}</span>
+          {saveError && (
+            <button className="text-button" onClick={persistWorkspace}>
+              Retry saving
+            </button>
+          )}
+          <button className="text-button" onClick={exportSetup}>
+            Export a copy
+          </button>
+        </div>
+      )}
       <main className="workspace-grid">
         <aside className="setup-panel" aria-label="Plan and scenario settings">
           <div className="panel-title">
@@ -892,7 +865,6 @@ export default function Workspace() {
                   <Icon name="fit" size={16} />
                 </button>
               </div>
-
             </div>
             {stale && mode !== "layout" && (
               <div className="stale-notice">
@@ -1075,7 +1047,9 @@ export default function Workspace() {
               </strong>
             </div>
             <div>
-              <span title="Highest sampled density in a 2 m × 2 m cell across the run">Peak sampled density</span>
+              <span title="Highest sampled density in a 2 m × 2 m cell across the run">
+                Peak sampled density
+              </span>
               <strong>
                 {result ? result.peakDensity.toFixed(1) : "—"}
                 <small> people / m²</small>
@@ -1286,15 +1260,7 @@ export default function Workspace() {
           </div>
         </aside>
       </main>
-      <footer className="app-footer">
-        <span>
-          <span className="footer-mark">C</span>Made for the way people move.
-        </span>
-        <span>
-          Cal Hacks 13.0<span className="text-separator">/</span>Browser-local
-          workspace
-        </span>
-      </footer>
+      <AppFooter />
       {notice && (
         <div className="toast" role="status">
           <Icon name="check" size={16} />
@@ -1322,7 +1288,7 @@ export default function Workspace() {
             {modal === "upload"
               ? "Upload floor plan"
               : modal === "reset"
-                ? "Restore the sample layout?"
+                ? "Restore the opening layout?"
                 : "About this demo"}
           </h2>
           <button
@@ -1381,8 +1347,8 @@ export default function Workspace() {
         ) : modal === "reset" ? (
           <>
             <p>
-              This replaces your edited layout and scenario with the sample
-              studio. Your previous layout remains available through Undo;
+              This restores the layout and scenario from when you opened this
+              workspace. Your previous layout remains available through Undo;
               existing run results keep their original inputs.
             </p>
             <div className="dialog-actions">
@@ -1393,7 +1359,7 @@ export default function Workspace() {
                 Keep editing
               </button>
               <button className="button primary" onClick={reset}>
-                Restore sample
+                Restore layout
               </button>
             </div>
           </>
@@ -1437,9 +1403,9 @@ export default function Workspace() {
               <div>
                 <dt>Your work</dt>
                 <dd>
-                  Layout and scenario are saved in this browser. Runs and
-                  baselines last for this session. Export a workspace to keep a
-                  copy.
+                  {isSample
+                    ? "Sample edits are temporary. Make a personal copy to keep them, or export this layout."
+                    : "This workspace is saved for your account on this device. Runs and baselines last for this session; export to keep a separate copy."}
                 </dd>
               </div>
             </dl>

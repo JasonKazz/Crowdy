@@ -7,7 +7,9 @@ Live demo: https://crowdy-calhacks13.vercel.app
 
 The Next.js app lives in `frontend/` and uses TypeScript, Tailwind CSS, ESLint, and the App Router. Use Node.js 20.9 or newer.
 
-The workspace includes furniture editing, scenario controls, playback, density overlays, and baseline comparisons. The simulation is an illustrative browser-local model; backend analysis and image/PDF interpretation are not connected yet.
+Auth0 provides sign-in, account creation, and sign-out. For local setup, configure the ignored `frontend/.env.local` using `frontend/.env.example` and the instructions in [frontend/README.md](frontend/README.md). Keep an existing onboarding-generated environment file.
+
+The home page uses one workspace list. Berkeley studio appears for everyone with a **Sample** tag, alongside personal workspaces for signed-in users. Personal workspaces are saved per account in the current browser; the shared sample always opens with its original layout. Workspaces include furniture editing, scenario controls, playback, density overlays, and baseline comparisons. The simulation is an illustrative browser-local model; backend analysis and image/PDF interpretation are not connected yet.
 
 ```sh
 cd frontend

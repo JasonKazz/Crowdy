@@ -1,0 +1,718 @@
+"use client";
+
+import { useUser } from "@auth0/nextjs-auth0";
+import WorkspaceLink from "./workspace-link";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import Icon from "./icon";
+import { SAMPLE_PLAN, type FloorPlan } from "@/lib/simulation";
+import {
+  createWorkspace,
+  DEFAULT_SCENARIO,
+  deleteWorkspace,
+  listWorkspaces,
+  SAMPLE_WORKSPACE_ID,
+  subscribeWorkspaces,
+  type WorkspaceRecord,
+} from "@/lib/workspace-store";
+import styles from "./workspaces-home.module.css";
+
+type CreateDialog = {
+  ownerId: string;
+  type: "create";
+  template: "empty" | "sample";
+  source?: WorkspaceRecord;
+};
+type DialogState =
+  | CreateDialog
+  | { ownerId: string; type: "delete"; workspace: WorkspaceRecord }
+  | null;
+type LibraryState = {
+  ownerId: string | null;
+  records: WorkspaceRecord[];
+  error: string;
+};
+
+function PlanPreview({
+  plan,
+  sample = false,
+}: {
+  plan: FloorPlan;
+  sample?: boolean;
+}) {
+  const pattern = useId().replaceAll(":", "");
+  return (
+    <div className={styles.preview}>
+      <svg
+        viewBox="35 45 830 510"
+        role="img"
+        aria-label={`${plan.name} floor plan preview`}
+      >
+        <defs>
+          <pattern
+            id={`workspace-grid-${pattern}`}
+            width="18"
+            height="18"
+            patternUnits="userSpaceOnUse"
+          >
+            <circle cx="1" cy="1" r="0.65" fill="#cfd7c5" />
+          </pattern>
+        </defs>
+        <rect
+          x="35"
+          y="45"
+          width="830"
+          height="510"
+          fill={`url(#workspace-grid-${pattern})`}
+        />
+        <rect x="80" y="90" width="740" height="420" fill="#fcfdf9" />
+        {sample && (
+          <>
+            <rect x="610" y="90" width="210" height="145" fill="#f1f4eb" />
+            <rect x="565" y="355" width="248" height="148" fill="#f4f3eb" />
+          </>
+        )}
+        {plan.items.map((item) => (
+          <g key={item.id} transform={`translate(${item.x} ${item.y})`}>
+            {item.kind === "plant" ? (
+              <>
+                <circle
+                  cx={item.width / 2}
+                  cy={item.height / 2}
+                  r={Math.min(item.width, item.height) / 2}
+                  fill="#93a681"
+                />
+                <path
+                  d={`M${item.width / 2} 3v${item.height - 6}M3 ${item.height / 2}h${item.width - 6}`}
+                  stroke="#728963"
+                  strokeWidth="1.4"
+                />
+              </>
+            ) : (
+              <>
+                <rect
+                  width={item.width}
+                  height={item.height}
+                  rx={item.kind === "table" ? 12 : item.kind === "sofa" ? 6 : 2}
+                  fill={
+                    item.kind === "sofa"
+                      ? "#dce4d0"
+                      : item.kind === "obstacle"
+                        ? "#e6d9c8"
+                        : "#eae5d8"
+                  }
+                  stroke={item.kind === "sofa" ? "#a6b696" : "#bdb7a8"}
+                  strokeWidth="1.5"
+                />
+                {item.kind === "desk" && (
+                  <>
+                    <rect
+                      x={item.width / 2 - 17}
+                      y="7"
+                      width="34"
+                      height="15"
+                      rx="2"
+                      fill="#d1dbce"
+                      stroke="#a5b19d"
+                    />
+                    <path
+                      d={`M${item.width / 2} 22v6m-7 0h14`}
+                      stroke="#a5b19d"
+                    />
+                    <rect
+                      x={item.width / 2 - 10}
+                      y={item.height + 5}
+                      width="20"
+                      height="18"
+                      rx="5"
+                      fill="#edf0e6"
+                      stroke="#b7c0ac"
+                    />
+                  </>
+                )}
+                {item.kind === "table" &&
+                  [item.width * 0.25, item.width * 0.75].map((x) => (
+                    <g key={x}>
+                      <rect
+                        x={x - 8}
+                        y="-22"
+                        width="16"
+                        height="16"
+                        rx="4"
+                        fill="#edf0e6"
+                        stroke="#b7c0ac"
+                      />
+                      <rect
+                        x={x - 8}
+                        y={item.height + 6}
+                        width="16"
+                        height="16"
+                        rx="4"
+                        fill="#edf0e6"
+                        stroke="#b7c0ac"
+                      />
+                    </g>
+                  ))}
+                {item.kind === "shelf" && (
+                  <path
+                    d={
+                      item.width > item.height
+                        ? `M${item.width / 3} 3v${item.height - 6}m${item.width / 3} ${-item.height + 6}v${item.height - 6}`
+                        : `M3 ${item.height / 3}h${item.width - 6}M3 ${(item.height * 2) / 3}h${item.width - 6}`
+                    }
+                    stroke="#b7b298"
+                    strokeWidth="3"
+                  />
+                )}
+              </>
+            )}
+          </g>
+        ))}
+        <g stroke="#727d65" strokeWidth="7" fill="none" strokeLinecap="square">
+          {plan.walls.map((wall, index) => (
+            <path
+              key={index}
+              d={`M${wall.x1} ${wall.y1}L${wall.x2} ${wall.y2}`}
+            />
+          ))}
+        </g>
+        {plan.exits.map((exit) => (
+          <g key={exit.id} transform={`translate(${exit.x} ${exit.y})`}>
+            <rect
+              x="-13"
+              y="-17"
+              width="26"
+              height="34"
+              rx="3"
+              fill="#e6efdd"
+              stroke="#9bb58a"
+              strokeWidth="1.5"
+            />
+            <path
+              d={
+                exit.x < plan.width / 2
+                  ? "M6 0H-6m4-4-4 4 4 4"
+                  : "M-6 0H6m-4-4 4 4-4 4"
+              }
+              fill="none"
+              stroke="#63824c"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </g>
+        ))}
+      </svg>
+      {sample && <span className={styles.sampleBadge}>Sample</span>}
+    </div>
+  );
+}
+
+function updatedLabel(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(timestamp);
+}
+
+export default function WorkspacesHome() {
+  const { user, isLoading } = useUser();
+  const ownerId = typeof user?.sub === "string" ? user.sub : null;
+  const router = useRouter();
+  const [library, setLibrary] = useState<LibraryState>({
+    ownerId: null,
+    records: [],
+    error: "",
+  });
+  const [dialog, setDialog] = useState<DialogState>(null);
+  const [name, setName] = useState("");
+  const [formError, setFormError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const dialogTitleId = useId();
+  const activeDialog =
+    !isLoading &&
+    ownerId &&
+    dialog &&
+    dialog.ownerId === ownerId &&
+    (dialog.type === "create"
+      ? !dialog.source || dialog.source.ownerId === ownerId
+      : dialog.workspace.ownerId === ownerId)
+      ? dialog
+      : null;
+
+  const refreshLibrary = useCallback(() => {
+    if (!ownerId) {
+      setLibrary({ ownerId: null, records: [], error: "" });
+      return;
+    }
+    try {
+      setLibrary({ ownerId, records: listWorkspaces(ownerId), error: "" });
+    } catch (cause) {
+      setLibrary({
+        ownerId,
+        records: [],
+        error:
+          cause instanceof Error
+            ? cause.message
+            : "Your workspaces could not be loaded. Browser storage may be unavailable.",
+      });
+    }
+  }, [ownerId]);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      if (active) refreshLibrary();
+    };
+    queueMicrotask(refresh);
+    const unsubscribe = subscribeWorkspaces(refresh);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [refreshLibrary]);
+
+  useEffect(() => {
+    if (activeDialog) {
+      dialogRef.current?.showModal();
+      if (activeDialog.type === "create") nameRef.current?.focus();
+      return;
+    }
+    dialogRef.current?.close();
+    if (!dialog) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setDialog(null);
+      setName("");
+      setFormError("");
+      setBusy(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDialog, dialog]);
+
+  const ready = Boolean(ownerId && library.ownerId === ownerId);
+  const records = ready ? library.records : [];
+  const storageError = ready ? library.error : "";
+
+  function openCreate(template: "empty" | "sample", source?: WorkspaceRecord) {
+    if (!ownerId || isLoading || (source && source.ownerId !== ownerId)) return;
+    setFormError("");
+    setName(
+      source
+        ? `${source.name} copy`.slice(0, 80)
+        : template === "sample"
+          ? "Berkeley studio copy"
+          : "",
+    );
+    setDialog({ ownerId, type: "create", template, source });
+  }
+
+  function submitCreate(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (
+      !ownerId ||
+      isLoading ||
+      activeDialog?.type !== "create" ||
+      activeDialog.ownerId !== ownerId ||
+      (activeDialog.source && activeDialog.source.ownerId !== ownerId)
+    ) {
+      setDialog(null);
+      setName("");
+      setFormError("");
+      return;
+    }
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setFormError("Give your workspace a name.");
+      nameRef.current?.focus();
+      return;
+    }
+    setBusy(true);
+    try {
+      const plan = structuredClone(activeDialog.source?.plan ?? SAMPLE_PLAN);
+      plan.name = trimmedName;
+      if (!activeDialog.source && activeDialog.template === "empty") {
+        plan.id = `empty-${crypto.randomUUID()}`;
+        plan.items = [];
+        plan.walls = plan.walls.slice(0, 6);
+      }
+      const created = createWorkspace(ownerId, {
+        name: trimmedName,
+        plan,
+        scenario: structuredClone(
+          activeDialog.source?.scenario ?? DEFAULT_SCENARIO,
+        ),
+      });
+      setDialog(null);
+      router.push(`/workspaces/${created.id}`);
+    } catch (cause) {
+      setFormError(
+        cause instanceof Error
+          ? cause.message
+          : "This workspace could not be saved. Check browser storage and try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function confirmDelete() {
+    if (
+      !ownerId ||
+      isLoading ||
+      activeDialog?.type !== "delete" ||
+      activeDialog.ownerId !== ownerId ||
+      activeDialog.workspace.ownerId !== ownerId
+    )
+      return;
+    setBusy(true);
+    try {
+      deleteWorkspace(ownerId, activeDialog.workspace.id);
+      setDialog(null);
+      refreshLibrary();
+    } catch (cause) {
+      setFormError(
+        cause instanceof Error
+          ? cause.message
+          : "This workspace could not be deleted. Try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className={styles.home}>
+      <div className={styles.heading}>
+        <div>
+          <h1 id="workspaces-title">
+            {!isLoading && ownerId ? "Your workspaces" : "Workspaces"}
+          </h1>
+          <p>
+            {isLoading
+              ? "Checking your account…"
+              : ownerId
+                ? "Open a workspace or start a new floor plan."
+                : "Explore the sample, or sign in to create your own."}
+          </p>
+        </div>
+        {!isLoading &&
+          (ownerId ? (
+            <button
+              className="button primary"
+              onClick={() => openCreate("empty")}
+            >
+              <Icon name="plus" size={16} />
+              Create workspace
+            </button>
+          ) : (
+            <a className="button primary" href="/auth/login?returnTo=/">
+              Sign in to create
+              <Icon name="arrow" size={14} />
+            </a>
+          ))}
+      </div>
+
+      <section aria-labelledby="workspaces-title">
+        {isLoading ? (
+          <div className={styles.loading} role="status">
+            <span />
+            Loading your workspace home
+          </div>
+        ) : ownerId && !ready ? (
+          <div className={styles.loading} role="status">
+            <span />
+            Loading your workspaces
+          </div>
+        ) : ownerId && storageError ? (
+          <div className={styles.storageError} role="alert">
+            <Icon name="help" size={18} />
+            <div>
+              <strong>Your workspaces couldn’t be loaded</strong>
+              <p>{storageError}</p>
+              <button className="text-button" onClick={refreshLibrary}>
+                Try again
+                <Icon name="reset" size={13} />
+              </button>
+            </div>
+          </div>
+        ) : ownerId ? (
+          <p className={styles.libraryNote}>
+            Personal workspaces are saved on this device.
+          </p>
+        ) : null}
+
+        <div className={styles.workspaceGrid}>
+          {!isLoading && records.map((record) => (
+            <article className={styles.card} key={record.id}>
+              <WorkspaceLink
+                href={`/workspaces/${record.id}`}
+                className={styles.cardLink}
+                aria-label={`Open ${record.name}`}
+              >
+                <PlanPreview plan={record.plan} />
+                <div className={styles.cardBody}>
+                  <div className={styles.cardTitle}>
+                    <h2>{record.name}</h2>
+                    <Icon name="arrow" size={17} />
+                  </div>
+                  <p>
+                    {record.plan.area} m²<span>·</span>
+                    {record.plan.exits.length} exits<span>·</span>
+                    {record.scenario.occupancy} people
+                  </p>
+                </div>
+              </WorkspaceLink>
+              <div className={styles.cardFooter}>
+                <time dateTime={new Date(record.updatedAt).toISOString()}>
+                  Updated {updatedLabel(record.updatedAt)}
+                </time>
+                <div>
+                  <button
+                    className={styles.smallButton}
+                    onClick={() => openCreate("sample", record)}
+                    aria-label={`Duplicate ${record.name}`}
+                  >
+                    <Icon name="compare" size={14} />
+                    <span>Duplicate</span>
+                  </button>
+                  <button
+                    className={styles.deleteButton}
+                    aria-label={`Delete ${record.name}`}
+                    onClick={() => {
+                      setFormError("");
+                      setDialog({
+                        ownerId: record.ownerId,
+                        type: "delete",
+                        workspace: record,
+                      });
+                    }}
+                  >
+                    <Icon name="trash" size={14} />
+                  </button>
+                </div>
+              </div>
+            </article>
+          ))}
+          <article className={styles.card}>
+            <WorkspaceLink
+              href={`/workspaces/${SAMPLE_WORKSPACE_ID}`}
+              className={styles.cardLink}
+              aria-label="Open Berkeley studio sample workspace"
+            >
+              <PlanPreview plan={SAMPLE_PLAN} sample />
+              <div className={styles.cardBody}>
+                <div className={styles.cardTitle}>
+                  <h2>Berkeley studio</h2>
+                  <Icon name="arrow" size={17} />
+                </div>
+                <p>
+                  {SAMPLE_PLAN.area} m²<span>·</span>
+                  {SAMPLE_PLAN.exits.length} exits<span>·</span>
+                  {DEFAULT_SCENARIO.occupancy} people
+                </p>
+              </div>
+            </WorkspaceLink>
+            <div className={styles.cardFooter}>
+              <span>Original sample</span>
+              {!isLoading && ownerId ? (
+                <button
+                  className={styles.smallButton}
+                  onClick={() => openCreate("sample")}
+                >
+                  <Icon name="compare" size={14} />
+                  Make a copy
+                </button>
+              ) : (
+                <WorkspaceLink
+                  className={styles.smallButton}
+                  href={`/workspaces/${SAMPLE_WORKSPACE_ID}`}
+                >
+                  Open sample
+                  <Icon name="arrow" size={13} />
+                </WorkspaceLink>
+              )}
+            </div>
+          </article>
+          {!isLoading && ownerId && (
+            <button
+              className={styles.newCard}
+              onClick={() => openCreate("empty")}
+            >
+              <span className={styles.newCardIcon}>
+                <Icon name="plus" size={23} />
+              </span>
+              <strong>New workspace</strong>
+              <span>Start with an empty layout</span>
+            </button>
+          )}
+        </div>
+      </section>
+
+      <dialog
+        ref={dialogRef}
+        className={styles.dialog}
+        aria-labelledby={dialogTitleId}
+        onCancel={() => setDialog(null)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget && !busy) setDialog(null);
+        }}
+      >
+        <div className={styles.dialogHeading}>
+          <h2 id={dialogTitleId}>
+            {activeDialog?.type === "delete"
+              ? "Delete workspace?"
+              : activeDialog?.type === "create" && activeDialog.source
+                ? "Duplicate workspace"
+                : "Create workspace"}
+          </h2>
+          <button
+            className="icon-button"
+            aria-label="Close dialog"
+            disabled={busy}
+            onClick={() => setDialog(null)}
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+        {activeDialog?.type === "create" ? (
+          <form onSubmit={submitCreate}>
+            <label className={styles.fieldLabel} htmlFor="workspace-name">
+              Workspace name
+            </label>
+            <input
+              ref={nameRef}
+              id="workspace-name"
+              className={styles.nameInput}
+              value={name}
+              placeholder="e.g. Ground floor study"
+              maxLength={80}
+              autoComplete="off"
+              disabled={busy}
+              onChange={(event) => {
+                setName(event.target.value);
+                setFormError("");
+              }}
+            />
+            {!activeDialog.source ? (
+              <fieldset className={styles.templateFieldset}>
+                <legend>Start from</legend>
+                <div className={styles.templateOptions}>
+                  {(
+                    [
+                      {
+                        value: "empty",
+                        title: "Empty layout",
+                        detail: "An open floor plan with two exits",
+                        icon: "layout",
+                      },
+                      {
+                        value: "sample",
+                        title: "Berkeley studio",
+                        detail: "A copy of the furnished sample",
+                        icon: "compare",
+                      },
+                    ] as const
+                  ).map((template) => (
+                    <label
+                      key={template.value}
+                      className={
+                        activeDialog.template === template.value
+                          ? styles.selectedTemplate
+                          : styles.template
+                      }
+                    >
+                      <input
+                        type="radio"
+                        name="template"
+                        value={template.value}
+                        checked={activeDialog.template === template.value}
+                        disabled={busy}
+                        onChange={() =>
+                          setDialog({
+                            ...activeDialog,
+                            template: template.value,
+                          })
+                        }
+                      />
+                      <Icon name={template.icon} size={18} />
+                      <span>
+                        <strong>{template.title}</strong>
+                        <span>{template.detail}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            ) : (
+              <p className={styles.dialogCopy}>
+                Copies the layout and scenario from{" "}
+                <strong>{activeDialog.source.name}</strong>.
+              </p>
+            )}
+            <p className={styles.localNote}>
+              This workspace is saved under your account in this browser.
+            </p>
+            {formError && (
+              <div className={styles.formError} role="alert">
+                {formError}
+              </div>
+            )}
+            <div className={styles.dialogActions}>
+              <button
+                type="button"
+                className="button secondary"
+                disabled={busy}
+                onClick={() => setDialog(null)}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="button primary" disabled={busy}>
+                {busy
+                  ? "Creating…"
+                  : activeDialog.source
+                    ? "Create copy"
+                    : "Create workspace"}
+                <Icon name="arrow" size={14} />
+              </button>
+            </div>
+          </form>
+        ) : activeDialog?.type === "delete" ? (
+          <>
+            <p className={styles.deleteCopy}>
+              This removes <strong>{activeDialog.workspace.name}</strong> from
+              the workspaces saved under your account on this device. This
+              action can’t be undone.
+            </p>
+            {formError && (
+              <div className={styles.formError} role="alert">
+                {formError}
+              </div>
+            )}
+            <div className={styles.dialogActions}>
+              <button
+                className="button secondary"
+                disabled={busy}
+                onClick={() => setDialog(null)}
+              >
+                Keep workspace
+              </button>
+              <button
+                className={`button ${styles.confirmDelete}`}
+                disabled={busy}
+                onClick={confirmDelete}
+              >
+                {busy ? "Deleting…" : "Delete workspace"}
+              </button>
+            </div>
+          </>
+        ) : null}
+      </dialog>
+    </main>
+  );
+}
