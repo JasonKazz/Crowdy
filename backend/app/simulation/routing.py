@@ -156,6 +156,18 @@ class RoutePlanner:
         return target, path, index
 
 
+def preferred_exit_point(agent_id, polygon, boundary):
+    if boundary is None:
+        return None
+    digest = hashlib.sha256(f"{agent_id}:{boundary.id}".encode()).digest()
+    fraction = .12 + .76 * int.from_bytes(digest[:4], "big") / (2**32 - 1)
+    a,b = boundary.start,boundary.end
+    width=math.dist(a,b)
+    along=.01+(width-.02)*fraction
+    depth=min(sum((p[i]-a[i])*boundary.outward[i] for i in range(2)) for p in polygon.exterior.coords)+.08
+    return tuple(a[i]+(b[i]-a[i])*along/width+boundary.outward[i]*depth for i in range(2))
+
+
 def plan_routes(scenario, geometry=None, planner=None, allow_trapped=False):
     planner = planner or RoutePlanner(geometry if geometry is not None else build_geometry(scenario), scenario.agent_defaults.radius)
     blocked = set(scenario.settings.blocked_exit_ids)

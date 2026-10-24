@@ -228,7 +228,7 @@ class ImageTests(unittest.TestCase):
             self.assertEqual(results[1]["error"], "Claude test failure")
             snapshots = list((root / "extractions").glob("*/observations.json"))
             self.assertEqual(len(snapshots), 1)
-            self.assertEqual(json.loads(snapshots[0].read_text()), gemini_fixture())
+            self.assertEqual(json.loads(snapshots[0].read_text()), ExtractedDrawing.model_validate(gemini_fixture()).model_dump(mode="json"))
 
 
 class ProviderTests(unittest.TestCase):

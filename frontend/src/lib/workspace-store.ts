@@ -1,10 +1,11 @@
 import type { FloorPlan, Scenario } from "./simulation";
+import {validPlanRooms, validPopulationSettings} from "./room-population.ts";
 
 export const SAMPLE_WORKSPACE_ID = "berkeley-studio";
 export const DEFAULT_SCENARIO: Scenario = {
-  occupancy: 80,
+  occupancy: 24,
   mobility: "standard",
-  distribution: "uniform",
+  distribution: "normal",
   behaviorMode: "idealized",
   bodyWidth: .46,
 };
@@ -44,6 +45,7 @@ const itemKinds = new Set([
   "sofa",
   "plant",
   "obstacle",
+  "chair",
 ]);
 
 function fail(message: string): never {
@@ -121,6 +123,7 @@ function storage(): Storage {
 function validPlan(value: unknown): value is FloorPlan {
   if (!isObject(value) || !isText(value.id) || !isText(value.name))
     return false;
+  if (!validPlanRooms(value.rooms)) return false;
   if (
     value.width !== 900 ||
     value.height !== 600 ||
@@ -204,10 +207,11 @@ function validScenario(value: unknown): value is Scenario {
     isObject(value) &&
     finite(value.occupancy) &&
     Number.isInteger(value.occupancy) &&
-    value.occupancy >= 10 &&
+    value.occupancy >= 1 &&
     value.occupancy <= 200 &&
     (value.mobility === "standard" || value.mobility === "mixed") &&
-    (value.distribution === "uniform" || value.distribution === "workstations") &&
+    (value.distribution === "uniform" || value.distribution === "workstations" || value.distribution === "rooms" || value.distribution === "normal") &&
+    (value.population === undefined || validPopulationSettings(value.population)) &&
     (value.behaviorMode === undefined || value.behaviorMode === "idealized" || value.behaviorMode === "behavioral") &&
     (value.bodyWidth === undefined || (finite(value.bodyWidth) && value.bodyWidth >= .4 && value.bodyWidth <= .7)) &&
     (value.blockedExitIds === undefined || (Array.isArray(value.blockedExitIds) && value.blockedExitIds.length <= 30 && new Set(value.blockedExitIds).size === value.blockedExitIds.length && value.blockedExitIds.every(id => typeof id === "string" && id.length > 0))) &&
@@ -222,6 +226,7 @@ function copyPlan(plan: FloorPlan): FloorPlan {
     width: plan.width,
     height: plan.height,
     area: plan.area,
+    ...(plan.rooms ? {rooms: structuredClone(plan.rooms)} : {}),
     ...(plan.native ? {native: structuredClone(plan.native)} : {}),
     items: plan.items.map((item) => ({
       id: item.id,
@@ -253,6 +258,7 @@ function copyScenario(scenario: Scenario): Scenario {
     occupancy: scenario.occupancy,
     mobility: scenario.mobility,
     distribution: scenario.distribution,
+    ...(scenario.population ? {population: structuredClone(scenario.population)} : {}),
     ...(scenario.behaviorMode === undefined ? {} : {behaviorMode: scenario.behaviorMode}),
     ...(scenario.bodyWidth === undefined ? {} : {bodyWidth: scenario.bodyWidth}),
     ...(scenario.seed === undefined ? {} : {seed: scenario.seed}),

@@ -86,7 +86,8 @@ def compile_layout(layout: Layout) -> Scenario:
             id=door.id, polygon=wall_polygon(wall, start, end),
         ))))
 
-    obstacles = list(layout.furniture)
+    from app.services.population.furniture import is_minor_chair
+    obstacles = [item for item in layout.furniture if not is_minor_chair(item,layout.furniture_labels)]
     used_ids = {item.id for item in obstacles}
     for wall in layout.walls:
         full_wall = region_to_polygon(Region(

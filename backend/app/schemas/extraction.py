@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from app.schemas.scenario import InputModel
+from app.schemas.rooms import BuildingType, RoomClassification
 
 
 class DrawingPoint(InputModel):
@@ -73,6 +74,9 @@ class CalibrationInfo(InputModel):
 
 class ExtractedDrawing(InputModel):
     name: str
+    building_type: BuildingType = "auto"
+    room_classifications: list[RoomClassification] = Field(default_factory=list, max_length=100,
+        description="Classify existing rooms from readable labels and visible furnishings. Use unknown when unclear. Never invent walls or rooms to support a type.")
     floor_outline: list[DrawingPoint] = Field(min_length=3, max_length=300,
         description="Usable interior building boundary in vertex order, including connected rooms and corridors.")
     rooms: list[DrawingRegion] = Field(max_length=100)

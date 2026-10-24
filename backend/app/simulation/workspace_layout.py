@@ -69,6 +69,7 @@ def native_to_editor(data, strict=True):
                 exit_regions.append(door)
     transform = projection(layout)
     pixels = lambda points: [pixel_point(point, transform) for point in points]
+    from app.services.population.furniture import furniture_kind
     items = []
     for region in layout.furniture:
         points = pixels(region.polygon)
@@ -76,8 +77,8 @@ def native_to_editor(data, strict=True):
         width, height = max(p["x"] for p in points) - x, max(p["y"] for p in points) - y
         if width <= 0 or height <= 0:
             raise ValueError(f"Furniture '{region.id}' has no area")
-        items.append({"id": region.id, "label": region.id[:80],
-                      "kind": "desk" if "desk" in region.id.lower() else "obstacle",
+        items.append({"id": region.id, "label": (layout.furniture_labels.get(region.id) or region.id)[:80],
+                      "kind": furniture_kind(region.id,layout.furniture_labels.get(region.id,"")),
                       "x": x, "y": y, "width": width, "height": height,
                       "polygon": [{"x": (p["x"] - x) / width, "y": (p["y"] - y) / height} for p in points]})
     furniture_ids = {region.id for region in layout.furniture}
@@ -101,14 +102,22 @@ def native_to_editor(data, strict=True):
         image = {"id": source.id, **top_left,
                  "width": source.width_px * source.meters_per_pixel * transform["pixels_per_metre"],
                  "height": source.height_px * source.meters_per_pixel * transform["pixels_per_metre"]}
+    from app.services.population.rooms import native_room_zones, pieces, zone_polygons
+    room_zones, room_warnings = native_room_zones(layout)
+    room_views = [{"id": room.id, "label": room.label[:80], "room_type": room.room_type,
+                   "source": room.source, "area": room.shape.area,
+                   "polygon": pixels(list(max(pieces(room.shape), key=lambda p: p.area).exterior.coords)[:-1]),
+                   "rings": zone_polygons(room.shape, lambda p: pixel_point(p, transform))}
+                  for room in room_zones if not room.shape.is_empty]
     return {"id": "layout-" + hashlib.sha256(layout.name.encode()).hexdigest()[:16],
             "name": layout.name[:80], "width": 900, "height": 600,
             "area": unary_union([Polygon(r.polygon) for r in layout.walkable_areas]).area,
-            "items": items, "walls": [], "exits": exits,
+            "items": items, "walls": [], "exits": exits, "rooms": room_views,
             "native": {"layout": layout.model_dump(mode="json"), "transform": transform,
                        "floors": [pixels(r.polygon) for r in layout.walkable_areas],
                        "walls": [pixels(r.polygon) for r in obstacles if r.id not in furniture_ids],
-                       "exit_zones": zones, "issues": issues, "image": image}}
+                       "exit_zones": zones, "issues": issues, "image": image,
+                       "room_warnings": room_warnings}}
 
 
 def editor_native_layout(plan):
@@ -129,6 +138,7 @@ def editor_native_layout(plan):
         furniture.append(Region(id=item["id"], polygon=[world_point(
             item["x"] + p["x"] * item["width"], item["y"] + p["y"] * item["height"], transform) for p in points]))
     layout.furniture = furniture
+    layout.furniture_labels.update({item["id"]:item["label"] for item in plan["items"]})
     layout.occupants = []
     layout.population = Population(count=1, seed=42, spawn_area_ids=[r.id for r in layout.walkable_areas])
     return layout, transform
