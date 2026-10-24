@@ -102,7 +102,7 @@ Each run saves `layout.json`, `scenario.json`, `result.json`, and `playback.html
 
 The canvas offers Select/Move, Resize, Rotate, Vertices, Pan, drawing furniture and walls, placing doors and exits, zoom, layers/locks, duplicate/delete, and undo/redo. Floors start locked. **Check layout** can display the planned routes. Green evacuation strips sit immediately outside their doorways. People disappear after their full body clears the wall; they do not walk to the far side of an invented outside hallway. Previously saved exterior-geometry settings remain readable, but do not move the evacuation strip.
 
-Run the Python checks with `python -m unittest discover -s tests -v`. Node checks: `node tests/editor_geometry.test.cjs`, `node tests/editor_startup.test.cjs`, and `node tests/editor_image_tools.test.cjs`. `examples/narrow_table_regression.json` preserves the 40 starting people from the formerly stuck table layout; run it in the editor to inspect the detours.
+Run the Python checks with `python -m unittest discover -s tests -v`. Node checks: `node tests/editor_geometry.test.cjs`, `node tests/editor_startup.test.cjs`, `node tests/editor_image_tools.test.cjs`, and `node tests/editor_population.test.cjs`. `examples/narrow_table_regression.json` preserves the 40 starting people from the formerly stuck table layout. The browser defaults to automatic placement so People and Seed are editable; to inspect the exact regression positions, disable automatic placement and import this JSON. Backend simulation commands and API imports preserve fixed positions.
 
 ## Start from an image
 

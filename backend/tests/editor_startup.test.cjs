@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const geometry = require('../app/simulation/editor-geometry.js');
+const population = require('../app/simulation/editor-population.js');
 const html = fs.readFileSync(path.join(__dirname,'../app/simulation/editor.html'),'utf8');
 const script = fs.readFileSync(path.join(__dirname,'../app/simulation/editor-app.js'),'utf8');
 
@@ -13,7 +14,7 @@ async function startup(protocol) {
   }]));
   let requests = 0;
   const context = vm.createContext({
-    window:{CrowdyGeometry:geometry}, location:{protocol}, console,
+    window:{CrowdyGeometry:geometry,CrowdyPopulation:population}, location:{protocol}, console,
     document:{getElementById:id=>elements.get(id),
       querySelectorAll:()=>[...elements.values()], addEventListener(){}},
     fetch:async()=>{requests++;throw new Error('Failed to fetch');},

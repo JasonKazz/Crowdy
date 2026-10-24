@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from shapely.geometry import Point, Polygon
 
 from app.schemas.layout import Layout, load_layout
-from app.schemas.scenario import Region, Scenario
+from app.schemas.scenario import Occupant, Region, Scenario
 from app.services.floorplans.layout import compile_layout, wall_polygon
 from app.simulation.animate import render_html
 from app.simulation.editor import save_run, validate_layout
@@ -119,6 +119,40 @@ class LayoutTests(unittest.TestCase):
         second = validate_layout(office())
         self.assertEqual(first["occupants"], second["occupants"])
         self.assertEqual(len(first["occupants"]), 40)
+
+    def test_generated_people_are_replaced_after_furniture_covers_old_start(self):
+        layout = office()
+        first = validate_layout(layout)
+        geometry = build_geometry(compile_layout(layout))
+        position = next(person["position"] for person in first["occupants"]
+                        if Point(person["position"]).distance(geometry.boundary) > 0.8)
+        x, y = position
+        layout.furniture.append(Region(id="moved-table", polygon=[
+            (x - .3, y - .3), (x + .3, y - .3), (x + .3, y + .3), (x - .3, y + .3),
+        ]))
+        second = validate_layout(layout)
+        self.assertEqual(len(second["occupants"]), 40)
+        self.assertNotEqual(first["occupants"], second["occupants"])
+        self.assertEqual(second["occupants"], validate_layout(layout)["occupants"])
+        changed = build_geometry(compile_layout(layout))
+        for person in second["occupants"]:
+            point = Point(person["position"])
+            self.assertTrue(changed.contains(point))
+            self.assertGreaterEqual(point.distance(changed.boundary), layout.agent_defaults.radius)
+
+    def test_fixed_person_inside_furniture_has_actionable_error(self):
+        layout = office()
+        layout.population = None
+        layout.occupants = [Occupant(id="fixed-person", position=(3, 4))]
+        with self.assertRaisesRegex(ValueError, "fixed-person.*inside obstacle 'meeting-table'.*automatic placement"):
+            validate_layout(layout)
+
+    def test_fixed_person_outside_floor_has_distinct_error(self):
+        layout = office()
+        layout.population = None
+        layout.occupants = [Occupant(id="fixed-person", position=(-1, 4))]
+        with self.assertRaisesRegex(ValueError, "fixed-person.*outside the floor.*regenerate people"):
+            validate_layout(layout)
 
     def test_separate_runs_save_exact_inputs_and_existing_playback(self):
         layout = office()

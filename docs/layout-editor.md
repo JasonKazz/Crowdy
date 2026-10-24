@@ -17,6 +17,10 @@ Open the `http://127.0.0.1:...` address printed by the Python server. Opening `e
 
 **Undo** and **Redo** apply to object edits, settings changes, and imports. Use the toolbar to draw furniture rectangles and wall segments directly on the canvas, or click to place a door on the nearest wall or an exit on the nearest boundary. The Add menu selects the corresponding placement tool.
 
+**Automatically place people** is enabled when the editor opens, including for examples with fixed starting coordinates. Set **People** and **Seed**, then check or run: the backend places people in valid space using the current walls and furniture. Geometry edits clear the preview; check again to see the new starts. The same seed repeats positions only when geometry and placement settings are unchanged. **Regenerate people** enables this mode and previews placement; it keeps the seed, so change Seed for a different arrangement.
+
+Uncheck automatic placement to validate and freeze the current positions for comparisons. Fixed positions can become invalid after furniture or wall edits; errors identify the affected person and obstacle. Regenerate or enable automatic placement to recover. People and Seed remain editable in fixed mode; changing either enables automatic placement. JSON imports follow the selected placement mode. To preserve exact positions from an imported file, uncheck automatic placement before importing it. Source files and backend API imports retain their original coordinates; the browser's default placement mode does not change them.
+
 | Tool | Interaction |
 | --- | --- |
 | Select / Move (`V`) | Drag whole objects. Doors attach to the nearest appropriate wall or boundary edge. |

@@ -4,6 +4,7 @@ const kinds=['furniture','walls','doors','exits','walkable_areas'];
 const labels={furniture:'Furniture',walls:'Wall',doors:'Door',exits:'Exit',walkable_areas:'Floor'};
 let layout=null,selected=null,preview=[],busy=false,drag=null,history=[],future=[],viewBox=null;
 let providers={},calibrating=false,calibrationPoints=[];
+let placementSeed=42;
 let tool='move',spacePan=false,plannedRoutes=[],draftShape=null,fitWidth=null;
 const layers=Object.fromEntries(kinds.map(kind=>[kind,{visible:true,locked:kind==='walkable_areas'}]));
 const copy=value=>JSON.parse(JSON.stringify(value));
@@ -154,10 +155,12 @@ function renderInspector(){
 }
 function render(){
   renderTools();renderLayers();renderList();renderInspector();draw();$('people').value=layout.population?.count??layout.occupants.length;
-  $('seed').value=layout.population?.seed??42;$('people').disabled=!layout.population;$('seed').disabled=!layout.population;
+  placementSeed=layout.population?.seed??placementSeed;
+  $('seed').value=placementSeed;$('people').disabled=busy;$('seed').disabled=busy;
+  $('auto-population').checked=Boolean(layout.population);
   $('speed').value=layout.agent_defaults.desired_speed;$('max-time').value=layout.settings.max_time;
-  $('population-note').textContent=layout.population?'Population will be regenerated within the selected spawn areas after edits. A fixed seed repeats placement only for unchanged geometry.':
-    'Imported manual people stay at their original positions. Checks reject edits that overlap them.';
+  $('population-note').textContent=layout.population?'People are placed in valid space when you check or run, using the current furniture and walls. The same seed repeats placement for unchanged geometry.':
+    'Starting positions are fixed. Furniture or wall edits can overlap them. Enable automatic placement or choose Regenerate people to place them again. Changing People or Seed also enables automatic placement.';
   $('undo').disabled=history.length===0;$('redo').disabled=future.length===0;
   renderImageControls();
 }
@@ -219,12 +222,18 @@ $('object-list').addEventListener('change',()=>{if(!$('object-list').value){sele
 function undo(){if(!history.length)return;future.push(copy(layout));layout=history.pop();selected=null;invalidate();render();}
 function redo(){if(!future.length)return;history.push(copy(layout));layout=future.pop();selected=null;invalidate();render();}
 $('undo').addEventListener('click',undo);$('redo').addEventListener('click',redo);
-for(const [id,apply]of Object.entries({people:n=>layout.population.count=n,seed:n=>layout.population.seed=n,
+for(const [id,apply]of Object.entries({people:n=>layout=window.CrowdyPopulation.withGeneratedPopulation(layout,n,placementSeed),
+  seed:n=>layout=window.CrowdyPopulation.withGeneratedPopulation(layout,layout.population?.count??layout.occupants.length,n),
   speed:n=>layout.agent_defaults.desired_speed=n,'max-time':n=>layout.settings.max_time=n})){
-  const current=()=>({people:layout.population?.count,seed:layout.population?.seed,
+  const current=()=>({people:layout.population?.count??layout.occupants.length,seed:layout.population?.seed??placementSeed,
     speed:layout.agent_defaults.desired_speed,'max-time':layout.settings.max_time})[id];
   const applyEdit=()=>{const n=Number($(id).value);
-    if($(id).value===''||!Number.isFinite(n)||n===current())return;commit(()=>apply(n));};
+    if($(id).value===''||!Number.isFinite(n)||((id==='people'||id==='seed')&&
+      (!Number.isInteger(n)||n<(id==='people'?1:0)||n>(id==='people'?5000:4294967295)))||
+      ((id==='speed'||id==='max-time')&&n<=0)){
+      $(id).value=current();status(id==='people'?'People must be a whole number from 1 to 5000.':
+        id==='seed'?'Seed must be a whole number from 0 to 4294967295.':'Speed and time must be positive numbers.',true);return;}
+    if(n===current())return;commit(()=>apply(n));};
   $(id).addEventListener('change',applyEdit);$(id).addEventListener('blur',applyEdit);}
 function newId(kind){let i=1;while(layout[kind].some(o=>o.id===`${kind}-${i}`))i++;return`${kind}-${i}`;}
 $('add').addEventListener('click',()=>{
@@ -239,13 +248,32 @@ async function post(path,document){const response=await fetch(path,{method:'POST
   const result=await response.json();if(!response.ok)throw new Error(result.error||'Request failed');return result;}
 $('import').addEventListener('click',()=>$('file').click());
 $('file').addEventListener('change',async()=>{const file=$('file').files[0];if(!file)return;setBusy(true);
-  try{const next=await post('/api/import',JSON.parse(await file.text()));checkpoint();layout=next;
+  try{const next=await post('/api/import',JSON.parse(await file.text()));
+    const prepared=$('auto-population').checked?window.CrowdyPopulation.withGeneratedPopulation(next):next;
+    checkpoint();layout=prepared;
     $('show-image').checked=Boolean(layout.source_image&&!layout.extraction);selected=null;viewBox=null;fit();invalidate();}
   catch(error){status(error.message,true);}finally{$('file').value='';setBusy(false);}});
-$('validate').addEventListener('click',async()=>{setBusy(true);status('Checking geometry and placing people…');
+async function checkLayout(){setBusy(true);status('Checking geometry and placing people…');
   try{const result=await post('/api/validate',layout);preview=result.occupants;plannedRoutes=result.routes||[];
     status(`Layout passed checks · ${result.area_m2.toFixed(1)} m² walkable · ${preview.length} starting people.`);}
-  catch(error){preview=[];status(error.message,true);}finally{setBusy(false);}});
+  catch(error){preview=[];plannedRoutes=[];status(error.message,true);}finally{setBusy(false);}}
+$('validate').addEventListener('click',checkLayout);
+$('regenerate').addEventListener('click',async()=>{
+  try{if(!layout.population)commit(()=>{layout=window.CrowdyPopulation.withGeneratedPopulation(layout,layout.occupants.length,placementSeed);});
+    await checkLayout();}catch(error){status(error.message,true);}
+});
+$('auto-population').addEventListener('change',async()=>{
+  if($('auto-population').checked){
+    try{commit(()=>{layout=window.CrowdyPopulation.withGeneratedPopulation(layout,layout.occupants.length,placementSeed);});
+      await checkLayout();}catch(error){render();status(error.message,true);}return;
+  }
+  setBusy(true);status('Checking and freezing the current starting positions…');
+  try{const result=await post('/api/validate',layout);
+    checkpoint();layout.occupants=result.occupants;layout.population=null;invalidate();
+    preview=result.occupants;plannedRoutes=result.routes||[];
+    status('Starting positions are now fixed. Geometry edits may require regenerating people.');
+  }catch(error){status(error.message,true);}finally{setBusy(false);}
+});
 $('run').addEventListener('click',async()=>{setBusy(true);status('Running the backend simulation…');$('downloads').replaceChildren();
   try{const result=await post('/api/simulate',layout),s=result.summary;
     status(`${result.status==='completed'?'Completed':'Time limit reached'} · ${s.evacuated_count} exited · ${s.remaining_count} remaining · `+
@@ -346,10 +374,11 @@ async function init(){
     return;
   }
   try{
-    if(!G)throw new Error('Could not load the drawing tools.');
+    if(!G||!window.CrowdyPopulation)throw new Error('Could not load the editor tools. Refresh the page after updating the server.');
     const [response,configuration]=await Promise.all([fetch('/api/layout'),fetch('/api/providers')]);
     if(!response.ok||!configuration.ok)throw new Error('Could not load the editor. Restart the Python server after updating.');
-    layout=await response.json();providers=await configuration.json();$('show-image').checked=Boolean(layout.source_image&&!layout.extraction);fit();setBusy(false);
+    layout=window.CrowdyPopulation.withGeneratedPopulation(await response.json());
+    providers=await configuration.json();$('show-image').checked=Boolean(layout.source_image&&!layout.extraction);fit();setBusy(false);
     status('Select and move an object, or check the layout to preview starting people.');
   }catch(error){status(`${error.message}\nKeep the Python editor server running and open the http:// address printed in its terminal.`,true);}
 }
