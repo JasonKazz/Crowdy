@@ -60,7 +60,7 @@ export async function POST(request: Request) {
         seed: scenario.seed ?? 42,
         blocked_exit_ids: blocked,
         behavior_mode: scenario.behaviorMode ?? "idealized",
-        body_width: scenario.bodyWidth ?? .5,
+        body_width: scenario.bodyWidth ?? .46,
       },
     };
   } catch (error) {

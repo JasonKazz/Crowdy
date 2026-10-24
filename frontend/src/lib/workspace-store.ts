@@ -6,7 +6,7 @@ export const DEFAULT_SCENARIO: Scenario = {
   mobility: "standard",
   distribution: "uniform",
   behaviorMode: "idealized",
-  bodyWidth: .5,
+  bodyWidth: .46,
 };
 
 export type WorkspaceRecord = {

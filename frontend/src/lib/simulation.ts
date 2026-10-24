@@ -636,7 +636,7 @@ export function runSimulation(
     peakDensity: Math.round(peakDensity * 10) / 10,
     exited: completed.length,
     remaining: scenario.occupancy - completed.length,
-    agentRadius: (scenario.bodyWidth ?? .5) / 2,
+    agentRadius: (scenario.bodyWidth ?? .46) / 2,
     hotspot,
     createdAt,
   };

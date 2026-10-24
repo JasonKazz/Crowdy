@@ -341,7 +341,7 @@ export default function FloorPlanView({
   const viewWidth = plan.width || 900;
   const viewHeight = plan.height || 600;
   const metre = plan.native?.transform.pixels_per_metre ?? 32;
-  const personRadius = result?.agentRadius ?? .25;
+  const personRadius = result?.agentRadius ?? .23;
   const cellWidth = 2 * metre;
   const visiblePeople = result
     ? result.agents.flatMap((agent) => {

@@ -56,7 +56,7 @@ try {
   assert.equal(result.status, "completed");
   assert.equal(result.exited, scenario.occupancy);
   assert.equal(result.remaining, 0);
-  assert.equal(result.agentRadius,.25,"Interactive runs default to a 50 cm body diameter");
+  assert.equal(result.agentRadius,.23,"Interactive runs default to a 46 cm body diameter");
   assert.deepEqual(result.exitWidths,{"exit-a":1.75,"exit-b":1.75},"Door widths must come from geometry, not exit icons");
   assert.ok(result.clearanceTime > 0);
   assert.equal(Object.values(result.perExitCounts).reduce((a, b) => a + b, 0), scenario.occupancy);

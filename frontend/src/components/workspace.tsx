@@ -883,10 +883,10 @@ export default function Workspace({
                 <Icon name="chevron" size={13} />
               </div>
               <label className="field-label" htmlFor="body-width">Body width (cm)</label>
-              <input id="body-width" type="number" min="40" max="70" step="1" value={Math.round((scenario.bodyWidth ?? .5)*100)}
+              <input id="body-width" type="number" min="40" max="70" step="1" value={Math.round((scenario.bodyWidth ?? .46)*100)}
                 onChange={event => {const width=Number(event.target.value);if(Number.isInteger(width)&&width>=40&&width<=70)
                   setScenario({...scenario,bodyWidth:width/100});}} />
-              <p className="field-note">Shoulder width and collision diameter use the same size. Default: 50 cm.
+              <p className="field-note">Shoulder width and collision diameter use the same size. Default: 46 cm.
                 {isSample ? " Sample exits are 1.75 m wide, so two abreast can fit in these wide openings." : " Check the drawing’s scale if doors look too wide."}</p>
               <label className="field-label" htmlFor="mobility">
                 Walking profile
@@ -1688,7 +1688,7 @@ export default function Workspace({
                   Reduced motion starts runs paused.
                   Shoulder ellipses face the measured walking direction with smoothed turns;
                   collision and route clearance still use circular bodies. Amber means waiting to respond; red means trapped.
-                  Body width defaults to 50 cm (a 25 cm radius), is adjustable from 40–70 cm, and sets both the shoulder span and collision diameter.
+                  Body width defaults to 46 cm (a 23 cm radius), is adjustable from 40–70 cm, and sets both the shoulder span and collision diameter.
                   Door widths come from the floor geometry; wide exits can support people abreast. Estimated drawing scale affects their measured width.
                 </dd>
               </div>

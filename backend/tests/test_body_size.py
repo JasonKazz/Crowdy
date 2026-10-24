@@ -24,30 +24,30 @@ def doorway_layout(width):
         "walkable_areas": [{"id":"room","polygon":[[0,0],[8,0],[8,6],[0,6]]}],
         "exits": [{"id":"east","floor_id":"room","edge_index":1,"offset":3,"width":width}],
         "occupants": [{"id":"a","position":[5.5,2.65]}, {"id":"b","position":[5.5,3.35]}],
-        "agent_defaults":{"radius":.25,"desired_speed":1.2},
+        "agent_defaults":{"radius":.23,"desired_speed":1.2},
         "settings":{"dt":.01,"sample_interval":.01,"max_time":20},
     })
 
 
 class BodySizeTests(unittest.TestCase):
-    def test_90cm_door_is_single_file_but_wide_opening_allows_abreast(self):
-        for width, expected in ((.9,1),(1.4,2)):
+    def test_single_doors_are_single_file_but_wide_opening_allows_abreast(self):
+        for width, expected in ((.8,1),(.9,1),(1.4,2)):
             with self.subTest(width=width):
                 result = run_simulation(compile_layout(doorway_layout(width)))
                 self.assertEqual(result["status"],"completed")
-                # A 20 cm-deep strip centered on the doorway: two 50 cm bodies
-                # cannot occupy this side by side in a 90 cm aperture.
-                simultaneous = max(sum(abs(p["x"]-8)<.1 for p in frame["agents"]) for frame in result["frames"])
+                # Use a shallow 5 cm strip: distinguish abreast passage from
+                # diagonally staggered people approaching a narrow aperture.
+                simultaneous = max(sum(abs(p["x"]-8)<.025 for p in frame["agents"]) for frame in result["frames"])
                 self.assertEqual(simultaneous,expected)
                 for frame in result["frames"]:
                     if len(frame["agents"]) == 2:
                         a,b=frame["agents"]
-                        self.assertGreaterEqual(math.hypot(a["x"]-b["x"],a["y"]-b["y"]),.5-1e-6)
+                        self.assertGreaterEqual(math.hypot(a["x"]-b["x"],a["y"]-b["y"]),.46-1e-6)
 
     def test_width_controls_native_and_pixel_placement_clearance_and_exit_strip(self):
         source = Path(__file__).resolve().parents[2] / "examples/narrow_table_regression.json"
         for plan in (room_request()["plan"],native_to_editor(json.loads(source.read_text()))):
-            for width in (.5,.6):
+            for width in (.46,.6):
                 with self.subTest(native=bool(plan.get("native")),width=width):
                     original=copy.deepcopy(plan)
                     settings={"occupancy":12,"mobility":"standard","distribution":"uniform","body_width":width}
@@ -68,13 +68,13 @@ class BodySizeTests(unittest.TestCase):
 
     def test_sample_doorways_are_wide_not_standard_single_doors(self):
         scenario=editor_to_scenario(SAMPLE["plan"],SAMPLE["scenario"])
-        self.assertEqual(scenario.agent_defaults.radius,.25)
+        self.assertEqual(scenario.agent_defaults.radius,.23)
         self.assertEqual([math.dist(b.start,b.end) for b in scenario.exit_boundaries],[1.75,1.75])
 
     def test_comparisons_reject_a_change_in_physical_body_size(self):
         payload=room_request()
         before=api.run_editor_simulation(api.SimulationRequest.model_validate(payload))
-        payload["starting_population"]={"occupants":before["scenario"]["occupants"],"radius":.25,
+        payload["starting_population"]={"occupants":before["scenario"]["occupants"],"radius":before["scenario"]["agent_defaults"]["radius"],
                                         "mobility":"standard","distribution":"uniform","seed":42}
         payload["scenario"]["body_width"]=.6
         with self.assertRaisesRegex(ValueError,"body width unchanged"):

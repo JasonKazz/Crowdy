@@ -266,7 +266,7 @@ class EstimatedScaleAPITests(unittest.TestCase):
             self.assertEqual(source_image["calibration"]["estimated_objects"], [])
             self.assertTrue(source_image["scale_confirmed"])
             self.assertEqual(next_plan["native"]["layout"]["doors"][0]["offset"], 7)
-            self.assertEqual(next_plan["native"]["layout"]["agent_defaults"]["radius"], .25)
+            self.assertEqual(next_plan["native"]["layout"]["agent_defaults"]["radius"], .23)
             # Import/export and checks retain estimation provenance until explicitly changed.
             checked = client.post("/api/floorplans", json={"layout": native})
             self.assertEqual(checked.json()["plan"]["native"]["layout"]["source_image"]["calibration"]["method"], "estimated")

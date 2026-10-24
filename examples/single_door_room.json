@@ -14,6 +14,6 @@
     {"id": "exit-east", "floor_id": "room", "edge_index": 1, "offset": 3, "width": 0.9}
   ],
   "population": {"count": 20, "seed": 42, "spawn_area_ids": ["room"]},
-  "agent_defaults": {"radius": 0.25, "desired_speed": 1.2},
+  "agent_defaults": {"radius": 0.23, "desired_speed": 1.2},
   "settings": {"dt": 0.01, "sample_interval": 0.1, "max_time": 120}
 }
