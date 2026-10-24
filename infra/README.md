@@ -127,6 +127,10 @@ Both build modes stage an explicit temporary context containing only `Dockerfile
 `pyproject.toml`, `uv.lock`, and application source/text assets from `app/`.
 Hidden files, `.env` files, symlinks, bytecode, virtual environments, credentials,
 and runtime uploads are excluded before the context reaches Docker or ACR.
+The context root stays private (`0700`); its application directories use `0755`
+and public build files use `0644`, allowing the non-root image user to read files
+copied by Docker even under a restrictive deployment `umask`. In Docker build
+mode, an offline import smoke check runs as that user before ACR login or push.
 An exit trap removes the staged context when the script finishes or fails.
 
 `./infra/scripts/deploy.sh bootstrap` creates only the foundation for inspection.

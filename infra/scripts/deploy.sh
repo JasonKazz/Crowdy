@@ -170,6 +170,12 @@ for original in app.rglob('*'):
     target = destination / 'app' / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(original, target)
+
+# Docker COPY preserves modes. Keep the temporary host context private while
+# making its public source readable by the image's configured non-root user.
+destination.chmod(0o700)
+for staged in destination.rglob('*'):
+    staged.chmod(0o755 if staged.is_dir() else 0o644)
 PY
 
 # ACR quick builds avoid requiring a local Docker daemon and produce the amd64
@@ -189,6 +195,16 @@ else
   command -v docker >/dev/null
   docker build --platform linux/amd64 --file "$build_context/Dockerfile" \
     --tag "$registry_server/$image_name" "$build_context"
+  # Import the actual entry point as the image's configured non-root USER before
+  # publishing, with networking disabled and no deployed credentials supplied.
+  docker run --rm --platform linux/amd64 --network none \
+    --env CROWDY_BACKEND_TOKEN=crowdy-build-smoke-check \
+    --entrypoint python "$registry_server/$image_name" -c '
+import os
+if os.geteuid() == 0:
+    raise SystemExit("The backend image must run as a non-root user.")
+from app.api import app
+'
   az acr login --subscription "$student_subscription" --name "$registry_name"
   docker push "$registry_server/$image_name"
 fi
