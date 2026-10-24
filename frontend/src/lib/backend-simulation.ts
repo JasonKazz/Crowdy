@@ -83,6 +83,8 @@ export function adaptBackendSimulation(
   const defaults = backendScenario.agent_defaults === undefined ? undefined : record(backendScenario.agent_defaults,"agent defaults");
   const agentRadius = defaults === undefined ? .2 : finite(defaults.radius,"person radius",0);
   if (agentRadius === 0) invalid("person radius must be positive");
+  if (inputScenario.bodyWidth !== undefined && Math.abs(2 * agentRadius - inputScenario.bodyWidth) > 1e-7)
+    invalid("body width differs from the requested scenario");
   const engineVersion = result.engine_version === undefined
     ? undefined
     : identifier(result.engine_version, "engine version");
@@ -146,6 +148,31 @@ export function adaptBackendSimulation(
     if (behaviorById.size !== occupants.length) invalid("behavior must cover every occupant");
   } else if (requestedMode !== "idealized") invalid("behavioral run has no recorded behavior");
   const knownExits = new Set(inputPlan.exits.map((exit) => exit.id));
+  const boundaryWidths = new Map<string, number>();
+  for (const value of array(backendScenario.exit_boundaries ?? [],"exit boundaries")) {
+    const boundary = record(value,"exit boundary");
+    const id = identifier(boundary.id,"exit boundary ID");
+    const start = array(boundary.start,"exit boundary start"), end = array(boundary.end,"exit boundary end");
+    if (!knownExits.has(id) || boundaryWidths.has(id) || start.length !== 2 || end.length !== 2)
+      invalid("exit boundary does not match the plan");
+    const width = Math.hypot(finite(end[0],"door x")-finite(start[0],"door x"),finite(end[1],"door y")-finite(start[1],"door y"));
+    if (!Number.isFinite(width) || width <= 0) invalid("door width must be positive and finite");
+    boundaryWidths.set(id,width);
+  }
+  const exitWidths = Object.fromEntries(boundaryWidths);
+  const exitZones = backendScenario.exits === undefined ? undefined : array(backendScenario.exits,"compiled exits").map(value => {
+    const zone = record(value,"compiled exit");
+    const id = identifier(zone.id,"compiled exit ID");
+    const polygon = array(zone.polygon,"compiled exit polygon").map(value => {
+      const point = array(value,"compiled exit point");
+      if (point.length !== 2) invalid("compiled exit point must have two coordinates");
+      return toCanvas(finite(point[0],"compiled exit x"),finite(point[1],"compiled exit y"));
+    });
+    if (!knownExits.has(id) || polygon.length < 3) invalid("compiled exit does not match the plan");
+    return {id,polygon};
+  });
+  if (exitZones && (exitZones.length !== knownExits.size || new Set(exitZones.map(zone=>zone.id)).size !== knownExits.size))
+    invalid("compiled exits must cover the plan exits");
   const agentId = (value: unknown) => {
     const id = identifier(value, "agent ID");
     if (!occupantsById.has(id)) invalid("an unknown agent ID was returned");
@@ -352,6 +379,8 @@ export function adaptBackendSimulation(
     status,
     clearanceTime,
     perExitCounts,
+    exitWidths,
+    ...(exitZones === undefined ? {} : {exitZones}),
   };
 }
 

@@ -91,7 +91,7 @@ class BehaviorTests(unittest.TestCase):
             with self.subTest(native=bool(plan.get("native"))):
                 settings = {"occupancy":12,"mobility":"mixed","distribution":"uniform","seed":7}
                 before = api.run_editor_simulation(api.SimulationRequest(plan=plan,scenario=settings))
-                reference = {"occupants":before["scenario"]["occupants"],"radius":.2,
+                reference = {"occupants":before["scenario"]["occupants"],"radius":before["scenario"]["agent_defaults"]["radius"],
                              "mobility":"mixed","distribution":"uniform","seed":7}
                 request = api.SimulationRequest(plan=plan,scenario={**settings,"behavior_mode":"behavioral"},
                                                starting_population=reference)

@@ -78,13 +78,13 @@ class EditorAdapterTests(unittest.TestCase):
         self.assertEqual(payload, original)
         self.assertEqual(scenario.settings.model_dump(), {"dt": .01, "sample_interval": .2, "max_time": 60, "blocked_exit_ids": [],
                                                        "behavior_mode": "idealized", "behavior_seed": 42})
-        self.assertEqual(scenario.agent_defaults.radius, .2)
+        self.assertEqual(scenario.agent_defaults.radius, .25)
         self.assertEqual({exit.id for exit in scenario.exits}, {"west", "east"})
         self.assertTrue(any(region.id.startswith("editor-wall-") for region in scenario.obstacles))
         walkable = build_geometry(scenario)
         for occupant in scenario.occupants:
             point = Point(occupant.position)
-            self.assertGreaterEqual(point.distance(walkable.boundary), .25 - 1e-9)
+            self.assertGreaterEqual(point.distance(walkable.boundary), .3 - 1e-9)
             self.assertGreaterEqual(occupant.position[0], 100 / 32)
             self.assertLessEqual(occupant.position[0], 420 / 32)
 
@@ -191,6 +191,7 @@ class EditorApiTests(unittest.TestCase):
             lambda p: p["scenario"].update(occupancy=201),
             lambda p: p["scenario"].update(mobility="flying"),
             lambda p: p["scenario"].update(behavior_mode="optimal"),
+            lambda p: p["scenario"].update(body_width=.39),
             lambda p: p["plan"].update(width=901),
             lambda p: p["plan"]["walls"][0].update(x1=-1),
             lambda p: p["plan"]["exits"].append(p["plan"]["exits"][0]),

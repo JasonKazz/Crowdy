@@ -28,6 +28,7 @@ export async function POST(request: Request) {
       !["standard", "mixed"].includes(scenario.mobility) ||
       !["uniform", "workstations"].includes(scenario.distribution) ||
       (scenario.behaviorMode !== undefined && !["idealized", "behavioral"].includes(scenario.behaviorMode)) ||
+      (scenario.bodyWidth !== undefined && (typeof scenario.bodyWidth !== "number" || !Number.isFinite(scenario.bodyWidth) || scenario.bodyWidth < .4 || scenario.bodyWidth > .7)) ||
       (scenario.seed !== undefined && (!Number.isInteger(scenario.seed) || scenario.seed < 0 || scenario.seed > 4294967295))
     )
       throw new Error("Choose 1–200 people and valid scenario settings.");
@@ -59,6 +60,7 @@ export async function POST(request: Request) {
         seed: scenario.seed ?? 42,
         blocked_exit_ids: blocked,
         behavior_mode: scenario.behaviorMode ?? "idealized",
+        body_width: scenario.bodyWidth ?? .5,
       },
     };
   } catch (error) {

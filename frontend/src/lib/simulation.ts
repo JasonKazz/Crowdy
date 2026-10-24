@@ -42,6 +42,8 @@ export type Scenario = {
   seed?: number;
   blockedExitIds?: string[];
   behaviorMode?: "idealized" | "behavioral";
+  /** Shoulder width / circular collision diameter, in metres. */
+  bodyWidth?: number;
 };
 export type AgentPath = {
   id: number;
@@ -93,6 +95,9 @@ export type SimulationResult = {
   /** Null when the recorded run ended with people still inside. */
   clearanceTime?: number | null;
   perExitCounts?: Record<string, number>;
+  exitWidths?: Record<string, number>;
+  /** Compiled target strips for this run's body size, in canvas coordinates. */
+  exitZones?: {id: string; polygon: Point[]}[];
 };
 
 export const SAMPLE_PLAN: FloorPlan = {
@@ -631,6 +636,7 @@ export function runSimulation(
     peakDensity: Math.round(peakDensity * 10) / 10,
     exited: completed.length,
     remaining: scenario.occupancy - completed.length,
+    agentRadius: (scenario.bodyWidth ?? .5) / 2,
     hotspot,
     createdAt,
   };

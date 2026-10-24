@@ -6,6 +6,7 @@ export const DEFAULT_SCENARIO: Scenario = {
   mobility: "standard",
   distribution: "uniform",
   behaviorMode: "idealized",
+  bodyWidth: .5,
 };
 
 export type WorkspaceRecord = {
@@ -209,6 +210,7 @@ function validScenario(value: unknown): value is Scenario {
     (value.mobility === "standard" || value.mobility === "mixed") &&
     (value.distribution === "uniform" || value.distribution === "workstations") &&
     (value.behaviorMode === undefined || value.behaviorMode === "idealized" || value.behaviorMode === "behavioral") &&
+    (value.bodyWidth === undefined || (finite(value.bodyWidth) && value.bodyWidth >= .4 && value.bodyWidth <= .7)) &&
     (value.blockedExitIds === undefined || (Array.isArray(value.blockedExitIds) && value.blockedExitIds.length <= 30 && new Set(value.blockedExitIds).size === value.blockedExitIds.length && value.blockedExitIds.every(id => typeof id === "string" && id.length > 0))) &&
     (value.seed === undefined || (finite(value.seed) && Number.isInteger(value.seed) && value.seed >= 0 && value.seed <= 4294967295))
   );
@@ -253,6 +255,7 @@ function copyScenario(scenario: Scenario): Scenario {
     mobility: scenario.mobility,
     distribution: scenario.distribution,
     ...(scenario.behaviorMode === undefined ? {} : {behaviorMode: scenario.behaviorMode}),
+    ...(scenario.bodyWidth === undefined ? {} : {bodyWidth: scenario.bodyWidth}),
     ...(scenario.seed === undefined ? {} : {seed: scenario.seed}),
     ...(scenario.blockedExitIds === undefined ? {} : {blockedExitIds: [...scenario.blockedExitIds]}),
   };

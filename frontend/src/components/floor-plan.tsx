@@ -341,7 +341,7 @@ export default function FloorPlanView({
   const viewWidth = plan.width || 900;
   const viewHeight = plan.height || 600;
   const metre = plan.native?.transform.pixels_per_metre ?? 32;
-  const personRadius = result?.agentRadius ?? .2;
+  const personRadius = result?.agentRadius ?? .25;
   const cellWidth = 2 * metre;
   const visiblePeople = result
     ? result.agents.flatMap((agent) => {
@@ -714,11 +714,12 @@ export default function FloorPlanView({
         ) : null}
 
         <g aria-label="Exits">
-          {plan.native ? plan.native.exit_zones.map(zone=><polygon key={zone.id} points={zone.polygon.map(p=>`${p.x},${p.y}`).join(" ")}
-            fill="#b9dcc1" stroke="#4d7750" strokeWidth="1"><title>{zone.id}</title></polygon>) : plan.exits.map((exit) => {
+          {plan.native ? (result?.exitZones ?? plan.native.exit_zones).map(zone=><polygon key={zone.id} points={zone.polygon.map(p=>`${p.x},${p.y}`).join(" ")}
+            fill="#b9dcc1" stroke="#4d7750" strokeWidth="1"><title>{`${zone.id}${result?.exitWidths?.[zone.id] === undefined ? "" : `: ${result.exitWidths[zone.id].toFixed(2)} m wide`}`}</title></polygon>) : plan.exits.map((exit) => {
             const left = exit.x < viewWidth / 2;
             return (
               <g key={exit.id}>
+                <title>{`${exit.label}${result?.exitWidths?.[exit.id] === undefined ? "" : `: ${result.exitWidths[exit.id].toFixed(2)} m wide`}`}</title>
                 <line
                   x1={exit.x}
                   y1={exit.y - 23}

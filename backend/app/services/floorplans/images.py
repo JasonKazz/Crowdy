@@ -88,7 +88,7 @@ def draft_layout(source: SourceImage) -> Layout:
         walkable_areas=[Region(id="floor", polygon=[(0, 0), (width, 0), (width, height), (0, height)])],
         source_image=source,
         population=Population(count=40, spawn_area_ids=["floor"]),
-        agent_defaults=AgentDefaults(radius=0.2, desired_speed=1.2),
+        agent_defaults=AgentDefaults(radius=0.25, desired_speed=1.2),
         settings=SimulationSettings(dt=0.01, sample_interval=0.1, max_time=120),
     )
 
@@ -183,7 +183,7 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
         rooms=[region(item) for item in drawing.rooms],
         room_labels={item.id: item.label for item in drawing.rooms},
         population=Population(count=people_count, spawn_area_ids=["floor"]),
-        agent_defaults=AgentDefaults(radius=0.2, desired_speed=1.2),
+        agent_defaults=AgentDefaults(radius=0.25, desired_speed=1.2),
         settings=SimulationSettings(dt=0.01, sample_interval=0.1, max_time=120),
     )
 

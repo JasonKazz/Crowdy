@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "name": "Single doorway · 90 cm opening",
+  "units": "meters",
+  "walkable_areas": [
+    {"id": "room", "polygon": [[0, 0], [8, 0], [8, 6], [0, 6]]}
+  ],
+  "furniture": [
+    {"id": "meeting-table", "polygon": [[3, 2.4], [5, 2.4], [5, 3.6], [3, 3.6]]}
+  ],
+  "walls": [],
+  "doors": [],
+  "exits": [
+    {"id": "exit-east", "floor_id": "room", "edge_index": 1, "offset": 3, "width": 0.9}
+  ],
+  "population": {"count": 20, "seed": 42, "spawn_area_ids": ["room"]},
+  "agent_defaults": {"radius": 0.25, "desired_speed": 1.2},
+  "settings": {"dt": 0.01, "sample_interval": 0.1, "max_time": 120}
+}

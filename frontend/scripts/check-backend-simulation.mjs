@@ -345,3 +345,26 @@ assert.equal(Math.abs(headingAt(west,0)),Math.PI,"Leftward walking faces left, n
 const wrap={...body,samples:[{time:0,point:{x:0,y:0}},{time:1,point:{x:-1,y:.01}},{time:2,point:{x:-2,y:0}}]};
 assert.ok(Math.abs(headingAt(wrap,2)-headingAt(wrap,1))<.03,"Crossing -pi/pi follows the short rotation");
 console.log("Behavior validation, measured-delay playback, stationary headings, smooth turns and deterministic seeking passed.");
+
+const doorwayFixture=structuredClone(fixture);
+doorwayFixture.scenario.agent_defaults={radius:.25,desired_speed:1.2};
+doorwayFixture.scenario.exit_boundaries=[{id:"exit-a",start:[0,0],end:[0,.9]}];
+doorwayFixture.scenario.exits=[
+  {id:"exit-a",polygon:[[0,0],[1,0],[1,1]]},
+  {id:"exit-b",polygon:[[2,2],[3,2],[3,3]]},
+];
+const doorwayRun=adaptBackendSimulation(doorwayFixture,planInput,{...scenario,bodyWidth:.5});
+assert.equal(doorwayRun.agentRadius,.25);
+assert.equal(doorwayRun.exitWidths["exit-a"],.9);
+assert.deepEqual(doorwayRun.exitZones[0].polygon,[{x:0,y:600},{x:32,y:600},{x:32,y:568}],"Compiled strips use the same metre projection as people");
+assert.throws(()=>adaptBackendSimulation(doorwayFixture,planInput,{...scenario,bodyWidth:.6}),/body width/);
+for(const mutate of [
+  run=>run.scenario.exit_boundaries.push(run.scenario.exit_boundaries[0]),
+  run=>run.scenario.exit_boundaries[0].end=[0,0],
+  run=>run.scenario.exits.pop(),
+  run=>run.scenario.exits[0].polygon=[[0,0],[1,0]],
+]) {
+  const invalid=structuredClone(doorwayFixture);mutate(invalid);
+  assert.throws(()=>adaptBackendSimulation(invalid,planInput,{...scenario,bodyWidth:.5}),/invalid results/);
+}
+console.log("Physical body-width agreement, measured doorway widths and compiled exit-strip projection checks passed.");

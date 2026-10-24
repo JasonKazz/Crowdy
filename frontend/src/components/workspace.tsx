@@ -523,6 +523,8 @@ export default function Workspace({
               engine: result.engine,
               engineVersion: result.engineVersion,
               modelSettings: result.modelSettings,
+              bodyWidthMetres: result.agentRadius === undefined ? undefined : 2 * result.agentRadius,
+              exitWidthsMetres: result.exitWidths,
               placementExcludedArea: result.placementExcludedArea,
               trapped: result.trapped,
               movingRemaining: result.movingRemaining,
@@ -880,6 +882,12 @@ export default function Workspace({
                 </select>
                 <Icon name="chevron" size={13} />
               </div>
+              <label className="field-label" htmlFor="body-width">Body width (cm)</label>
+              <input id="body-width" type="number" min="40" max="70" step="1" value={Math.round((scenario.bodyWidth ?? .5)*100)}
+                onChange={event => {const width=Number(event.target.value);if(Number.isInteger(width)&&width>=40&&width<=70)
+                  setScenario({...scenario,bodyWidth:width/100});}} />
+              <p className="field-note">Shoulder width and collision diameter use the same size. Default: 50 cm.
+                {isSample ? " Sample exits are 1.75 m wide, so two abreast can fit in these wide openings." : " Check the drawing’s scale if doors look too wide."}</p>
               <label className="field-label" htmlFor="mobility">
                 Walking profile
               </label>
@@ -905,7 +913,7 @@ export default function Workspace({
                   : "Includes slower walkers. Speed: 0.7–1.2 m/s."}
               </p>
             </fieldset>
-            {baseline && <p className="helper">Baseline starting people and base walking speeds are fixed. You can change evacuation mode below.</p>}
+            {baseline && <p className="helper">Baseline starting people, body width and base walking speeds are fixed. You can change evacuation mode below.</p>}
             <fieldset disabled={busy}>
               <label className="field-label" htmlFor="behavior-mode">Evacuation mode</label>
               <div className="select-wrap">
@@ -1274,6 +1282,7 @@ export default function Workspace({
             </p>
           </div>
           <div className="secondary-metrics">
+            <div><span>Body width · collision diameter</span><strong>{result?.agentRadius === undefined ? "—" : `${Math.round(2*result.agentRadius*100)} cm`}</strong></div>
             <div>
               <span>Average exit time</span>
               <strong>
@@ -1303,7 +1312,7 @@ export default function Workspace({
             <div><span>With a route at time limit</span><strong>{result?.movingRemaining ?? "—"}</strong></div>
             {result?.perExitCounts && Object.entries(result.perExitCounts).map(([id, count]) => (
               <div key={id}>
-                <span>Via {result.plan.exits.find((exit) => exit.id === id)?.label ?? id}</span>
+                <span>Via {result.plan.exits.find((exit) => exit.id === id)?.label ?? id}{result.exitWidths?.[id] === undefined ? "" : ` · ${result.exitWidths[id].toFixed(2)} m wide`}</span>
                 <strong>{count}<small> {count === 1 ? "person" : "people"}</small></strong>
               </div>
             ))}
@@ -1679,6 +1688,8 @@ export default function Workspace({
                   Reduced motion starts runs paused.
                   Shoulder ellipses face the measured walking direction with smoothed turns;
                   collision and route clearance still use circular bodies. Amber means waiting to respond; red means trapped.
+                  Body width defaults to 50 cm (a 25 cm radius), is adjustable from 40–70 cm, and sets both the shoulder span and collision diameter.
+                  Door widths come from the floor geometry; wide exits can support people abreast. Estimated drawing scale affects their measured width.
                 </dd>
               </div>
               <div>
