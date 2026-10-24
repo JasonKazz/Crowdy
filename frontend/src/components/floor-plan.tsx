@@ -792,17 +792,16 @@ export default function FloorPlanView({
                 ry={metre * personRadius}
                 fill={
                   agent.outcome === "trapped" ? "#b64235" : result.engine === "jupedsim" && time < agent.delay ? "#b98a3e" : agent.id % 7 === 0
-                    ? "#bb8e61"
+                    ? "#2356c4"
                     : agent.id % 3 === 0
-                      ? "#81978b"
-                      : "#4e786b"
+                      ? "#007185"
+                      : "#1746a2"
                 }
-                stroke="#fff"
-                strokeWidth="1"
-                opacity="0.95"
+                stroke="#14213d"
+                strokeWidth={metre * personRadius * .12}
               />
               <path d={`M ${metre*personRadius*.4} ${-metre*personRadius*.24} L ${metre*personRadius*.4} ${metre*personRadius*.24}`}
-                stroke="#fff" strokeWidth={Math.max(.6,metre*personRadius*.15)} strokeLinecap="round" opacity=".9"/>
+                stroke="#fff" strokeWidth={metre*personRadius*.15} strokeLinecap="round" opacity=".9"/>
               </g>
             ))}
           </g>
