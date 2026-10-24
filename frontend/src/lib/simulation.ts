@@ -3,6 +3,7 @@
  * furniture, with a simple exit-service queue. It is not a validated evacuation
  * solver and must not be used to certify a real space.
  */
+import type {PlanRoom, PopulationSettings} from "./room-population";
 export type Point = { x: number; y: number };
 export type PlanItem = {
   id: string;
@@ -25,6 +26,7 @@ export type FloorPlan = {
   items: PlanItem[];
   walls: Wall[];
   exits: Exit[];
+  rooms?: PlanRoom[];
   native?: {
     layout: Record<string, unknown>;
     transform: {pixels_per_metre: number; offset_x: number; offset_y: number};
@@ -38,7 +40,8 @@ export type FloorPlan = {
 export type Scenario = {
   occupancy: number;
   mobility: "standard" | "mixed";
-  distribution: "uniform" | "workstations";
+  distribution: "uniform" | "workstations" | "rooms";
+  population?: PopulationSettings;
   seed?: number;
   blockedExitIds?: string[];
   behaviorMode?: "idealized" | "behavioral";
@@ -106,6 +109,12 @@ export const SAMPLE_PLAN: FloorPlan = {
   width: 900,
   height: 600,
   area: 304,
+  rooms: [
+    {id:"work-area",label:"Workstations",room_type:"office",polygon:[{x:80,y:90},{x:610,y:90},{x:610,y:350},{x:80,y:350}]},
+    {id:"meeting-room",label:"Meeting room",room_type:"meeting",polygon:[{x:610,y:90},{x:820,y:90},{x:820,y:235},{x:610,y:235}]},
+    {id:"lounge",label:"Lounge",room_type:"lounge",polygon:[{x:80,y:350},{x:820,y:350},{x:820,y:510},{x:80,y:510}]},
+    {id:"circulation",label:"Circulation",room_type:"corridor",polygon:[{x:610,y:235},{x:820,y:235},{x:820,y:350},{x:610,y:350}]},
+  ],
   walls: [
     { x1: 80, y1: 90, x2: 820, y2: 90 },
     { x1: 80, y1: 510, x2: 820, y2: 510 },

@@ -36,7 +36,7 @@ Keep an existing `.env.local`. If none exists, copy `frontend/.env.example` to `
 
 People are drawn using the native collision-body radius and the canvas metre scale, including the original sample. Boundary exits in the original pixel-plan format use the measured gap between exterior wall segments; an unmeasured bare-edge marker retains a 1.4 m default opening. If crowd movement blocks a person's current route near a door jamb, the engine replans locally from their actual position to the same destination instead of retreating to an old waypoint. Short avoidance movements can still occur; this is not an explicit first-in-first-out queue model.
 
-The UI currently supports 10–200 people. Backend files may contain larger populations, but the scenario controls determine the submitted population. Imported manual starts are regenerated for interactive editing; original source files remain untouched. Pinning a native run in the integrated workspace freezes its starting IDs, positions, body radius, and per-person speeds for subsequent layout/exit comparisons. The standalone editor also supports explicit fixed starts.
+The UI currently supports 1–200 people. Backend files may contain larger populations, but the scenario controls determine the submitted population. Imported manual starts are regenerated for interactive editing; original source files remain untouched. Pinning a native run in the integrated workspace freezes its starting IDs, positions, body radius, and per-person speeds for subsequent layout/exit comparisons. The standalone editor also supports explicit fixed starts.
 
 ## Remaining limitations
 
@@ -102,3 +102,7 @@ The Berkeley sample's exits are **1.75 m wide**, so they legitimately permit peo
 Native regressions compare the same two 46 cm bodies approaching 0.80 m and 0.90 m doorways versus a 1.40 m doorway. The narrow case passes single file, the wide case permits simultaneous passage, and recorded bodies remain non-overlapping. Placement regressions cover both geometry formats and 46/60 cm bodies.
 
 Upload `examples/single_door_room.json` and select 20 people to inspect a measured 90 cm doorway in an 8 m × 6 m room. Larger bodies can lengthen queues or expose deadlocks in the current local-avoidance model. A stress run with 200 people configured at 50 cm width left two people unresolved even after 120 s. Such runs retain their incomplete status rather than reporting successful clearance.
+
+## Room-aware placement
+
+New imports and workspaces default to Rooms & activity. Building and room types are inferred from labels and staged semantic observations, with optional overrides. Activity presets apportion total occupancy by usable room area and room use. Individual fixed counts reserve people in that room; other rooms share the remainder. The live placement preview uses the same Python placement path as Run and preserves physical body clearance and seeded reproducibility. Room settings persist with the workspace and are frozen in matched comparisons. See [room placement controls, API, extraction safeguards and real-time limits](room-population.md).

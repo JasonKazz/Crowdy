@@ -70,6 +70,15 @@ are part of that solid furniture footprint, not walkable holes. Only preserve a 
 cutout as floor when it visibly opens onto an aisle where a person can enter it.
 Room polygons and labels describe spaces but do not obstruct movement. Keep room polygons
 within the floor. Do not invent rooms, furniture, dimensions, exits, or connections.
+Identify EVERY visible enclosed room and clearly labeled open activity zone, not just the
+largest room. Include corridors, meeting rooms, work areas, lunch/break spaces and storage
+when their extents are visible. Follow physical partitions; adjacent room polygons should
+not overlap. Preserve readable room labels rather than replacing them with generic names.
+Before finishing, inspect each enclosed room's perimeter for visible interior door jambs
+and connect that observed door to its existing parent wall. Do not invent a missing door
+just to make a room reachable; name that room in warnings when its opening is unclear.
+Room and building types will be inferred separately from these labels and visible room
+uses. Keep labels descriptive and evidence-based; never invent geometry to support a use.
 
 FINAL CONSISTENCY CHECK
 Before returning, check that IDs are unique within each collection, every door has a

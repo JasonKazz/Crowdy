@@ -142,6 +142,17 @@ def output_schema(model_type=ExtractedDrawing) -> dict:
         return result
 
     result = simplify(schema)
+    # The compact geometry grammar is already near Claude's compilation limit.
+    # Reuse its room labels for local semantic inference; the much smaller
+    # staged Structure schema can request classifications directly.
+    if model_type is ExtractedDrawing:
+        for name in ("building_type", "room_classifications"):
+            result["properties"].pop(name, None)
+            if name in result.get("required", []):
+                result["required"].remove(name)
+    if "room_classifications" in result.get("properties", {}):
+        result["properties"]["room_classifications"] = {"type": "array", "items": {"type": "string"},
+            "description": "Existing room classifications as room_type:room_id. Types: office, classroom, meeting, cafeteria, kitchen, lounge, corridor, lobby, auditorium, bedroom, restroom, storage, unknown. Use unknown when ambiguous; classify visible room use, never invent geometry."}
     # A further nested object array exceeds Claude's geometry grammar limit.
     # Keep classifications flat on the wire, then restore and validate typed
     # objects locally. Both providers use exactly the same representation.
@@ -208,6 +219,10 @@ def extract_structured(provider: str, image: bytes, prompt: str, model_type):
         text = "".join(part.get("text", "") for part in response.get("content", []) if part.get("type") == "text")
     try:
         data = json.loads(text)
+        if isinstance(data, dict) and isinstance(data.get("room_classifications"), list):
+            data["room_classifications"] = [
+                {"room_type": item.partition(":")[0], "room_id": item.partition(":")[2]}
+                if isinstance(item, str) else item for item in data["room_classifications"]]
         if isinstance(data, dict) and isinstance(data.get("scale_objects"), list):
             data["scale_objects"] = [
                 {"kind": item.partition(":")[0], "object_id": item.partition(":")[2]}

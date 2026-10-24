@@ -4,7 +4,8 @@ import { useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
 import { positionAt } from "@/lib/simulation";
 import { headingAt } from "@/lib/person-heading";
-import type { FloorPlan, PlanItem, SimulationResult } from "@/lib/simulation";
+import type { AgentPath, FloorPlan, PlanItem, Point, SimulationResult } from "@/lib/simulation";
+import type {PopulationPreview} from "@/lib/room-population";
 import GeometryEditorLayer from "./geometry-editor-layer";
 import type {GeometrySelection, GeometryTool} from "@/lib/native-editor";
 
@@ -15,6 +16,7 @@ type Props = {
   onMove: (id: string, x: number, y: number) => void;
   mode: "layout" | "simulation" | "compare";
   result: SimulationResult | null;
+  placement?: PopulationPreview | null;
   time: number;
   showPeople: boolean;
   showRoutes: boolean;
@@ -331,6 +333,7 @@ export default function FloorPlanView({
   onGeometryChange,
   onGeometryToolDone,
   blockedExitIds = [],
+  placement = null,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -341,9 +344,11 @@ export default function FloorPlanView({
   const viewWidth = plan.width || 900;
   const viewHeight = plan.height || 600;
   const metre = plan.native?.transform.pixels_per_metre ?? 32;
-  const personRadius = result?.agentRadius ?? .23;
+  const personRadius = mode === "layout" && placement ? placement.radius : result?.agentRadius ?? .23;
   const cellWidth = 2 * metre;
-  const visiblePeople = result
+  const measuredPeople = result?.engine === "jupedsim" && !(mode === "layout" && placement);
+  const visiblePeople: {agent: AgentPath; point: Point}[] = mode === "layout" && placement ? placement.people.map((point,id)=>({point,
+      agent:{id,points:[point],duration:0,delay:0,exitId:null}})) : result
     ? result.agents.flatMap((agent) => {
         const point = positionAt(agent, time);
         return point ? [{ agent, point }] : [];
@@ -596,6 +601,14 @@ export default function FloorPlanView({
           </g>
         ) : null}
 
+        {mode === "layout" && placement && <g aria-label="Room population zones" pointerEvents="none">
+          {placement.rooms.map((room,index)=><path key={room.id}
+            d={room.rings.map(ring=>ring.length?`M ${ring.map(p=>`${p.x} ${p.y}`).join(" L ")} Z`:"").join(" ")}
+            fill={["#539a9a","#8e83b3","#c39a55","#72994e"][index%4]} fillOpacity=".08"
+            fillRule="evenodd" stroke="#66806a" strokeOpacity=".4" strokeWidth="1" strokeDasharray="4 4">
+            <title>{room.label}: {room.count} people</title>
+          </path>)}
+        </g>}
         <g aria-label="Furniture and obstacles">
           {plan.items.map((item) => {
             const x = drag?.id === item.id ? drag.x : item.x;
@@ -776,7 +789,7 @@ export default function FloorPlanView({
           key={geometryTool} plan={plan} selection={geometrySelection} tool={geometryTool}
           onSelect={onGeometrySelect} onChange={onGeometryChange} onPreview={setGeometryPreview} onToolDone={onGeometryToolDone}/>}
 
-        {showPeople && result ? (
+        {showPeople && (result || placement) ? (
           <g
             aria-label={`${visiblePeople.length} ${visiblePeople.length === 1 ? "person" : "people"} visible in this scenario`}
           >
@@ -784,14 +797,14 @@ export default function FloorPlanView({
               <g
                 key={agent.id}
                 transform={`translate(${point.x} ${point.y}) rotate(${headingAt(agent,time) * 180 / Math.PI})`}
-                data-person-state={result.engine !== "jupedsim" ? "preview" : agent.outcome === "trapped" ? "trapped" : time < agent.delay ? "responding" : "walking"}
+                data-person-state={!measuredPeople ? "preview" : agent.outcome === "trapped" ? "trapped" : time < agent.delay ? "responding" : "walking"}
               >
-              <title>{result.engine !== "jupedsim" ? `${agent.id}: placement preview` : `${agent.sourceId ?? agent.id}${agent.outcome === "trapped" ? ": trapped, no available route" : time < agent.delay ? ": waiting to respond" : ": walking / queuing"} · response ${agent.delay.toFixed(1)} s${agent.desiredSpeed === undefined ? "" : ` · desired speed ${agent.desiredSpeed.toFixed(2)} m/s`}`}</title>
+              <title>{!measuredPeople ? `${agent.id}: placement preview` : `${agent.sourceId ?? agent.id}${agent.outcome === "trapped" ? ": trapped, no available route" : time < agent.delay ? ": waiting to respond" : ": walking / queuing"} · response ${agent.delay.toFixed(1)} s${agent.desiredSpeed === undefined ? "" : ` · desired speed ${agent.desiredSpeed.toFixed(2)} m/s`}`}</title>
               <ellipse
                 rx={metre * personRadius * .68}
                 ry={metre * personRadius}
                 fill={
-                  agent.outcome === "trapped" ? "#b64235" : result.engine === "jupedsim" && time < agent.delay ? "#b98a3e" : agent.id % 7 === 0
+                  agent.outcome === "trapped" ? "#b64235" : measuredPeople && time < agent.delay ? "#b98a3e" : agent.id % 7 === 0
                     ? "#2356c4"
                     : agent.id % 3 === 0
                       ? "#007185"

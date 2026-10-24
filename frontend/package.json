@@ -15,7 +15,8 @@
     "test:floorplan-import": "node --experimental-strip-types scripts/check-floorplan-import.mjs",
     "test:native-editor": "node --experimental-strip-types scripts/check-native-editor.mjs",
     "test:image-upload": "node --experimental-strip-types scripts/check-image-upload.mjs",
-    "test:workspace-sources": "node --experimental-strip-types scripts/check-workspace-sources.mjs"
+    "test:workspace-sources": "node --experimental-strip-types scripts/check-workspace-sources.mjs",
+    "test:room-population": "node --experimental-strip-types scripts/check-room-population.mjs"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.33.0",

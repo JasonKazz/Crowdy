@@ -9,6 +9,8 @@ import { validatePlan } from "@/lib/plan-validation";
 import { runBackendSimulation, sameStartingPopulation } from "@/lib/backend-simulation";
 import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
 import FloorPlanView from "./floor-plan";
+import RoomPopulationPanel from "./room-population-panel";
+import {adaptPopulationPreview, placementKey, startingPopulation, type PopulationPreview} from "@/lib/room-population";
 import Icon, { type IconName } from "./icon";
 import ScaleCalibrator, {type PendingCalibration} from "./scale-calibrator";
 import GeometryPanel from "./geometry-panel";
@@ -79,10 +81,14 @@ export default function Workspace({
   const [history, setHistory] = useState<FloorPlan[]>([]);
   const [result, setResult] = useState<SimulationResult | null>(null);
   const preview = useMemo(
-    () => plan.native ? null : runSimulation(plan, scenario),
+    () => plan.native || scenario.distribution === "rooms" ? null : runSimulation(plan, scenario),
     [plan, scenario],
   );
   const [baseline, setBaseline] = useState<SimulationResult | null>(null);
+  const [populationPreview, setPopulationPreview] = useState<PopulationPreview | null>(null);
+  const [placementStatus, setPlacementStatus] = useState({key:"",loading:false,error:""});
+  const populationKey = useMemo(()=>placementKey(plan,scenario,baseline),[plan,scenario,baseline]);
+  const currentPopulation = populationPreview?.key === populationKey ? populationPreview : null;
   const [runCount, setRunCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState(false);
@@ -190,6 +196,30 @@ export default function Workspace({
     },
     [],
   );
+
+  useEffect(() => {
+    if (mode !== "layout" || (!plan.native && scenario.distribution !== "rooms")) return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setPlacementStatus({key:populationKey,loading:true,error:""});
+      try {
+        const response = await fetch("/api/populations", {method:"POST",headers:{"Content-Type":"application/json"},
+          signal:controller.signal, body:JSON.stringify({plan,scenario:{...scenario,blocked_exit_ids:scenario.blockedExitIds ?? []},
+            ...(baseline ? {starting_population:startingPopulation(baseline)} : {})})});
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Could not place people in this layout.");
+        const next = adaptPopulationPreview(payload,plan,populationKey);
+        if (next.people.length !== scenario.occupancy) throw new Error("The placement service returned a different crowd size.");
+        if (controller.signal.aborted) return;
+        setPopulationPreview(next);
+        setPlacementStatus({key:populationKey,loading:false,error:""});
+      } catch (cause) {
+        if (controller.signal.aborted) return;
+        setPlacementStatus({key:populationKey,loading:false,error:cause instanceof Error ? cause.message : "Placement failed."});
+      }
+    }, 350);
+    return () => {clearTimeout(timer);controller.abort();};
+  }, [plan, scenario, baseline, populationKey, mode]);
 
   function saveCopy() {
     if (!ownerId) return;
@@ -379,7 +409,7 @@ export default function Workspace({
   }
   function acceptImport(data: {plan: unknown;warnings?:string[]}) {
     const next=validatePlan(data.plan);
-    editPlan(next);setBaseline(null);setResult(null);setScenario({...scenario,blockedExitIds:[]});setSelectedId(null);setGeometrySelection(null);setGeometryTool("select");
+    editPlan(next);setBaseline(null);setResult(null);setPopulationPreview(null);setScenario({...scenario,blockedExitIds:[],distribution:"rooms",population:{}});setSelectedId(null);setGeometrySelection(null);setGeometryTool("select");
     setMode("layout");setModal(null);setPendingCalibration(null);setCalibratingExisting(false);setError("");setRunError("");
     const calibration=next.native?nativeLayout(next).source_image?.calibration:null;
     setNotice((calibration?.method==="automatic"?`Scale detected from ${calibration.label}. `:
@@ -592,6 +622,7 @@ export default function Workspace({
     referenceOpacity,
     geometrySelection,
     blockedExitIds: scenario.blockedExitIds,
+    placement: mode === "layout" ? currentPopulation : null,
     geometryTool,
     onGeometrySelect:(selection:GeometrySelection)=>{
       setGeometrySelection(selection);
@@ -702,13 +733,14 @@ export default function Workspace({
                 setError("");
               }}
               onUseCrowdEstimate={(occupancy) => {
-                const clearingBaseline = Boolean(baseline && scenario.occupancy !== occupancy);
+                const clearingBaseline = Boolean(baseline && (scenario.occupancy !== occupancy ||
+                  (scenario.distribution === "rooms" && Object.keys(scenario.population?.roomCounts ?? {}).length > 0)));
                 if (clearingBaseline) {
                   setBaseline(null);
                 }
                 if (scenario.occupancy !== occupancy) setMode("layout");
                 setPlaying(false);
-                setScenario((current) => ({ ...current, occupancy }));
+                setScenario((current) => ({ ...current, occupancy, population:{...current.population,roomCounts:{}} }));
                 setNotice(`Venue crowd estimate applied: ${occupancy} people.${clearingBaseline ? " Baseline cleared because the starting crowd changed." : ""}`);
               }}
             >
@@ -872,7 +904,7 @@ export default function Workspace({
                   <input
                     aria-label="Number of people"
                     type="number"
-                    min="10"
+                    min="1"
                     max="200"
                     value={scenario.occupancy}
                     onChange={(e) => {
@@ -881,7 +913,7 @@ export default function Workspace({
                         setScenario({
                           ...scenario,
                           occupancy: Math.max(
-                            10,
+                            1,
                             Math.min(200, Math.round(value)),
                           ),
                         });
@@ -894,12 +926,12 @@ export default function Workspace({
                 id="occupancy"
                 className="range-input"
                 type="range"
-                min="10"
+                min="1"
                 max="200"
                 value={scenario.occupancy}
                 style={
                   {
-                    "--range-progress": `${((scenario.occupancy - 10) / 190) * 100}%`,
+                    "--range-progress": `${((scenario.occupancy - 1) / 199) * 100}%`,
                   } as React.CSSProperties
                 }
                 onChange={(e) =>
@@ -910,7 +942,7 @@ export default function Workspace({
                 }
               />
               <div className="range-labels">
-                <span>10 people</span>
+                <span>1 person</span>
                 <span>200 people</span>
               </div>
               <label className="field-label" htmlFor="population-seed">Placement seed</label>
@@ -929,11 +961,16 @@ export default function Workspace({
                     })
                   }
                 >
+                  <option value="rooms">Rooms &amp; activity · automatic</option>
                   <option value="uniform">Across the floor plan</option>
                   <option value="workstations">Around workstations</option>
                 </select>
                 <Icon name="chevron" size={13} />
               </div>
+              {scenario.distribution === "rooms" && <RoomPopulationPanel plan={plan} scenario={scenario}
+                preview={currentPopulation ?? populationPreview} loading={placementStatus.key !== populationKey || placementStatus.loading}
+                error={placementStatus.key === populationKey ? placementStatus.error : ""}
+                onChange={next=>{setScenario(next);setMode("layout");setPlaying(false);}} />}
               <label className="field-label" htmlFor="body-width">Body width (cm)</label>
               <input id="body-width" type="number" min="40" max="70" step="1" value={Math.round((scenario.bodyWidth ?? .46)*100)}
                 onChange={event => {const width=Number(event.target.value);if(Number.isInteger(width)&&width>=40&&width<=70)
@@ -981,6 +1018,8 @@ export default function Workspace({
                 : "Everyone responds immediately and uses their base walking speed. This is not a globally optimal evacuation."}</p>
               <p className="field-note">Behavioral assumptions are illustrative. The seed repeats the same individual differences.</p>
             </fieldset>
+            {scenario.distribution !== "rooms" && placementStatus.key === populationKey && placementStatus.error &&
+              <p className="room-placement-error" role="alert">{placementStatus.error}</p>}
             <fieldset disabled={busy} className="exit-availability">
               <legend>Blocked exits</legend>
               <p className="helper">Unavailable for the entire run. Blocking every exit is allowed. Doorway geometry stays unchanged.</p>
@@ -1059,7 +1098,7 @@ export default function Workspace({
                 {busy
                   ? "Computing crowd movement"
                   : mode === "layout"
-                    ? plan.native ? "Editing imported geometry · run to place people" : "Editing layout · placement preview"
+                    ? plan.native || scenario.distribution === "rooms" ? "Editing layout · live placement preview" : "Editing layout · placement preview"
                     : playing
                       ? "Playing simulation"
                       : "Simulation paused"}
@@ -1214,16 +1253,16 @@ export default function Workspace({
               <div className="playback-title">
                 <Icon name="clock" size={15} />
                 <strong>
-                  {mode === "layout" ? "Simulation playback" : "Playback"}
+                  {mode === "layout" ? "Starting placement" : "Playback"}
                 </strong>
                 <span>
-                  {result
+                  {mode === "layout" ? currentPopulation ? `${currentPopulation.people.length} people placed${result ? " · Play shows the recorded run" : ""}` : "Run a scenario to inspect movement" : result
                     ? `${evacuated} / ${result.scenario.occupancy} exited${mode !== "layout" && responding ? ` · ${responding} responding` : ""}`
                     : "Run a scenario to inspect movement"}
                 </span>
               </div>
               <span className="playback-time mono">
-                {time.toFixed(1)} <span>/ {duration.toFixed(1)} s</span>
+                {(mode === "layout" ? 0 : time).toFixed(1)} <span>/ {duration.toFixed(1)} s</span>
               </span>
             </div>
             <div className="playback-bottom">
@@ -1232,7 +1271,7 @@ export default function Workspace({
                 aria-label={playing ? "Pause simulation" : "Play simulation"}
                 disabled={!result || busy || duration <= 0}
                 onClick={() => {
-                  if (time >= duration) setTime(0);
+                  if (mode === "layout" || time >= duration) setTime(0);
                   setMode(mode === "layout" ? "simulation" : mode);
                   setPlaying(!playing);
                 }}
@@ -1257,7 +1296,7 @@ export default function Workspace({
                 max={Math.max(0.1, duration)}
                 step="0.1"
                 disabled={!result || duration <= 0}
-                value={time}
+                value={mode === "layout" ? 0 : time}
                 onChange={(e) => {
                   setTime(Number(e.target.value));
                   setPlaying(false);

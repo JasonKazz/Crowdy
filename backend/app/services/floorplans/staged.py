@@ -18,6 +18,7 @@ from pydantic import Field
 from shapely.geometry import LineString, Point, Polygon, box
 
 from app.schemas.scenario import InputModel
+from app.schemas.rooms import BuildingType, RoomClassification
 from app.schemas.extraction import (DrawingPoint, DrawingRegion, DrawingWall, DrawingDoor,
     ScaleReference, ScaleObject, ExtractedDrawing)
 from app.services.floorplans.providers import ProviderError, extract_structured
@@ -43,6 +44,8 @@ class Window(InputModel):
 
 class Structure(InputModel):
     name: str
+    building_type: BuildingType = "auto"
+    room_classifications: list[RoomClassification] = Field(default_factory=list, max_length=100)
     floor_outline: list[DrawingPoint] = Field(min_length=3, max_length=300)
     rooms: list[DrawingRegion] = Field(max_length=100)
     walls: list[DrawingWall] = Field(max_length=200)
@@ -129,6 +132,14 @@ Do not omit all walls just because the overall drawing is complex. Identify larg
 Place boundary vertices ON the actual exterior wall, including vestibules and doorway thresholds.
 The boundary must pass through each exterior exit opening; do not cut across an entrance recess.
 Dense banquet-table layouts need dense_furniture=true even if the colored chairs dominate.
+Return EVERY visible enclosed room and clearly bounded/labeled activity zone, including
+small meeting rooms, lunch spaces and corridors. Preserve readable labels; do not let room
+polygons overlap or cross physical partitions. Inspect each room for its visible interior
+door opening and retain the parent wall and jambs. Warn about unclear/missing openings;
+never invent doors to make rooms reachable. Set building_type from visible evidence or auto.
+Return room_classifications as room_type:room_id strings referencing existing rooms.
+Types: office, classroom, meeting, cafeteria, kitchen, lounge, corridor, lobby, auditorium,
+bedroom, restroom, storage, unknown. Use unknown when room use is ambiguous.
 """
 DETAILS = """STAGE: high-resolution local detail. This image is an overlapping crop of a larger plan.
 Extract ALL visible substantial furniture footprints, including EVERY table in repeated banquet
@@ -301,6 +312,8 @@ def merge(structure, details, references, size):
     if not box(0, 0, *size).buffer(.5).covers(floor):
         raise ProviderError("The structure pass placed the building outside the image.")
     data = {key: structure[key] for key in ("name", "floor_outline", "rooms", "walls", "doors", "exits")}
+    data["building_type"] = structure.get("building_type", "auto")
+    data["room_classifications"] = structure.get("room_classifications", [])
     data.update(furniture=[], scale_references=references, scale_objects=[], warnings=[])
     # Namespace IDs; every detail door retains its actual parent through wall deduplication.
     batches = [("overview", structure, None)] + [(d.get("_stage", f"tile_{i}"), d, core) for i, (d, core) in enumerate(details)]

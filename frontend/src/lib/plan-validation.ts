@@ -1,4 +1,5 @@
 import type { FloorPlan } from "./simulation";
+import {validPlanRooms} from "./room-population.ts";
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -39,6 +40,7 @@ export function validatePlan(value: unknown): FloorPlan {
       "Choose a Crowdy JSON floor plan. Download the sample to see the format.",
     );
   const plan = value as FloorPlan;
+  if (!validPlanRooms(plan.rooms)) throw new Error("Room outlines need unique IDs, valid types and polygons inside the canvas.");
   const finite = (...numbers: number[]) => numbers.every(Number.isFinite);
   if (typeof plan.id !== "string" || !plan.id.trim() || plan.id.length > 80)
     throw new Error("The floor plan needs an ID between 1 and 80 characters.");

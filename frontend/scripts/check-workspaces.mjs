@@ -312,3 +312,14 @@ assert.equal(getWorkspace(ownerB,largeVenue.id).plan.area,40000,
 console.log(
   "Workspace checks passed: account isolation, sample protection, cloned inputs, update ordering, corruption preservation, storage failures, change notifications, and native draft persistence.",
 );
+
+const roomPlan={...plan,rooms:[{id:"office",label:"Office",room_type:"office",polygon:[{x:80,y:90},{x:820,y:90},{x:820,y:510},{x:80,y:510}]}]};
+const roomScenario={...DEFAULT_SCENARIO,distribution:"rooms",population:{buildingType:"office",activity:"lunch",roomCounts:{office:12},roomTypes:{office:"meeting"}}};
+const roomRecord=createWorkspace(ownerA,{name:"Room settings",plan:roomPlan,scenario:roomScenario});
+assert.deepEqual(getWorkspace(ownerA,roomRecord.id).scenario.population,roomScenario.population);
+assert.deepEqual(getWorkspace(ownerA,roomRecord.id).plan.rooms,roomPlan.rooms);
+roomScenario.population.roomCounts.office=99;
+roomPlan.rooms[0].label="Changed outside storage";
+assert.equal(getWorkspace(ownerA,roomRecord.id).scenario.population.roomCounts.office,12);
+assert.equal(getWorkspace(ownerA,roomRecord.id).plan.rooms[0].label,"Office");
+console.log("Room labels, room types, activity and fixed room counts persist without sharing mutable inputs.");

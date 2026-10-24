@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from app.schemas.extraction import ExtractionInfo, SourceImage
+from app.schemas.rooms import BuildingType, RoomType
 
 from app.schemas.scenario import (
     AgentDefaults, ExitBoundary, InputModel, Occupant, Point, Population, Region,
@@ -92,6 +93,8 @@ class Layout(InputModel):
     exit_boundaries: list[ExitBoundary] = Field(default_factory=list)
     rooms: list[Region] = Field(default_factory=list)
     room_labels: dict[str, str] = Field(default_factory=dict)
+    room_types: dict[str, RoomType] = Field(default_factory=dict)
+    building_type: BuildingType = "auto"
     source_image: SourceImage | None = None
     extraction: ExtractionInfo | None = None
     occupants: list[Occupant] = Field(default_factory=list)

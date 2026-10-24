@@ -154,6 +154,44 @@ def remove_redundant_boundary_vertices(points):
     return boundary
 
 
+def refine_jamb_roundoff(walls, doors, tolerance, notes):
+    """Narrow an opening by at most two source pixels at an adjacent wall face.
+
+    Solid geometry is never removed. Interior, large and furniture obstructions
+    remain validation errors; this only handles small roundoff at jamb endpoints.
+    """
+    from app.services.floorplans.layout import wall_polygon
+    from app.schemas.layout import Wall
+    wall_models = {item['id']: Wall.model_validate(item) for item in walls}
+    for door in doors:
+        parent = wall_models[door['wall_id']]
+        length = math.dist(parent.start, parent.end)
+        direction = [(parent.end[i] - parent.start[i]) / length for i in range(2)]
+        lower, upper = door['offset'] - door['width']/2, door['offset'] + door['width']/2
+        opening = Polygon(wall_polygon(parent, lower, upper))
+        start, end = lower, upper
+        limit = min(tolerance, door['width'] * .05)
+        for wall in wall_models.values():
+            if wall.id == parent.id:
+                continue
+            hit = opening.intersection(Polygon(wall_polygon(wall, 0, math.dist(wall.start, wall.end))))
+            if hit.area < 1e-10:
+                continue
+            spans = [sum((point[i] - parent.start[i]) * direction[i] for i in range(2))
+                     for part in ([hit] if hit.geom_type == 'Polygon' else getattr(hit, 'geoms', []))
+                     if part.geom_type == 'Polygon' for point in part.exterior.coords]
+            if not spans:
+                continue
+            a, b = min(spans), max(spans)
+            if a <= lower + 1e-8 and 0 < b - lower <= limit + 1e-8:
+                start = max(start, b + 1e-9)
+            elif b >= upper - 1e-8 and 0 < upper - a <= limit + 1e-8:
+                end = min(end, a - 1e-9)
+        if (start > lower or end < upper) and end-start > .46 and upper-lower-(end-start) <= 2*limit+1e-8:
+            door['offset'], door['width'] = (start+end)/2, end-start
+            notes.append(f"Narrowed door '{door['id']}' at an adjacent wall face to correct at most two source pixels of jamb roundoff; no wall removed. Review over the source image.")
+
+
 def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: str,
                       info: ExtractionInfo, people_count: int, allow_review=False) -> Layout:
     info = info.model_copy(deep=True)
@@ -216,6 +254,7 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
                    for point in (start, end)]
         doors.append({"id": door.id, "wall_id": door.wall_id,
                       "offset": sum(offsets) / 2, "width": abs(offsets[1] - offsets[0])})
+    refine_jamb_roundoff(walls, doors, 2 * source.meters_per_pixel, info.warnings)
     furniture = [region(item) for item in drawing.furniture]
     # Adjacent counters can enclose sink/appliance cavities. Merge only such
     # closed furniture clusters and fill their inaccessible interiors. Open U
@@ -256,6 +295,10 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
             info.warnings.append(f"Merged duplicate exterior opening observation '{item.id}'.")
             continue
         exits.append(opening)
+    from app.services.population.rooms import infer_room_type, infer_building_type
+    classifications = {item.room_id: item.room_type for item in drawing.room_classifications}
+    room_types = {room.id: classifications.get(room.id, infer_room_type(room.label)) for room in drawing.rooms}
+    building_type = drawing.building_type if drawing.building_type != "auto" else infer_building_type(room_types.values(), drawing.name)
     return Layout(
         name=drawing.name or "Extracted floor plan", source_image=source, extraction=info,
         walkable_areas=floors,
@@ -263,6 +306,7 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
         exits=exits,
         rooms=[region(item) for item in drawing.rooms],
         room_labels={item.id: item.label for item in drawing.rooms},
+        room_types=room_types, building_type=building_type,
         population=Population(count=people_count, spawn_area_ids=["floor"]),
         agent_defaults=AgentDefaults(radius=0.23, desired_speed=1.2),
         settings=SimulationSettings(dt=0.01, sample_interval=0.1, max_time=120),

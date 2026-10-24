@@ -101,14 +101,22 @@ def native_to_editor(data, strict=True):
         image = {"id": source.id, **top_left,
                  "width": source.width_px * source.meters_per_pixel * transform["pixels_per_metre"],
                  "height": source.height_px * source.meters_per_pixel * transform["pixels_per_metre"]}
+    from app.services.population.rooms import native_room_zones, pieces, zone_polygons
+    room_zones, room_warnings = native_room_zones(layout)
+    room_views = [{"id": room.id, "label": room.label[:80], "room_type": room.room_type,
+                   "source": room.source, "area": room.shape.area,
+                   "polygon": pixels(list(max(pieces(room.shape), key=lambda p: p.area).exterior.coords)[:-1]),
+                   "rings": zone_polygons(room.shape, lambda p: pixel_point(p, transform))}
+                  for room in room_zones if not room.shape.is_empty]
     return {"id": "layout-" + hashlib.sha256(layout.name.encode()).hexdigest()[:16],
             "name": layout.name[:80], "width": 900, "height": 600,
             "area": unary_union([Polygon(r.polygon) for r in layout.walkable_areas]).area,
-            "items": items, "walls": [], "exits": exits,
+            "items": items, "walls": [], "exits": exits, "rooms": room_views,
             "native": {"layout": layout.model_dump(mode="json"), "transform": transform,
                        "floors": [pixels(r.polygon) for r in layout.walkable_areas],
                        "walls": [pixels(r.polygon) for r in obstacles if r.id not in furniture_ids],
-                       "exit_zones": zones, "issues": issues, "image": image}}
+                       "exit_zones": zones, "issues": issues, "image": image,
+                       "room_warnings": room_warnings}}
 
 
 def editor_native_layout(plan):

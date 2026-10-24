@@ -6,6 +6,7 @@ import type {
   SimulationResult,
 } from "./simulation";
 
+import {startingPopulation} from "./room-population.ts";
 const PIXELS_PER_METRE = 32;
 const CANVAS_HEIGHT = 600;
 const TIME_TOLERANCE = 1e-7;
@@ -399,8 +400,7 @@ export async function runBackendSimulation(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ plan, scenario: {...scenario, blocked_exit_ids: scenario.blockedExitIds ?? []},
-        ...(baseline ? {starting_population: {occupants: baseline.startingOccupants, radius: baseline.agentRadius,
-          mobility: baseline.scenario.mobility, distribution: baseline.scenario.distribution, seed: baseline.scenario.seed ?? 42}} : {}) }),
+        ...(baseline ? {starting_population: startingPopulation(baseline)} : {}) }),
       signal,
       cache: "no-store",
     });
