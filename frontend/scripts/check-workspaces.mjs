@@ -264,6 +264,30 @@ assert.equal(restored.scenario.seed,7);
 assert.equal(restored.plan.native.layout.name,"Source geometry");
 assert.equal(restored.plan.items[0].polygon[0].x,0,"Saving must preserve and clone furniture polygons");
 
+const draftPlan = structuredClone(restored.plan);
+draftPlan.exits = [];
+draftPlan.native.layout.exits = [];
+const savedDraft = updateWorkspace(ownerB, calibrated.id, {
+  plan: draftPlan,
+  scenario: restored.scenario,
+});
+assert.equal(getWorkspace(ownerB, calibrated.id).plan.exits.length, 0,
+  "A native draft must remain saved while its exterior exits are being edited");
+const draftCopy = createWorkspace(ownerB, {
+  name: "Draft copy",
+  plan: savedDraft.plan,
+  scenario: savedDraft.scenario,
+});
+assert.deepEqual(getWorkspace(ownerB, draftCopy.id).plan, savedDraft.plan,
+  "Copying an unfinished native layout must preserve its geometry");
+for (const id of [plan.id, SAMPLE_WORKSPACE_ID]) {
+  assert.throws(() => createWorkspace(ownerB, {
+    name: "Invalid pixel plan",
+    plan: {...plan, id, exits: []},
+    scenario: DEFAULT_SCENARIO,
+  }), /geometry/, "Pixel plans still require an exit before saving");
+}
+
 console.log(
-  "Workspace checks passed: account isolation, sample protection, cloned inputs, update ordering, corruption preservation, storage failures, and change notifications.",
+  "Workspace checks passed: account isolation, sample protection, cloned inputs, update ordering, corruption preservation, storage failures, change notifications, and native draft persistence.",
 );

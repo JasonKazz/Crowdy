@@ -29,4 +29,21 @@ assert.equal(JSON.stringify(plan),before,"Editing must not mutate prior history 
 assert.deepEqual(wallShape({id:"w",start:[0,0],end:[2,0],thickness:.2}),[[0,.1],[2,.1],[2,-.1],[0,-.1]]);
 const draft=structuredClone(layout);draft.exits=[];
 assert.equal(validatePlan(withNativeLayout(plan,draft)).exits.length,0,"A draft without an exit must remain editable");
-console.log("Native editor checks passed: transforms, wall/attached-door movement, door gaps, endpoint edits, exit attachment, draft editing, and immutable history.");
+const invalidDoor=structuredClone(layout);invalidDoor.doors[0].offset=100;
+assert.equal(validatePlan(withNativeLayout(plan,invalidDoor)).native.layout.doors[0].offset,100,
+  "A geometrically invalid door position must remain editable before the backend check");
+for (const malformed of [
+  {},
+  {...layout,walls:undefined},
+  {...layout,walls:[null]},
+  {...layout,walls:[{...layout.walls[0],start:null}]},
+  {...layout,doors:[null]},
+  {...layout,exits:[null]},
+  {...layout,walkable_areas:[{...layout.walkable_areas[0],polygon:[null]}]},
+  {...layout,agent_defaults:null},
+]) {
+  const invalid=structuredClone(plan);invalid.native.layout=malformed;
+  assert.throws(()=>validatePlan(invalid),/missing its geometry or scale/,
+    "Malformed canonical geometry must be rejected before the editor renders");
+}
+console.log("Native editor checks passed: transforms, wall/attached-door movement, door gaps, endpoint edits, exit attachment, editable drafts, malformed import recovery, and immutable history.");

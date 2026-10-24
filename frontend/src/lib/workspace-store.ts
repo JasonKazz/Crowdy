@@ -133,7 +133,7 @@ function validPlan(value: unknown): value is FloorPlan {
     !Array.isArray(value.walls) ||
     value.walls.length > 100 ||
     !Array.isArray(value.exits) ||
-    !value.exits.length ||
+    (!value.native && !value.exits.length) ||
     value.exits.length > 12
   )
     return false;
