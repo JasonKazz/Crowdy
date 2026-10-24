@@ -16,6 +16,12 @@ python -m uvicorn app.api:app --host 127.0.0.1 --port 8000
 
 Reuse an existing working virtual environment instead of recreating it. The API loads provider keys from the repository root `.env`, with process environment values taking precedence. Do not put real values in `.env.example`.
 
+Set backend `AI_GATEWAY_API_KEY` to enable both Gemini and Claude through Vercel
+AI Gateway. It takes precedence over native `GEMINI_API_KEY` / `ANTHROPIC_API_KEY`.
+Gateway model overrides use `AI_GATEWAY_GEMINI_MODEL` /
+`AI_GATEWAY_ANTHROPIC_MODEL`; native model settings retain their existing names.
+See [image provider setup](image-extraction.md) and the placeholder `.env.example`.
+
 In the second terminal, from the repository root:
 
 ```sh

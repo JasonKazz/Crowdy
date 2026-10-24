@@ -78,7 +78,7 @@ The API and local editor load backend settings from the repository root `.env`, 
 
 ## Deployment
 
-The frontend is `crowdy-calhacks13` in the `808-atoms` Vercel scope. Terraform in `infra/` provisions the Python backend on Azure Container Apps and private Blob Storage in the Azure for Students subscription. The frontend calls the backend using server-only `CROWDY_BACKEND_URL` and a matching `CROWDY_BACKEND_TOKEN`. Workspace records and uploaded sources survive browser changes and backend restarts. Provider credentials are not configured in the initial Azure deployment; add the desired provider key before image extraction. Sample and JSON simulations do not require provider credentials.
+The frontend is `crowdy-calhacks13` in the `808-atoms` Vercel scope. Terraform in `infra/` provisions the Python backend on Azure Container Apps and private Blob Storage in the Azure for Students subscription. The frontend calls the backend using server-only `CROWDY_BACKEND_URL` and a matching `CROWDY_BACKEND_TOKEN`. Workspace records and uploaded sources survive browser changes and backend restarts. Configure backend `AI_GATEWAY_API_KEY` through Terraform's sensitive `ai_gateway_api_key` variable for Gemini and Claude extraction, or use native provider credentials. Sample and JSON simulations do not require provider credentials.
 
 See [the deployment guide](docs/deployment.md) for environment variables, backend-first deployment commands, and production checks.
 
@@ -145,7 +145,7 @@ Run the Python checks with `python -m unittest discover -s tests -v`. Node check
 
 ## Start from an image
 
-Install the updated requirements with `python -m pip install -r requirements.txt` from `backend/`. Put real `GEMINI_API_KEY` and `ANTHROPIC_API_KEY` values in the root `.env` and restart the editor. `.env.example` contains placeholders and configurable `GEMINI_MODEL`/`ANTHROPIC_MODEL` defaults. The page shows configured/missing status, never key values.
+Install the updated requirements with `python -m pip install -r requirements.txt` from `backend/`. Put a Vercel `AI_GATEWAY_API_KEY` in the root `.env` to enable both providers, or set native `GEMINI_API_KEY` and `ANTHROPIC_API_KEY` values when no Gateway key is configured, then restart the editor. `.env.example` documents separate Gateway and native model settings. The page shows configured/missing status, never key values. See [provider setup](docs/image-extraction.md).
 
 Choose **Upload floor plan image** (PNG, JPEG, or WebP, up to 10 MiB), enter a known distance in meters, and choose **Mark two points to set scale**. Click the two ends of that distance on the image. Choose a provider and **Extract layout**, or **Compare both models** to make one request to each provider. Inspect the candidates, choose a layout, and adjust its walls, doors, furniture, floor corners, and exits over the image before checking and simulating it. Room labels are observations; population placement remains uniform.
 

@@ -9,13 +9,31 @@ From `backend/`, activate `.venv` and install `requirements.txt`. Pillow decodes
 Keep real credentials in the repository root `.env`, which Git ignores:
 
 ```dotenv
-GEMINI_API_KEY=replace_locally
-ANTHROPIC_API_KEY=replace_locally
-GEMINI_MODEL=your-available-gemini-model
-ANTHROPIC_MODEL=your-available-claude-model
+AI_GATEWAY_API_KEY=replace_locally
+# Optional Gateway model overrides; these are the service defaults.
+AI_GATEWAY_GEMINI_MODEL=google/gemini-3.8-flash
+AI_GATEWAY_ANTHROPIC_MODEL=anthropic/claude-sonnet-5.5
 ```
 
-Choose model IDs with image and structured-output support available to your account. `CLAUDE_API_KEY` is accepted as an alias when `ANTHROPIC_API_KEY` is absent. One provider key is enough for its individual extraction button; comparison requires both. `.env.example` must contain placeholders only. Existing environment variables take precedence. Restart locally after changing keys or model names; Vercel environment changes require a new backend deployment. Keys stay in request headers on the server and are not sent to the browser, saved in artifacts, or included in upstream error messages. Production provider credentials are not configured yet.
+One Vercel AI Gateway key enables both extraction buttons and comparison. When
+`AI_GATEWAY_API_KEY` is configured, it takes precedence over native provider keys
+and uses the fixed OpenAI-compatible
+`https://ai-gateway.vercel.sh/v1/chat/completions` endpoint. No endpoint override is
+supported. Choose models with image and structured-output support available to
+your Gateway account.
+
+For direct access instead, omit the Gateway key and set `GEMINI_API_KEY` and/or
+`ANTHROPIC_API_KEY`. `CLAUDE_API_KEY` remains an alias when `ANTHROPIC_API_KEY` is
+absent. One native key enables its extraction button; direct comparison requires
+both native keys. Native `GEMINI_MODEL` / `ANTHROPIC_MODEL` settings are independent
+of the Gateway model overrides above.
+
+`.env.example` must contain placeholders only. Existing environment variables
+take precedence. Restart locally after changing keys or model names. In Azure,
+pass the Gateway key through Terraform's sensitive `ai_gateway_api_key` variable
+and redeploy the backend. Keys stay in server request headers and are not sent to
+the browser, saved in artifacts, or included in upstream error messages. The
+frontend never needs a provider key.
 
 Run `python -m app.simulation.editor` and open its printed `http://127.0.0.1:...` address. `--env-file /absolute/path/to/.env` selects another local configuration file. Opening `editor.html` directly cannot use these endpoints.
 

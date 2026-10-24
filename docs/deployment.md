@@ -18,8 +18,20 @@ Terraform supplies these backend settings:
 | `AZURE_CLIENT_ID` | The user-assigned managed identity's client ID. |
 | `GEMINI_API_KEY` | Optional secret; enables Gemini floor-plan extraction. |
 | `ANTHROPIC_API_KEY` | Optional secret; enables Claude floor-plan extraction. |
+| `AI_GATEWAY_API_KEY` | Optional Vercel AI Gateway secret; enables Gemini and Claude and takes precedence over native keys. |
 
-The initial Azure deployment has no image extraction provider keys. Add the desired provider's key through Terraform's sensitive variables before production image extraction. Provider model IDs must be available to that account. Sample and JSON simulations do not need provider credentials. `CLAUDE_API_KEY` remains accepted when `ANTHROPIC_API_KEY` is absent.
+Configure `TF_VAR_ai_gateway_api_key` for both providers through Vercel AI Gateway,
+or `TF_VAR_gemini_api_key` / `TF_VAR_anthropic_api_key` for direct provider access.
+The deploy script privately preserves all three in ignored
+`infra/secrets.auto.tfvars.json`; omitted exports retain saved keys. Gateway
+requests use the fixed `https://ai-gateway.vercel.sh/v1/chat/completions` endpoint.
+Its defaults are `google/gemini-3.8-flash` and `anthropic/claude-sonnet-5.5`, with
+separate backend `AI_GATEWAY_GEMINI_MODEL` / `AI_GATEWAY_ANTHROPIC_MODEL` overrides.
+Native `GEMINI_MODEL` / `ANTHROPIC_MODEL` settings remain independent, and
+`CLAUDE_API_KEY` is accepted when `ANTHROPIC_API_KEY` is absent. Models must be
+available to the credential's account. Sample and JSON simulations need no
+provider credentials. Keep extraction keys only on the Python backend; the
+frontend server still uses its separate backend bearer token.
 
 Azure storage is authoritative when configured. Storage failures are reported instead of falling back to ephemeral files. Local development without Azure settings uses `data/editor/` for artifacts and `data/persistent/` for account workspaces relative to the backend working directory; `CROWDY_STORAGE_DIR` overrides that local root. Legacy `BLOB_READ_WRITE_TOKEN` support remains for older Vercel artifact deployments, but is not the Azure persistence configuration.
 

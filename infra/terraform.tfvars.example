@@ -8,8 +8,9 @@ monthly_budget_usd    = 40
 budget_start_date     = "2026-10-01T00:00:00Z"
 budget_contact_emails = []
 
-# Pass optional LLM keys using TF_VAR_gemini_api_key and
-# TF_VAR_anthropic_api_key in the shell, rather than adding them here.
+# Pass the shared Gateway key using TF_VAR_ai_gateway_api_key, or native keys
+# using TF_VAR_gemini_api_key and TF_VAR_anthropic_api_key in the shell.
+# Do not add credentials here. Omitted exports retain previously saved values.
 # scripts/deploy.sh maintains deployment.auto.tfvars.json with the app image.
 
 # Optional independent YOLO crowd-estimation service. The deployment script
