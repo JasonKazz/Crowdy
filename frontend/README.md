@@ -42,6 +42,8 @@ Identity scopes are limited to `openid profile email`, and the browser access-to
 
 The home page at `/` uses a single workspace grid. Berkeley studio appears in that grid with a **Sample** tag for everyone; signed-in users see their personal workspaces alongside it under **Your workspaces**. Guests can open the sample and sign in to create their own workspaces. Signed-in users can create an empty layout, copy the sample or an existing workspace, and delete personal workspaces with confirmation.
 
+Inside a workspace, the left sidebar has **Sources** and **Editing** tabs. Sources contains the current floor plan, floor-plan import, and venue-image uploads with previews and removal. Venue images currently return a fixed estimate of **80 people**, regardless of their contents or venue size, and apply that occupancy to the scenario. Personal venue images stay with that account and workspace in this browser; sample uploads are temporary. Editing contains the layout tools and scenario settings, and opens automatically when an object is selected on the canvas.
+
 Berkeley studio is the shared sample at `/workspaces/berkeley-studio`, available to everyone. It always starts from the original plan and scenario. Edits in the sample are temporary and never overwrite that shared starting point. Use **Make a copy** while signed in to save a personal version, or export the current layout as JSON.
 
 Personal workspaces open at `/workspaces/:workspaceId`. The server requires sign-in, then the browser loads the record stored for the authenticated Auth0 subject. Another account or device will not find that record. Workspace lists and contents are saved on this device; there is no database or cloud synchronization.
@@ -88,12 +90,15 @@ npm run test:simulation
 npm run test:backend-simulation
 npm run test:backend-api
 npm run test:workspaces
+npm run test:workspace-sources
 npm run test:native-editor
 npm run test:image-upload
 npm run test:auth
 ```
 
 The workspace-store checks use isolated in-memory storage fixtures to verify account isolation, shared-sample protection, saved-data cloning, and recoverable storage failures. The auth checks use local session fixtures and read-only requests against the running app, including public sample access and server authentication for personal workspace routes. They do not create Auth0 users or change tenant configuration.
+
+The source checks cover accepted image formats and sizes, the fixed crowd estimate, account/workspace scoping, transaction completion, and recoverable storage failures.
 
 The backend adapter checks include recorded native completed and timed-out runs. HTTP checks exercise the full Next.js-to-Python connection, actual two-exit results, request limits, and invalid-layout recovery. Image-upload checks cover dimensions, the complete base64 request budget, PNG/JPEG fallback, and oversized/non-JSON error handling. Run `.venv/bin/python -m unittest discover -s tests -v` from `backend/` for the Python engine, API, and artifact-storage tests.
 

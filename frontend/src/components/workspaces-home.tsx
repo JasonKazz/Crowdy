@@ -215,6 +215,18 @@ function updatedLabel(timestamp: number) {
   }).format(timestamp);
 }
 
+function NewWorkspaceCardContent() {
+  return (
+    <>
+      <span className={styles.newCardIcon}>
+        <Icon name="plus" size={23} />
+      </span>
+      <strong>New workspace</strong>
+      <span>Start with an empty layout</span>
+    </>
+  );
+}
+
 export default function WorkspacesHome() {
   const { user, isLoading } = useUser();
   const ownerId = typeof user?.sub === "string" ? user.sub : null;
@@ -401,21 +413,6 @@ export default function WorkspacesHome() {
                 : "Explore the sample, or sign in to create your own."}
           </p>
         </div>
-        {!isLoading &&
-          (ownerId ? (
-            <button
-              className="button primary"
-              onClick={() => openCreate("empty")}
-            >
-              <Icon name="plus" size={16} />
-              Create workspace
-            </button>
-          ) : (
-            <a className="button primary" href="/auth/login?returnTo=/">
-              Sign in to create
-              <Icon name="arrow" size={14} />
-            </a>
-          ))}
       </div>
 
       <section aria-labelledby="workspaces-title">
@@ -441,10 +438,6 @@ export default function WorkspacesHome() {
               </button>
             </div>
           </div>
-        ) : ownerId ? (
-          <p className={styles.libraryNote}>
-            Personal workspaces are saved on this device.
-          </p>
         ) : null}
 
         <div className={styles.workspaceGrid}>
@@ -539,18 +532,19 @@ export default function WorkspacesHome() {
               )}
             </div>
           </article>
-          {!isLoading && ownerId && (
-            <button
-              className={styles.newCard}
-              onClick={() => openCreate("empty")}
-            >
-              <span className={styles.newCardIcon}>
-                <Icon name="plus" size={23} />
-              </span>
-              <strong>New workspace</strong>
-              <span>Start with an empty layout</span>
-            </button>
-          )}
+          {!isLoading &&
+            (ownerId ? (
+              <button
+                className={styles.newCard}
+                onClick={() => openCreate("empty")}
+              >
+                <NewWorkspaceCardContent />
+              </button>
+            ) : (
+              <a className={styles.newCard} href="/auth/login?returnTo=/">
+                <NewWorkspaceCardContent />
+              </a>
+            ))}
         </div>
       </section>
 

@@ -11,6 +11,8 @@ import FloorPlanView from "./floor-plan";
 import Icon, { type IconName } from "./icon";
 import ScaleCalibrator, {type PendingCalibration} from "./scale-calibrator";
 import GeometryPanel from "./geometry-panel";
+import WorkspaceSidebar from "./workspace-sidebar";
+import WorkspaceSources from "./workspace-sources";
 import {nativeLayout, type GeometrySelection, type GeometryTool} from "@/lib/native-editor";
 import { IMAGE_UPLOAD_SIZE_ERROR, prepareImageUpload } from "@/lib/image-upload";
 import {
@@ -71,6 +73,7 @@ export default function Workspace({
     ...initialScenario,
   }));
   const [mode, setMode] = useState<Mode>("layout");
+  const [sidebarTab, setSidebarTab] = useState<"sources" | "editing">("sources");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [history, setHistory] = useState<FloorPlan[]>([]);
   const [result, setResult] = useState<SimulationResult | null>(null);
@@ -528,7 +531,11 @@ export default function Workspace({
   }
   const planProps = {
     selectedId: mode === "layout" ? selectedId : null,
-    onSelect: (id:string|null)=>{setSelectedId(id);setGeometrySelection(null);},
+    onSelect: (id:string|null)=>{
+      setSelectedId(id);
+      setGeometrySelection(null);
+      if (id) setSidebarTab("editing");
+    },
     onMove: moveItem,
     mode,
     time: mode === "layout" ? 0 : time,
@@ -540,7 +547,11 @@ export default function Workspace({
     referenceOpacity,
     geometrySelection,
     geometryTool,
-    onGeometrySelect:(selection:GeometrySelection)=>{setGeometrySelection(selection);setSelectedId(null);},
+    onGeometrySelect:(selection:GeometrySelection)=>{
+      setGeometrySelection(selection);
+      setSelectedId(null);
+      if (selection) setSidebarTab("editing");
+    },
     onGeometryChange:busy?undefined:editPlan,
     onGeometryToolDone:()=>setGeometryTool("select"),
   };
@@ -620,70 +631,74 @@ export default function Workspace({
         </div>
       )}
       <main className="workspace-grid">
-        <aside className="setup-panel" aria-label="Plan and scenario settings">
-          <div className="panel-title">
-            <span>SETUP</span>
-            <span className="small-tag">01—03</span>
-          </div>
-          <section className="setup-section">
-            <div className="section-heading">
-              <span className="step-number">01</span>
-              <h2>Floor plan</h2>
-              <Icon name="check" size={15} />
-            </div>
-            <button
-              className="plan-card"
-              disabled={busy}
-              onClick={() => {
+        <WorkspaceSidebar
+          activeTab={sidebarTab}
+          onTabChange={(tab) => {
+            setSidebarTab(tab);
+            if (tab === "editing") {
+              setMode("layout");
+              setPlaying(false);
+            }
+          }}
+          sources={
+            <WorkspaceSources
+              key={`${ownerId ?? "guest"}:${workspaceId}`}
+              plan={plan}
+              workspaceId={workspaceId}
+              ownerId={ownerId}
+              isSample={isSample}
+              busy={busy}
+              onUploadFloorPlan={() => {
                 setModal("upload");
                 setError("");
               }}
+              onUseCrowdEstimate={(occupancy) => {
+                setScenario((current) => ({ ...current, occupancy }));
+                setNotice(`Venue crowd estimate applied: ${occupancy} people.`);
+              }}
             >
-              <span className="mini-plan">
-                <span />
-                <span />
-                <span />
-                <span />
-              </span>
-              <span className="plan-card-copy">
-                <strong>{plan.name}</strong>
-                <span>
-                  {Number(plan.area.toFixed(1))} m² <b>·</b> {plan.exits.length} exits
+              <div className="scale-row">
+                <span>Plan scale</span>
+                <span className="mono">
+                  {(plan.native?.transform.pixels_per_metre ?? 32).toFixed(1)} px / m <Icon name="check" size={12} />
                 </span>
-              </span>
-              <Icon name="chevron" size={14} />
-            </button>
-            <button
-              className="text-button upload-link"
-              disabled={busy}
-              onClick={() => {
-                setModal("upload");
-                setError("");
-              }}
-            >
-              <Icon name="upload" size={14} />
-              Upload floor plan
-            </button>
-            <div className="scale-row">
-              <span>Plan scale</span>
-              <span className="mono">
-                {(plan.native?.transform.pixels_per_metre ?? 32).toFixed(1)} px / m <Icon name="check" size={12} />
-              </span>
-            </div>
-            {plan.native&&nativeLayout(plan).source_image?.calibration&&<p className="helper scale-evidence">
-              {nativeLayout(plan).source_image!.calibration!.method==="automatic"?"Detected from: ":"Calibrated from: "}
-              {nativeLayout(plan).source_image!.calibration!.label}
-            </p>}
-            {plan.native?.image&&<button className="text-button" disabled={busy} onClick={()=>{
-              const source=nativeLayout(plan).source_image!;
-              setCalibratingExisting(true);setError("");setPendingCalibration({needs_scale:true,
-                extraction_id:"recalibrate",image_id:source.id,width_px:source.width_px,height_px:source.height_px,
-                reason:"Mark a known distance to correct the current scale. Your wall, door, and furniture edits will be preserved."});setModal("upload");
-            }}>Edit scale</button>}
-          </section>
+              </div>
+              {plan.native && nativeLayout(plan).source_image?.calibration && (
+                <p className="helper scale-evidence">
+                  {nativeLayout(plan).source_image!.calibration!.method === "automatic"
+                    ? "Detected from: "
+                    : "Calibrated from: "}
+                  {nativeLayout(plan).source_image!.calibration!.label}
+                </p>
+              )}
+              {plan.native?.image && (
+                <button
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() => {
+                    const source = nativeLayout(plan).source_image!;
+                    setCalibratingExisting(true);
+                    setError("");
+                    setPendingCalibration({
+                      needs_scale: true,
+                      extraction_id: "recalibrate",
+                      image_id: source.id,
+                      width_px: source.width_px,
+                      height_px: source.height_px,
+                      reason: "Mark a known distance to correct the current scale. Your wall, door, and furniture edits will be preserved.",
+                    });
+                    setModal("upload");
+                  }}
+                >
+                  Edit scale
+                </button>
+              )}
+            </WorkspaceSources>
+          }
+        >
           <section className="setup-section layout-section">
             <div className="section-heading">
-              <span className="step-number">02</span>
+              <Icon name="layout" size={17} />
               <h2>Layout</h2>
               <span className="section-count">{plan.items.length} objects</span>
             </div>
@@ -778,7 +793,7 @@ export default function Workspace({
           </section>
           <section className="setup-section scenario-section">
             <div className="section-heading">
-              <span className="step-number">03</span>
+              <Icon name="people" size={17} />
               <h2>Scenario</h2>
             </div>
             <fieldset disabled={busy}>
@@ -889,7 +904,7 @@ export default function Workspace({
               Reset layout
             </button>
           </div>
-        </aside>
+        </WorkspaceSidebar>
         <section
           className="spatial-workspace"
           aria-label="Floor plan workspace"
@@ -998,6 +1013,7 @@ export default function Workspace({
                   className={`icon-button ${mode === "layout" ? "tool-selected" : ""}`}
                   aria-label="Edit layout"
                   onClick={() => {
+                    setSidebarTab("editing");
                     setMode("layout");
                     setPlaying(false);
                   }}
@@ -1173,11 +1189,11 @@ export default function Workspace({
                   : "Not run"}
             </span>
           </div>
-          <p className="results-subtitle">
-            {result
-              ? `${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`
-              : "Your scenario, at a glance."}
-          </p>
+          {result && (
+            <p className="results-subtitle">
+              {`${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`}
+            </p>
+          )}
           {stale && (
             <div className="result-stale">Inputs changed since this run</div>
           )}
@@ -1419,11 +1435,6 @@ export default function Workspace({
             )}
           </div>
           <div className="model-note">
-            <span>JUPEDSIM</span>
-            <p>
-              Collision-free movement with obstacle-aware exit routes.
-              Results are simulated, not a safety assessment.
-            </p>
             <button
               className="text-button muted"
               onClick={() => setModal("help")}
