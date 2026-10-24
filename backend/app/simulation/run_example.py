@@ -1,6 +1,8 @@
+import json
 from pathlib import Path
 
 from app.schemas.scenario import Scenario
+from app.simulation.engine import run_simulation
 
 
 def main():
@@ -10,12 +12,25 @@ def main():
     scenario = Scenario.model_validate_json(
         example_path.read_text(encoding="utf-8")
     )
+    result = run_simulation(scenario)
 
-    print(f"Loaded: {scenario.name}")
-    print(f"Walkable areas: {len(scenario.walkable_areas)}")
-    print(f"Obstacles: {len(scenario.obstacles)}")
-    print(f"Exits: {len(scenario.exits)}")
-    print(f"Occupants: {len(scenario.occupants)}")
+    output_path = repo_root / "backend" / "data" / "simple_room_result.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(result, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
+
+    summary = result["summary"]
+    print(f"Status: {result['status']}")
+    print(f"Evacuated: {summary['evacuated_count']}")
+    print(f"Remaining: {summary['remaining_count']}")
+    print(f"Recorded frames: {len(result['frames'])}")
+    if summary["clearance_time"] is not None:
+        print(f"Clearance time: {summary['clearance_time']:.2f} seconds")
+    else:
+        print("Clearance time: incomplete evacuation")
+    print(f"Saved results: {output_path}")
 
 
 if __name__ == "__main__":
