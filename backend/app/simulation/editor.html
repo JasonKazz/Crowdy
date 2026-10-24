@@ -18,12 +18,32 @@ svg{width:100%;height:560px;display:block;touch-action:none;background:#f8fafc;b
 #status.error{background:#feecec;color:#9f2020}.legend{line-height:1.8;margin-top:10px}
 #downloads{display:flex;gap:14px;flex-wrap:wrap;margin:12px 0}a{color:#335cce}
 #object-list{width:100%}.settings{margin:16px 0}.settings label{display:flex;align-items:center;gap:8px}.settings input{width:85px}
+.image-tools{margin:18px 0}.image-tools h2{font-size:18px;margin:0 0 12px}.image-tools .row{margin:10px 0}
+#provider-status,#image-note{white-space:pre-wrap;line-height:1.6}.candidate{border:1px solid #dbe1ea;border-radius:8px;padding:12px;margin-top:10px}
+#candidates{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.candidate p{white-space:pre-wrap;margin:8px 0}
 @media(max-width:850px){.layout{grid-template-columns:1fr}svg{height:440px}}
 </style>
 </head>
 <body><main>
 <div class="brand">CROWDY</div><h1>Arrange your floor plan</h1>
 <div class="muted">Drag an object to move it. Doors slide along their wall. All distances are in meters.</div>
+<section class="card image-tools">
+  <h2>Start with a floor plan image</h2>
+  <div class="row">
+    <button id="upload-image" class="primary">Upload floor plan image</button>
+    <input id="image-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+    <label>Model <select id="provider"><option value="gemini">Gemini</option><option value="claude">Claude</option></select></label>
+    <button id="extract-image">Extract layout</button><button id="compare-image">Compare both models</button>
+  </div>
+  <div id="provider-status" class="muted">Checking provider configuration…</div>
+  <div class="row">
+    <label>Known distance (m) <input id="known-distance" type="number" min="0.01" step="0.1" value="5" style="width:85px"></label>
+    <button id="calibrate">Mark two points to set scale</button>
+    <label><input id="show-image" type="checkbox"> Compare with original image (fixed reference)</label>
+  </div>
+  <div id="image-note" class="muted">Upload PNG, JPEG, or WebP. Set scale using a distance you know, then extract with either provider or compare both. Extraction sends the image to the selected provider.</div>
+  <div id="candidates"></div>
+</section>
 <div class="toolbar">
   <button id="import">Import JSON</button><input id="file" type="file" accept=".json,application/json" hidden>
   <button id="export">Export editable layout</button><button id="undo">Undo</button><button id="redo">Redo</button>
@@ -38,7 +58,7 @@ svg{width:100%;height:560px;display:block;touch-action:none;background:#f8fafc;b
 </div>
 <div class="layout">
   <section class="card"><svg id="plan" role="img" aria-label="Editable floor plan"></svg>
-    <div class="legend muted">Pale floor · gray furniture · dark walls · blue door openings · green exits · red blocked exits</div>
+    <div class="legend muted">Pale floor · gray furniture · dark walls · blue interior doors · green exterior doors and outside destinations · red blocked exits</div>
     <div id="population-note" class="muted"></div>
   </section>
   <aside class="card inspector">
@@ -46,10 +66,10 @@ svg{width:100%;height:560px;display:block;touch-action:none;background:#f8fafc;b
     <div id="inspector"></div>
     <hr><div class="row"><select id="add-kind" aria-label="New object type">
       <option value="furniture">Furniture</option><option value="walls">Wall</option>
-      <option value="doors">Door opening</option><option value="exits">Exit zone</option>
+      <option value="doors">Door opening</option><option value="exits">Exterior exit door</option>
     </select><button id="add">Add</button></div>
-    <p class="muted">Door openings cut through their parent wall. Exit zones are destinations where people leave the simulation.</p>
-    <p class="muted">The floor outline comes from the imported JSON. Existing scenario doorway and landing polygons remain floor pieces.</p>
+    <p class="muted">Exterior exits open through the floor boundary into a short outside landing. People count as evacuated at its far end.</p>
+    <p class="muted">Interior doors slide along their wall; exterior doors slide along their selected boundary edge. The original image is a fixed reference and hides when you edit.</p>
   </aside>
 </div>
 <div id="status" role="status" aria-live="polite">Loading layout…</div>
@@ -57,17 +77,20 @@ svg{width:100%;height:560px;display:block;touch-action:none;background:#f8fafc;b
 <p class="muted">Check layout previews starting people. Runs save separate input and result snapshots. Export unfinished edits before closing this page.</p>
 </main>
 <script src="/editor-geometry.js"></script>
+<script src="/editor-image-tools.js"></script>
 <script>
 'use strict';
 const G=window.CrowdyGeometry, $=id=>document.getElementById(id), NS='http://www.w3.org/2000/svg';
 const kinds=['furniture','walls','doors','exits','walkable_areas'];
 const labels={furniture:'Furniture',walls:'Wall',doors:'Door',exits:'Exit',walkable_areas:'Floor'};
 let layout=null,selected=null,preview=[],busy=false,drag=null,history=[],future=[],viewBox=null;
+let providers={},calibrating=false,calibrationPoints=[];
 const copy=value=>JSON.parse(JSON.stringify(value));
 function status(message,error=false){$('status').textContent=message;$('status').className=error?'error':'';}
 function invalidate(){preview=[];$('downloads').replaceChildren();status('Edits have not been checked. Check layout or run the simulation.');}
 function checkpoint(){history.push(copy(layout));if(history.length>100)history.shift();future=[];}
-function commit(action){checkpoint();action();invalidate();render();}
+function editingView(){if(layout?.extraction)$('show-image').checked=false;}
+function commit(action){checkpoint();action();editingView();invalidate();render();}
 function item(){return selected?layout[selected.kind].find(x=>x.id===selected.id):null;}
 function option(value,text){const el=document.createElement('option');el.value=value;el.textContent=text;return el;}
 function select(kind,id){selected={kind,id};renderList();renderInspector();draw();}
@@ -83,13 +106,23 @@ function polygon(points,fill,kind,id,stroke='#70829a'){
   const title=svgElement('title',{},el);title.textContent=`${labels[kind]||''} ${id||''}`;
   return el;
 }
-function fit(){const b=G.bounds(layout.walkable_areas.flatMap(r=>r.polygon));
+function fit(){const points=layout.walkable_areas.flatMap(r=>r.polygon),source=layout.source_image;
+  for(const exit of layout.exits)if(exit.floor_id){const geo=G.exitGeometry(exit,layout.walkable_areas);if(geo)points.push(...geo.apron);}
+  if(source)points.push([0,0],[source.width_px*source.meters_per_pixel,source.height_px*source.meters_per_pixel]);
+  const b=G.bounds(points);
   const margin=Math.max(1,(b.maxX-b.minX)*0.08,(b.maxY-b.minY)*0.08);
   viewBox=[b.minX-margin,-b.maxY-margin,b.maxX-b.minX+2*margin,b.maxY-b.minY+2*margin];}
 function draw(){
   if(!layout)return;$('plan').replaceChildren();$('plan').setAttribute('viewBox',viewBox.join(' '));
-  for(const floor of layout.walkable_areas)polygon(floor.polygon,'#e9f0fb',null,floor.id,'#7187a4');
-  for(const f of layout.furniture)polygon(f.polygon,'#b7c2d2','furniture',f.id);
+  const source=layout.source_image,background=source&&$('show-image').checked;
+  if(background){const width=source.width_px*source.meters_per_pixel,height=source.height_px*source.meters_per_pixel;
+    svgElement('image',{href:`/images/${source.id}`,x:0,y:-height,width,height,'pointer-events':'none'});}
+  for(const floor of layout.walkable_areas){const p=polygon(floor.polygon,'#e9f0fb','walkable_areas',floor.id,'#7187a4');
+    if(background)p.setAttribute('fill-opacity','0.15');}
+  for(const room of layout.rooms||[]){const[x,y]=G.center(room.polygon),text=svgElement('text',{
+    x,y:-y,'font-size':Math.max(.15,viewBox[2]*.012),fill:'#1d4ed8','pointer-events':'none'});
+    text.textContent=layout.room_labels?.[room.id]||room.id;}
+  for(const f of layout.furniture){const p=polygon(f.polygon,'#b7c2d2','furniture',f.id);if(background)p.setAttribute('fill-opacity','.5');}
   for(const wall of layout.walls){
     for(const points of G.wallPieces(wall,layout.doors))polygon(points,'#334155','walls',wall.id,'#1e293b');
     // A thin transparent centerline also lets users select very narrow walls.
@@ -100,9 +133,20 @@ function draw(){
   for(const door of layout.doors){const wall=layout.walls.find(w=>w.id===door.wall_id);if(!wall)continue;
     polygon(G.wallPolygon(wall,door.offset-door.width/2,door.offset+door.width/2),'#b9e4ff','doors',door.id,'#2563eb');}
   const blocked=new Set(layout.settings.blocked_exit_ids||[]);
-  for(const exit of layout.exits)polygon(exit.polygon,blocked.has(exit.id)?'#fecaca':'#b4efcf','exits',exit.id);
+  for(const exit of layout.exits){const color=blocked.has(exit.id)?'#fecaca':'#b4efcf';
+    if(!exit.floor_id){polygon(exit.polygon,color,'exits',exit.id);continue;}
+    const geo=G.exitGeometry(exit,layout.walkable_areas);if(!geo)continue;
+    const apron=polygon(geo.apron,'#f0fdf4',null,null,'#86a99a');apron.setAttribute('pointer-events','none');
+    polygon(geo.target,color,'exits',exit.id);
+    polygon(geo.threshold,color,'exits',exit.id,blocked.has(exit.id)?'#dc2626':'#059669');
+  }
   for(const person of preview)svgElement('circle',{cx:person.position[0],cy:-person.position[1],
     r:layout.agent_defaults.radius,fill:'#335cce','pointer-events':'none'});
+  const obj=item();
+  if(obj?.polygon&&!calibrating)for(const [index,[x,y]]of obj.polygon.entries()){
+    const handle=svgElement('circle',{cx:x,cy:-y,r:Math.max(.06,viewBox[2]*.004),fill:'#f59e0b',stroke:'white','stroke-width':.025});
+    handle.style.cursor='crosshair';handle.addEventListener('pointerdown',e=>beginDrag(e,selected.kind,selected.id,index));}
+  for(const[x,y]of calibrationPoints)svgElement('circle',{cx:x,cy:-y,r:Math.max(.07,viewBox[2]*.005),fill:'#dc2626','pointer-events':'none'});
 }
 function renderList(){
   const list=$('object-list');list.replaceChildren(option('','Choose an object'));
@@ -125,8 +169,6 @@ function actionButton(parent,label,action){const b=document.createElement('butto
 function renderInspector(){
   const panel=$('inspector');panel.replaceChildren();const obj=item();if(!obj){panel.textContent='Select an object on the plan or in the list.';return;}
   const title=document.createElement('h2');title.textContent=obj.id;panel.append(title);
-  if(selected.kind==='walkable_areas'){
-    panel.append(document.createTextNode('Floor outlines are read-only in this development editor. Import JSON to change them.'));return;}
   if(selected.kind==='walls'){
     for(const endpoint of ['start','end'])for(const [axis,index]of [['x',0],['y',1]])
       field(panel,`${endpoint} ${axis}`,obj[endpoint][index],value=>obj[endpoint][index]=value);
@@ -138,6 +180,19 @@ function renderInspector(){
     select.addEventListener('change',()=>commit(()=>obj.wall_id=select.value));box.append(select);panel.append(box);
     field(panel,'Center distance from wall start',obj.offset,value=>obj.offset=value);
     field(panel,'Opening width',obj.width,value=>obj.width=value);
+  }else if(selected.kind==='exits'&&obj.floor_id){
+    const box=document.createElement('label');box.append(document.createTextNode('Exterior boundary edge'));
+    const edges=document.createElement('select');
+    for(const floor of layout.walkable_areas)for(const[index,start]of floor.polygon.entries()){
+      const end=floor.polygon[(index+1)%floor.polygon.length];
+      const opt=option(JSON.stringify([floor.id,index]),`${floor.id} edge ${index}: (${start.map(n=>n.toFixed(1))}) → (${end.map(n=>n.toFixed(1))})`);
+      opt.selected=obj.floor_id===floor.id&&obj.edge_index===index;edges.append(opt);}
+    edges.addEventListener('change',()=>commit(()=>{[obj.floor_id,obj.edge_index]=JSON.parse(edges.value);
+      const geo=G.exitGeometry(obj,layout.walkable_areas);if(geo)obj.offset=G.wallLength(geo.wall)/2;fit();}));
+    box.append(edges);panel.append(box);
+    field(panel,'Center distance from edge start',obj.offset,value=>{obj.offset=value;fit();});
+    field(panel,'Opening width',obj.width,value=>{obj.width=value;fit();});
+    field(panel,'Outside landing depth',obj.landing_depth,value=>{obj.landing_depth=value;fit();});
   }else{
     const b=G.bounds(obj.polygon),[cx,cy]=G.center(obj.polygon);
     field(panel,'Center x',cx,value=>obj.polygon=G.translate(obj.polygon,value-cx,0));
@@ -147,14 +202,15 @@ function renderInspector(){
     const row=document.createElement('div');row.className='row';panel.append(row);
     actionButton(row,'Rotate −15°',()=>obj.polygon=G.rotate(obj.polygon,-15));
     actionButton(row,'Rotate +15°',()=>obj.polygon=G.rotate(obj.polygon,15));
+  }
     if(selected.kind==='exits'){
       const label=document.createElement('label'),check=document.createElement('input');check.type='checkbox';
       check.checked=(layout.settings.blocked_exit_ids||[]).includes(obj.id);
       check.addEventListener('change',()=>commit(()=>{const ids=new Set(layout.settings.blocked_exit_ids||[]);
         if(check.checked)ids.add(obj.id);else ids.delete(obj.id);layout.settings.blocked_exit_ids=[...ids];}));
       label.append(check,document.createTextNode(' Block this exit'));panel.append(label);}
-  }
   const remove=document.createElement('button');remove.textContent=selected.kind==='walls'?'Remove wall and its doors':'Remove object';
+  remove.disabled=selected.kind==='walkable_areas'&&layout.walkable_areas.length===1;
   remove.addEventListener('click',()=>commit(()=>{const {kind,id}=selected;layout[kind]=layout[kind].filter(o=>o.id!==id);
     if(kind==='walls')layout.doors=layout.doors.filter(d=>d.wall_id!==id);
     if(kind==='exits')layout.settings.blocked_exit_ids=(layout.settings.blocked_exit_ids||[]).filter(e=>e!==id);selected=null;}));panel.append(remove);
@@ -166,23 +222,27 @@ function render(){
   $('population-note').textContent=layout.population?'Population will be regenerated within the selected spawn areas after edits. A fixed seed repeats placement only for unchanged geometry.':
     'Imported manual people stay at their original positions. Checks reject edits that overlap them.';
   $('undo').disabled=history.length===0;$('redo').disabled=future.length===0;
+  renderImageControls();
 }
 function pointer(event){const p=new DOMPoint(event.clientX,event.clientY).matrixTransform($('plan').getScreenCTM().inverse());return[p.x,-p.y];}
 function snapped(value){return $('snap').checked?Math.round(value*10)/10:value;}
-function beginDrag(event,kind,id){
-  if(busy||event.button!==0)return;event.preventDefault();event.stopPropagation();select(kind,id);
-  checkpoint();drag={kind,id,start:pointer(event),original:copy(item()),pointerId:event.pointerId};
+function beginDrag(event,kind,id,vertexIndex){
+  if(busy||calibrating||event.button!==0)return;event.preventDefault();event.stopPropagation();select(kind,id);
+  checkpoint();editingView();drag={kind,id,vertexIndex,start:pointer(event),original:copy(item()),pointerId:event.pointerId};draw();
   $('plan').setPointerCapture(event.pointerId);
 }
 $('plan').addEventListener('pointermove',event=>{
   if(!drag||event.pointerId!==drag.pointerId)return;const obj=item(),p=pointer(event);
   const dx=snapped(p[0]-drag.start[0]),dy=snapped(p[1]-drag.start[1]);
-  if(drag.kind==='walls'){obj.start=G.translate([drag.original.start],dx,dy)[0];obj.end=G.translate([drag.original.end],dx,dy)[0];}
+  if(drag.vertexIndex!==undefined){obj.polygon=copy(drag.original.polygon);obj.polygon[drag.vertexIndex]=[snapped(p[0]),snapped(p[1])];}
+  else if(drag.kind==='walls'){obj.start=G.translate([drag.original.start],dx,dy)[0];obj.end=G.translate([drag.original.end],dx,dy)[0];}
   else if(drag.kind==='doors'){const wall=layout.walls.find(w=>w.id===obj.wall_id);if(wall)obj.offset=G.doorOffset(wall,obj,[snapped(p[0]),snapped(p[1])]);}
+  else if(drag.kind==='exits'&&obj.floor_id){const geo=G.exitGeometry(obj,layout.walkable_areas);
+    if(geo)obj.offset=G.doorOffset(geo.wall,obj,[snapped(p[0]),snapped(p[1])]);}
   else obj.polygon=G.translate(drag.original.polygon,dx,dy);
   invalidate();draw();
 });
-function finishDrag(){if(!drag)return;drag=null;render();}
+function finishDrag(){if(!drag)return;drag=null;fit();render();}
 $('plan').addEventListener('pointerup',finishDrag);$('plan').addEventListener('pointercancel',finishDrag);
 $('object-list').addEventListener('change',()=>{if(!$('object-list').value){selected=null;render();return;}
   const[kind,id]=JSON.parse($('object-list').value);select(kind,id);});
@@ -205,18 +265,21 @@ $('add').addEventListener('click',()=>{
     if(kind==='walls')obj={id,start:[x,y-1.5],end:[x,y+1.5],thickness:.2};
     else if(kind==='doors'){const wall=(selected?.kind==='walls'?item():null)||layout.walls[0],length=G.wallLength(wall);
       obj={id,wall_id:wall.id,offset:length/2,width:Math.min(1.2,length*.6)};}
+    else if(kind==='exits'){const floor=layout.walkable_areas[0],length=G.wallLength({start:floor.polygon[0],end:floor.polygon[1]});
+      obj={id,floor_id:floor.id,edge_index:0,offset:length/2,width:Math.min(1.2,length*.6),landing_depth:2};}
     else obj={id,polygon:[[x-.5,y-.5],[x+.5,y-.5],[x+.5,y+.5],[x-.5,y+.5]]};
-    layout[kind].push(obj);selected={kind,id};});
+    layout[kind].push(obj);selected={kind,id};fit();});
 });
 function download(name,document){const url=URL.createObjectURL(new Blob([JSON.stringify(document,null,2)],{type:'application/json'}));
   const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 $('export').addEventListener('click',()=>download('crowdy-layout.json',layout));
-function setBusy(value){busy=value;document.querySelectorAll('button,input,select').forEach(el=>el.disabled=value);if(!value)render();}
+function setBusy(value){busy=value;document.querySelectorAll('button,input,select').forEach(el=>el.disabled=value);if(!value&&layout)render();}
 async function post(path,document){const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(document)});
   const result=await response.json();if(!response.ok)throw new Error(result.error||'Request failed');return result;}
 $('import').addEventListener('click',()=>$('file').click());
 $('file').addEventListener('change',async()=>{const file=$('file').files[0];if(!file)return;setBusy(true);
-  try{const next=await post('/api/import',JSON.parse(await file.text()));checkpoint();layout=next;selected=null;viewBox=null;fit();invalidate();}
+  try{const next=await post('/api/import',JSON.parse(await file.text()));checkpoint();layout=next;
+    $('show-image').checked=Boolean(layout.source_image&&!layout.extraction);selected=null;viewBox=null;fit();invalidate();}
   catch(error){status(error.message,true);}finally{$('file').value='';setBusy(false);}});
 $('validate').addEventListener('click',async()=>{setBusy(true);status('Checking geometry and placing people…');
   try{const result=await post('/api/validate',layout);preview=result.occupants;
@@ -230,9 +293,104 @@ $('run').addEventListener('click',async()=>{setBusy(true);status('Running the ba
       ['Scenario JSON',`/runs/${result.run_id}/scenario`],['Result JSON',`/runs/${result.run_id}/result`]]){
       const a=document.createElement('a');a.textContent=name;a.href=path;a.target='_blank';a.rel='noopener';$('downloads').append(a);}}
   catch(error){status(error.message,true);}finally{setBusy(false);}});
-async function init(){try{const response=await fetch('/api/layout');if(!response.ok)throw new Error('Could not load layout');
-  layout=await response.json();fit();render();status('Select and move an object, or check the layout to preview starting people.');}
-  catch(error){status(error.message,true);}}
+function renderImageControls(){
+  const source=layout.source_image;
+  $('extract-image').disabled=busy||!source||!providers[$('provider').value]?.configured;
+  $('compare-image').disabled=busy||!source||!providers.gemini?.configured||!providers.claude?.configured;
+  $('calibrate').disabled=busy||!source;$('calibrate').textContent=calibrating?'Cancel marking':'Mark two points to set scale';
+  $('provider-status').textContent=['gemini','claude'].map(name=>{
+    const info=providers[name];return `${name==='gemini'?'Gemini':'Claude'}: ${info?.configured?'configured':'key missing in root .env'}${info?.model?' · '+info.model:''}`;
+  }).join('    |    ');
+  $('image-note').textContent=source?
+    `${source.width_px} × ${source.height_px} pixels · ${source.scale_confirmed?'Scale set':'Scale unconfirmed — mark a known distance before simulation'}. `+
+    (layout.extraction?`Showing ${layout.extraction.provider} extraction. The original image is a fixed reference; its printed furniture and door swings do not move. Toggle comparison to check alignment.`:
+      'The rectangle is only an image frame. Extract the actual building layout before running.'):
+    'Upload PNG, JPEG, or WebP. Set scale using a distance you know, then extract with either provider or compare both. Extraction sends the image to the selected provider.';
+}
+$('provider').addEventListener('change',renderImageControls);
+$('show-image').addEventListener('change',draw);
+$('upload-image').addEventListener('click',()=>$('image-file').click());
+function readImage(file){return new Promise((resolve,reject)=>{const reader=new FileReader();
+  reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('Could not read this image.'));reader.readAsDataURL(file);});}
+$('image-file').addEventListener('change',async()=>{
+  const file=$('image-file').files[0];if(!file)return;
+  if(file.size>10*1024*1024){status('Choose an image up to 10 MiB.',true);$('image-file').value='';return;}
+  setBusy(true);status('Preparing your floor plan image…');
+  try{const result=await post('/api/images',{filename:file.name,image_base64:await readImage(file)});
+    checkpoint();layout=result.layout;$('show-image').checked=true;selected=null;calibrating=false;calibrationPoints=[];invalidate();fit();
+    $('candidates').replaceChildren();status('Image ready. Mark a known distance, then extract the layout.');
+  }catch(error){status(error.message,true);}finally{$('image-file').value='';setBusy(false);}
+});
+$('calibrate').addEventListener('click',()=>{
+  if(!layout.source_image)return;calibrating=!calibrating;calibrationPoints=[];if(calibrating)$('show-image').checked=true;
+  status(calibrating?'Click the two ends of a known distance on the image. Enter its real length in Known distance (m).':'Scale marking canceled.');
+  renderImageControls();draw();
+});
+$('plan').addEventListener('pointerdown',event=>{
+  if(busy||!calibrating||event.button!==0)return;event.preventDefault();calibrationPoints.push(pointer(event));
+  if(calibrationPoints.length<2){status('Now click the other end of the known distance.');draw();return;}
+  const known=Number($('known-distance').value),distance=Math.hypot(
+    calibrationPoints[1][0]-calibrationPoints[0][0],calibrationPoints[1][1]-calibrationPoints[0][1]);
+  if(!Number.isFinite(known)||known<=0||distance<1e-6){
+    calibrationPoints=[];status('Enter a positive real distance and choose two different points.',true);draw();return;}
+  checkpoint();layout=window.CrowdyImageTools.rescaleLayout(layout,known/distance);
+  calibrating=false;calibrationPoints=[];editingView();invalidate();fit();render();status(`Scale set: the marked distance is ${known} meters.`);
+});
+function useCandidate(candidate){
+  checkpoint();let next=copy(candidate.layout);
+  if(layout.source_image?.id===next.source_image?.id&&layout.source_image.scale_confirmed){
+    next=window.CrowdyImageTools.rescaleLayout(next,layout.source_image.meters_per_pixel/next.source_image.meters_per_pixel);}
+  layout=next;$('show-image').checked=false;selected=null;calibrating=false;calibrationPoints=[];invalidate();fit();render();
+  status(`${candidate.provider} layout loaded. Edit the geometry, or toggle image comparison to check alignment before running.`+
+    (candidate.issues.length?'\nNeeds attention: '+candidate.issues.join('\n'):''));
+}
+function showCandidates(results){
+  $('candidates').replaceChildren();
+  for(const candidate of results){
+    const card=document.createElement('div');card.className='candidate';
+    const title=document.createElement('strong');title.textContent=candidate.provider==='gemini'?'Gemini':'Claude';card.append(title);
+    const text=document.createElement('p');card.append(text);
+    if(candidate.error){text.textContent=candidate.error;$('candidates').append(card);continue;}
+    text.textContent=`${candidate.model} · ${candidate.elapsed_seconds.toFixed(1)} s\n`+
+      Object.entries(candidate.counts).map(([name,count])=>`${count} ${name}`).join(' · ')+
+      (candidate.warnings.length?'\nModel notes: '+candidate.warnings.join('\n'):'')+
+      (candidate.issues.length?'\nGeometry checks: '+candidate.issues.join('\n'):'\nGeometry checks passed; review alignment against the image.');
+    const button=document.createElement('button');button.textContent=`Use ${title.textContent} layout`;
+    button.addEventListener('click',()=>useCandidate(candidate));card.append(button);$('candidates').append(card);
+  }
+}
+async function extract(provider){
+  if(!layout.source_image)return;setBusy(true);
+  status(provider==='both'?'Extracting with Gemini and Claude. Each provider receives the same image; this may take a few minutes.':
+    `Extracting with ${provider}. This may take a few minutes.`);
+  try{const source=layout.source_image,result=await post('/api/extract',{
+      image_id:source.id,provider,meters_per_pixel:source.meters_per_pixel,
+      scale_confirmed:source.scale_confirmed,people_count:layout.population?.count||layout.occupants.length||40});
+    showCandidates(result.results);
+    if(!result.results.some(candidate=>candidate.layout))status('No layout was extracted. See the provider errors below.',true);
+    else if(provider!=='both'&&result.results[0]?.layout)useCandidate(result.results[0]);
+    else status('Extraction finished. Compare the notes and choose a layout to inspect.');
+  }catch(error){status(error.message,true);}finally{setBusy(false);}
+}
+$('extract-image').addEventListener('click',()=>extract($('provider').value));
+$('compare-image').addEventListener('click',()=>extract('both'));
+async function init(){
+  setBusy(true);
+  if(location.protocol==='file:'){
+    status('This editor needs its Python server. Opening editor.html directly cannot load layouts, import JSON, or run simulations.\n\n'+
+      'From your repo’s backend folder, run:\npython -m app.simulation.editor\n\n'+
+      'Then open http://127.0.0.1:8765 in your browser. Keep the terminal running. '+
+      'If you used --port 8766, open http://127.0.0.1:8766 instead.',true);
+    return;
+  }
+  try{
+    if(!G)throw new Error('Could not load the drawing tools.');
+    const [response,configuration]=await Promise.all([fetch('/api/layout'),fetch('/api/providers')]);
+    if(!response.ok||!configuration.ok)throw new Error('Could not load the editor. Restart the Python server after updating.');
+    layout=await response.json();providers=await configuration.json();$('show-image').checked=Boolean(layout.source_image&&!layout.extraction);fit();setBusy(false);
+    status('Select and move an object, or check the layout to preview starting people.');
+  }catch(error){status(`${error.message}\nKeep the Python editor server running and open the http:// address printed in its terminal.`,true);}
+}
 init();
 </script>
 </body></html>

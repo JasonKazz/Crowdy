@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 from app.schemas.layout import Layout
 from app.simulation.editor import EditorHandler, EditorServer, MAX_BODY
+from app.schemas.extraction import ExtractedDrawing
+from test_images import drawing_fixture, gemini_fixture, upload_fixture
 
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
@@ -52,8 +54,10 @@ class EditorAPITests(unittest.TestCase):
         try:
             connection.request(method, path, body=body, headers=headers)
             response = connection.getresponse()
-            content = response.read().decode()
-            value = json.loads(content) if "application/json" in response.getheader("Content-Type", "") else content
+            raw_content = response.read()
+            mime = response.getheader("Content-Type", "")
+            content = raw_content if mime == "image/png" else raw_content.decode()
+            value = json.loads(content) if "application/json" in mime else content
             return response.status, value
         finally:
             connection.close()
@@ -84,7 +88,7 @@ class EditorAPITests(unittest.TestCase):
         status, result = self.request("POST", "/api/validate", document)
         self.assertEqual(status, 200)
         self.assertEqual(len(result["occupants"]), 40)
-        self.assertAlmostEqual(result["area_m2"], 146.24)
+        self.assertAlmostEqual(result["area_m2"], 152.24)
 
     def test_invalid_edits_return_readable_errors_and_save_nothing(self):
         document = self.layout.model_dump(mode="json")
@@ -146,6 +150,43 @@ class EditorAPITests(unittest.TestCase):
     def test_unknown_endpoints_and_runs_return_not_found(self):
         self.assertEqual(self.request("GET", "/runs/missing/layout")[0], 404)
         self.assertEqual(self.request("POST", "/missing", {})[0], 404)
+
+    def test_image_upload_comparison_edit_and_simulation_share_one_backend(self):
+        status, uploaded = self.request("POST", "/api/images", upload_fixture().model_dump())
+        self.assertEqual(status, 200)
+        source = uploaded["layout"]["source_image"]
+        self.assertFalse(source["scale_confirmed"])
+        status, image = self.request("GET", f"/images/{source['id']}")
+        self.assertEqual(status, 200)
+        self.assertTrue(image.startswith(b"\x89PNG"))
+        def fake_provider(provider, *args):
+            drawing = gemini_fixture() if provider == "gemini" else drawing_fixture()
+            return ExtractedDrawing.model_validate(drawing), f"fake-{provider}"
+        with patch("app.services.floorplans.images.extract_drawing", side_effect=fake_provider):
+            status, extracted = self.request("POST", "/api/extract", {
+                "image_id": source["id"], "provider": "both", "meters_per_pixel": .02,
+                "scale_confirmed": True, "people_count": 12,
+            })
+        self.assertEqual(status, 200)
+        self.assertEqual(len(extracted["results"]), 2)
+        layout = extracted["results"][0]["layout"]
+        layout["furniture"][0]["polygon"] = [[x + 1, y] for x, y in layout["furniture"][0]["polygon"]]
+        self.assertEqual(self.request("POST", "/api/validate", layout)[0], 200)
+        status, run = self.request("POST", "/api/simulate", layout)
+        self.assertEqual(status, 200)
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(run["summary"]["evacuated_count"], 12)
+        _, saved = self.request("GET", f"/runs/{run['run_id']}/layout")
+        self.assertEqual(saved["source_image"]["id"], source["id"])
+        self.assertEqual(saved["extraction"]["provider"], "gemini")
+
+    def test_provider_status_does_not_expose_credentials(self):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "fake-secret-value"}, clear=True):
+            status, configuration = self.request("GET", "/api/providers")
+        self.assertEqual(status, 200)
+        self.assertTrue(configuration["gemini"]["configured"])
+        self.assertFalse(configuration["claude"]["configured"])
+        self.assertNotIn("fake-secret-value", json.dumps(configuration))
 
 
 if __name__ == "__main__":

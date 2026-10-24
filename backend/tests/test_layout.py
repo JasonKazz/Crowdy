@@ -32,7 +32,7 @@ class LayoutTests(unittest.TestCase):
         geometry = build_geometry(compile_layout(office()))
         self.assertTrue(geometry.contains(Point(8, 4)))
         self.assertFalse(geometry.contains(Point(8, 2)))
-        self.assertAlmostEqual(geometry.area, 146.24)
+        self.assertAlmostEqual(geometry.area, 152.24)
 
     def test_sliding_door_moves_actual_gap_without_changing_input(self):
         layout = office()

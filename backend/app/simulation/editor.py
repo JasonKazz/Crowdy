@@ -8,8 +8,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from app.schemas.extraction import ExtractionRequest, ImageUpload
 from app.schemas.layout import Layout, load_layout
+from app.services.floorplans.images import draft_layout, extract_image, image_path, save_image
 from app.services.floorplans.layout import compile_layout
+from app.services.floorplans.providers import load_environment, provider_status
 from app.services.population.generate import resolve_population
 from app.simulation.animate import render_html
 from app.simulation.engine import run_simulation
@@ -17,6 +20,7 @@ from app.simulation.geometry import build_geometry
 
 
 MAX_BODY = 2 * 1024 * 1024
+MAX_IMAGE_BODY = 14 * 1024 * 1024
 
 
 def validate_layout(layout: Layout) -> dict:
@@ -59,6 +63,7 @@ class EditorServer(ThreadingHTTPServer):
         self.output_dir = output_dir
         self.runs: set[str] = set()
         self.run_lock = threading.Lock()
+        self.extraction_lock = threading.Lock()
 
 
 class EditorHandler(BaseHTTPRequestHandler):
@@ -89,12 +94,22 @@ class EditorHandler(BaseHTTPRequestHandler):
         if path == "/":
             page = Path(__file__).with_name("editor.html").read_bytes()
             return self.send_content(200, page, "text/html; charset=utf-8")
-        if path == "/editor-geometry.js":
-            script = Path(__file__).with_name("editor-geometry.js").read_bytes()
+        if path in {"/editor-geometry.js", "/editor-image-tools.js"}:
+            script = Path(__file__).with_name(path[1:]).read_bytes()
             return self.send_content(200, script, "text/javascript; charset=utf-8")
         if path == "/api/layout":
             return self.send_json(200, self.server.layout.model_dump(mode="json"))
+        if path == "/api/providers":
+            return self.send_json(200, provider_status())
         parts = path.strip("/").split("/")
+        if len(parts) == 2 and parts[0] == "images":
+            try:
+                image = image_path(self.server.output_dir, parts[1])
+                if image.is_file():
+                    return self.send_content(200, image.read_bytes(), "image/png")
+            except ValueError:
+                pass
+            return self.send_json(404, {"error": "Image not found"})
         if len(parts) == 3 and parts[0] == "runs" and parts[1] in self.server.runs:
             files = {"playback": ("playback.html", "text/html; charset=utf-8"),
                      **{name: (f"{name}.json", "application/json; charset=utf-8")
@@ -110,15 +125,28 @@ class EditorHandler(BaseHTTPRequestHandler):
         if self.headers.get_content_type() != "application/json":
             return self.send_json(415, {"error": "Send application/json"})
         path = urlsplit(self.path).path
-        if path not in {"/api/import", "/api/validate", "/api/simulate"}:
+        if path not in {"/api/import", "/api/validate", "/api/simulate", "/api/images", "/api/extract"}:
             return self.send_json(404, {"error": "Not found"})
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if size <= 0 or size > MAX_BODY:
-                return self.send_json(413, {"error": "Provide a JSON document smaller than 2 MiB"})
+            maximum = MAX_IMAGE_BODY if path == "/api/images" else MAX_BODY
+            if size <= 0 or size > maximum:
+                return self.send_json(413, {"error": f"Provide a JSON document smaller than {maximum // (1024 * 1024)} MiB"})
             document = json.loads(self.rfile.read(size))
             if not isinstance(document, dict):
                 raise ValueError("The layout must be a JSON object")
+            if path == "/api/images":
+                source = save_image(ImageUpload.model_validate(document), self.server.output_dir)
+                return self.send_json(200, {"layout": draft_layout(source).model_dump(mode="json")})
+            if path == "/api/extract":
+                request = ExtractionRequest.model_validate(document)
+                if not self.server.extraction_lock.acquire(blocking=False):
+                    return self.send_json(409, {"error": "An image extraction is already running. Wait for it to finish."})
+                try:
+                    result = extract_image(request, self.server.output_dir)
+                finally:
+                    self.server.extraction_lock.release()
+                return self.send_json(200, result)
             layout = load_layout(document)
             if path == "/api/import":
                 return self.send_json(200, layout.model_dump(mode="json"))
@@ -145,15 +173,21 @@ def main():
     parser = argparse.ArgumentParser(description="Edit a layout and run real backend simulations locally")
     parser.add_argument("layout", type=Path, nargs="?", default=root / "examples/editable_office.json")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--env-file", type=Path, help="Optional .env path; defaults to the repository root .env")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
+    load_environment(args.env_file)
     layout = load_layout(json.loads(args.layout.read_text(encoding="utf-8")))
     try:
         server = EditorServer(("127.0.0.1", args.port), layout, root / "backend/data/editor")
     except OSError as exc:
         raise SystemExit(f"Could not start editor: {exc}. Try --port 8766.") from exc
     print(f"Crowdy editor: http://127.0.0.1:{args.port}", flush=True)
+    print("Image providers: " + ", ".join(
+        f"{provider}: {'configured' if details['configured'] else 'key missing'}"
+        for provider, details in provider_status().items()
+    ), flush=True)
     print("Leave this terminal running. Press Ctrl+C to stop. Export JSON to keep unfinished edits.", flush=True)
     try:
         server.serve_forever()

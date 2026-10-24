@@ -16,8 +16,8 @@
     {"id": "connecting-door", "wall_id": "partition", "offset": 4, "width": 1.2}
   ],
   "exits": [
-    {"id": "exit-west", "polygon": [[0, 0.5], [0.6, 0.5], [0.6, 2], [0, 2]]},
-    {"id": "exit-east", "polygon": [[15.4, 8], [16, 8], [16, 9.5], [15.4, 9.5]]}
+    {"id": "exit-west", "floor_id": "floor", "edge_index": 3, "offset": 8.75, "width": 1.5, "landing_depth": 2},
+    {"id": "exit-east", "floor_id": "floor", "edge_index": 1, "offset": 8.75, "width": 1.5, "landing_depth": 2}
   ],
   "population": {"count": 40, "seed": 42, "spawn_area_ids": ["floor"]},
   "agent_defaults": {"radius": 0.2, "desired_speed": 1.2},

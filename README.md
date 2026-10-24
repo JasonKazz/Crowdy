@@ -41,7 +41,7 @@ Unused backend directories retain `.gitkeep` placeholders.
 
 Copy `.env.example` to `.env` in the repository root and update it locally. `.env` files, credentials, uploads, local databases, and generated results are ignored by Git. Commit only placeholder values in `.env.example`.
 
-The environment variables are proposed configuration for the backend; configuration loading is not implemented yet. Data paths are relative to `backend/`. The future backend must explicitly load the root `.env` or receive these values through its deployment environment.
+The local editor loads image-provider keys and model names from the repository root `.env` with existing process variables taking precedence. Other `CROWDY_*` variables remain proposed configuration. Data paths are relative to `backend/`.
 
 ## Local simulation
 
@@ -80,7 +80,7 @@ For an individual run, set `settings.blocked_exit_ids` to a list of exit IDs. Un
 
 ## Local layout editor
 
-The backend includes a standalone browser page for testing layout edits against the real Python simulator. It needs no API keys, JavaScript dependencies, or running Next.js app.
+The backend includes a standalone browser page for testing layout edits against the real Python simulator. Manual JSON editing needs no API keys. Image extraction uses Gemini, Claude, or both; no running Next.js app or JavaScript dependencies are needed.
 
 From `backend/`, with the Python environment activated:
 
@@ -101,3 +101,11 @@ python -m app.simulation.editor ../examples/two_exit_room.json
 Each run saves `layout.json`, `scenario.json`, `result.json`, and `playback.html` in a separate `backend/data/editor/<run_id>/` directory. Existing saved files remain after restarting; run links are available during the current server session. Source examples are never overwritten. See [the editor guide](docs/layout-editor.md) for the geometry format and limitations.
 
 Run the Python checks with `python -m unittest discover -s tests -v`. If Node.js is available, the editor's coordinate and door-dragging helpers can also be checked with `node tests/editor_geometry.test.cjs`.
+
+## Start from an image
+
+Install the updated requirements with `python -m pip install -r requirements.txt` from `backend/`. Put real `GEMINI_API_KEY` and `ANTHROPIC_API_KEY` values in the root `.env` and restart the editor. `.env.example` contains placeholders and configurable `GEMINI_MODEL`/`ANTHROPIC_MODEL` defaults. The page shows configured/missing status, never key values.
+
+Choose **Upload floor plan image** (PNG, JPEG, or WebP, up to 10 MiB), enter a known distance in meters, and choose **Mark two points to set scale**. Click the two ends of that distance on the image. Choose a provider and **Extract layout**, or **Compare both models** to make one request to each provider. Inspect the candidates, choose a layout, and adjust its walls, doors, furniture, floor corners, and exits over the image before checking and simulating it. Room labels are observations; population placement remains uniform.
+
+Both providers receive the same resized PNG. Extractions and geometry warnings are saved separately; neither a faster response nor a passed geometry check establishes extraction accuracy. Scale must be confirmed before simulation, and unrecognized exterior exits must be added manually. See [image extraction details](docs/image-extraction.md).

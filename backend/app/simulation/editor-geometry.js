@@ -48,7 +48,21 @@
       (point[1]-wall.start[1])*(wall.end[1]-wall.start[1]))/length;
     return Math.max(door.width/2,Math.min(length-door.width/2,projected));
   }
-  const geometry={bounds,center,translate,rotate,resize,wallLength,wallPolygon,wallPieces,doorOffset};
+  function exitGeometry(door, floors) {
+    const floor=floors.find(f=>f.id===door.floor_id), points=floor?.polygon;
+    if(!points||!Number.isInteger(door.edge_index)||!points[door.edge_index])return null;
+    const start=points[door.edge_index],end=points[(door.edge_index+1)%points.length];
+    const wall={start,end},length=wallLength(wall);if(length<1e-6)return null;
+    const ux=(end[0]-start[0])/length,uy=(end[1]-start[1])/length;
+    const area=points.reduce((sum,p,i)=>{const q=points[(i+1)%points.length];return sum+p[0]*q[1]-q[0]*p[1];},0);
+    const [nx,ny]=area>0?[uy,-ux]:[-uy,ux];
+    const rectangle=(inner,outer,inset=0)=>[[door.offset-door.width/2+inset,inner],[door.offset+door.width/2-inset,inner],
+      [door.offset+door.width/2-inset,outer],[door.offset-door.width/2+inset,outer]]
+      .map(([along,depth])=>[start[0]+ux*along+nx*depth,start[1]+uy*along+ny*depth]);
+    return {wall,apron:rectangle(-.05,door.landing_depth),target:rectangle(door.landing_depth*.8,door.landing_depth-.01,.01),
+      threshold:rectangle(-.05,.05)};
+  }
+  const geometry={bounds,center,translate,rotate,resize,wallLength,wallPolygon,wallPieces,doorOffset,exitGeometry};
   if (typeof module !== 'undefined' && module.exports) module.exports=geometry;
   else root.CrowdyGeometry=geometry;
 })(typeof window !== 'undefined' ? window : this);
