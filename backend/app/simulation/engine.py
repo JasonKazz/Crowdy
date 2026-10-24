@@ -1,13 +1,17 @@
 import math
 
 import jupedsim as jps
+from shapely.geometry import Point
 
 from app.schemas.scenario import Scenario
 from app.services.population.generate import resolve_population
 from app.simulation.geometry import build_geometry, region_to_polygon
+from app.simulation.routing import RoutePlanner, plan_routes
 
 
 def run_simulation(scenario: Scenario) -> dict:
+    # Revalidate in case an interactive caller changed a model in place.
+    scenario = Scenario.model_validate(scenario.model_dump())
     population_config = scenario.population
     scenario = resolve_population(scenario)
 
@@ -35,51 +39,42 @@ def run_simulation(scenario: Scenario) -> dict:
         dt=settings.dt,
     )
 
-    router = jps.RoutingEngine(geometry)
-    exit_options = []
+    planner = RoutePlanner(geometry, scenario.agent_defaults.radius)
+    assignments = plan_routes(scenario, planner=planner)
+    steering_stage = simulation.add_direct_steering_stage()
+    steering_journey = simulation.add_journey(jps.JourneyDescription([steering_stage]))
+    exit_shapes = {}
     exit_polygons = []
+    blocked_exits = set(settings.blocked_exit_ids)
     for exit_region in sorted(scenario.exits, key=lambda region: region.id):
         polygon = region_to_polygon(exit_region)
         if any(polygon.intersects(other) for other in exit_polygons):
             raise ValueError("Exit regions must not overlap or touch")
         exit_polygons.append(polygon)
-        stage = simulation.add_exit_stage(polygon)
-        journey = simulation.add_journey(jps.JourneyDescription([stage]))
-        target = polygon.representative_point()
-        exit_options.append((exit_region.id, stage, journey, (target.x, target.y)))
+        if exit_region.id in blocked_exits:
+            continue
+        exit_shapes[exit_region.id] = polygon
 
     agent_ids = {}
     agent_exits = {}
-    assignments = []
-    for occupant in scenario.occupants:
-        routes = []
-        for exit_id, stage, journey, target in exit_options:
-            try:
-                path = router.compute_waypoints(occupant.position, target)
-            except RuntimeError:
-                continue
-            distance = sum(math.dist(a, b) for a, b in zip(path, path[1:]))
-            if math.isfinite(distance):
-                routes.append((distance, exit_id, stage, journey))
-        if not routes:
-            raise ValueError(f"No reachable exit for occupant '{occupant.id}'")
-        distance, exit_id, stage, journey = min(routes)
+    agent_paths = {}
+    cursors = {}
+    for occupant, assignment in zip(scenario.occupants, assignments):
+        exit_id = assignment["exit_id"]
         engine_id = simulation.add_agent(
             jps.CollisionFreeSpeedModelAgentParameters(
                 position=occupant.position,
                 radius=scenario.agent_defaults.radius,
-                desired_speed=scenario.agent_defaults.desired_speed,
-                journey_id=journey,
-                stage_id=stage,
+                desired_speed=(occupant.desired_speed if occupant.desired_speed is not None
+                               else scenario.agent_defaults.desired_speed),
+                journey_id=steering_journey,
+                stage_id=steering_stage,
             )
         )
         agent_ids[engine_id] = occupant.id
         agent_exits[engine_id] = exit_id
-        assignments.append({
-            "agent_id": occupant.id,
-            "exit_id": exit_id,
-            "route_length": distance,
-        })
+        agent_paths[engine_id] = assignment["path"]
+        cursors[engine_id] = 1
 
     def capture_frame():
         return {
@@ -96,16 +91,32 @@ def run_simulation(scenario: Scenario) -> dict:
 
     frames = [capture_frame()]
     evacuations = []
+    door_crossings = []
+    crossed = set()
+    boundaries = {boundary.id: boundary for boundary in scenario.exit_boundaries}
+    steering_interval = max(1, round(.1 / settings.dt))
 
     for step in range(1, max_steps + 1):
+        for agent in simulation.agents():
+            if step == 1 or step % steering_interval == 0:
+                target, agent_paths[agent.id], cursors[agent.id] = planner.update_route(
+                    agent.position, agent_paths[agent.id], cursors[agent.id], exit_shapes[agent_exits[agent.id]])
+                agent.target = target
         simulation.iterate()
 
-        for engine_id in simulation.removed_agents():
-            evacuations.append({
-                "agent_id": agent_ids[engine_id],
-                "exit_id": agent_exits[engine_id],
-                "time": round(simulation.elapsed_time(), 8),
-            })
+        for agent in list(simulation.agents()):
+            boundary = boundaries.get(agent_exits[agent.id])
+            position = agent.position
+            if boundary is not None and agent.id not in crossed:
+                outside_distance = sum((position[i] - boundary.start[i]) * boundary.outward[i] for i in range(2))
+                if outside_distance >= scenario.agent_defaults.radius:
+                    crossed.add(agent.id)
+                    door_crossings.append({"agent_id": agent_ids[agent.id], "exit_id": boundary.id,
+                                           "time": round(simulation.elapsed_time(), 8)})
+            if exit_shapes[agent_exits[agent.id]].covers(Point(position)):
+                evacuations.append({"agent_id": agent_ids[agent.id], "exit_id": agent_exits[agent.id],
+                                    "time": round(simulation.elapsed_time(), 8)})
+                simulation.mark_agent_for_removal(agent.id)
 
         finished = simulation.agent_count() == 0
         if step % sample_steps == 0 or finished or step == max_steps:
@@ -124,6 +135,7 @@ def run_simulation(scenario: Scenario) -> dict:
         "assignments": assignments,
         "frames": frames,
         "evacuations": evacuations,
+        "door_crossings": door_crossings,
         "summary": {
             "evacuated_count": len(evacuations),
             "remaining_count": simulation.agent_count(),
@@ -131,6 +143,8 @@ def run_simulation(scenario: Scenario) -> dict:
             "clearance_time": (
                 round(simulation.elapsed_time(), 8) if completed else None
             ),
+            "building_clearance_time": max((event["time"] for event in door_crossings), default=None)
+            if len(door_crossings) == len(ids) else None,
             "per_exit_counts": {
                 exit_region.id: sum(
                     event["exit_id"] == exit_region.id for event in evacuations

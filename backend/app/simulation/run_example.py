@@ -33,7 +33,8 @@ def main():
     print(f"Evacuated: {summary['evacuated_count']}")
     print(f"Remaining: {summary['remaining_count']}")
     for exit_id, count in summary["per_exit_counts"].items():
-        print(f"  {exit_id}: {count} evacuated")
+        label = " (blocked)" if exit_id in scenario.settings.blocked_exit_ids else ""
+        print(f"  {exit_id}{label}: {count} evacuated")
     print(f"Recorded frames: {len(result['frames'])}")
     if summary["clearance_time"] is not None:
         print(f"Clearance time: {summary['clearance_time']:.2f} seconds")

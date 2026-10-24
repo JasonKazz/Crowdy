@@ -7,12 +7,18 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:simulation": "node --experimental-strip-types scripts/check-simulation.mjs"
+    "test:simulation": "node --experimental-strip-types scripts/check-simulation.mjs",
+    "test:backend-simulation": "node --experimental-strip-types scripts/check-backend-simulation.mjs",
+    "test:backend-api": "node --experimental-strip-types scripts/check-backend-api.mjs",
+    "test:auth": "node scripts/check-auth.mjs",
+    "test:workspaces": "node --experimental-strip-types scripts/check-workspaces.mjs"
   },
   "dependencies": {
+    "@auth0/nextjs-auth0": "^4.33.0",
     "next": "16.4.3",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",

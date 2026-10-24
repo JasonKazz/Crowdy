@@ -1,0 +1,24 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const {withGeneratedPopulation}=require('../app/simulation/editor-population.js');
+const manual=JSON.parse(fs.readFileSync(path.join(__dirname,'../../examples/narrow_table_regression.json'),'utf8'));
+const before=JSON.stringify(manual);
+const generated=withGeneratedPopulation(manual);
+assert.equal(generated.population.count,40);
+assert.equal(generated.population.seed,42);
+assert.deepEqual(generated.population.spawn_area_ids,manual.walkable_areas.map(area=>area.id));
+assert.deepEqual(generated.occupants,[]);
+assert.equal(JSON.stringify(manual),before,'editing mode must not overwrite the fixed regression fixture');
+const updated=withGeneratedPopulation(generated,25,123);
+assert.equal(updated.population.count,25);
+assert.equal(updated.population.seed,123);
+assert.equal(generated.population.count,40);
+// Preserve deliberate interior spawn selections; never add generated exit aprons.
+generated.population.spawn_area_ids=['floor'];
+assert.deepEqual(withGeneratedPopulation(generated,12,0).population.spawn_area_ids,['floor']);
+manual.walkable_areas.push({id:'exit-apron:e',polygon:[[0,0],[1,0],[0,1]]});
+assert.ok(!withGeneratedPopulation(manual).population.spawn_area_ids.includes('exit-apron:e'));
+for(const count of [0,-1,2.5,5001,NaN])assert.throws(()=>withGeneratedPopulation(manual,count,42),/People/);
+for(const seed of [-1,.5,4294967296,Infinity])assert.throws(()=>withGeneratedPopulation(manual,10,seed),/Seed/);
+console.log('Population editing checks passed: fixed starts become editable, spawn selections survive, and inputs are bounded.');

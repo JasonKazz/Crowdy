@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import AppHeader from "./app-header";
+import AppFooter from "./app-footer";
+import { validatePlan } from "@/lib/plan-validation";
+import { runBackendSimulation } from "@/lib/backend-simulation";
+import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
 import FloorPlanView from "./floor-plan";
 import Icon, { type IconName } from "./icon";
 import {
@@ -15,106 +20,17 @@ import {
 } from "@/lib/simulation";
 
 type Mode = "layout" | "simulation" | "compare";
-const DEFAULT_SCENARIO: Scenario = {
-  occupancy: 80,
-  mobility: "standard",
-  distribution: "uniform",
-};
-const STORAGE_KEY = "crowdy-workspace-v1";
 const signature = (plan: FloorPlan, scenario: Scenario) =>
   JSON.stringify({ plan, scenario });
 const formatTime = (n: number) => `${n.toFixed(1)} s`;
 const clonePlan = (plan: FloorPlan) =>
   JSON.parse(JSON.stringify(plan)) as FloorPlan;
-
-function validatePlan(value: unknown): FloorPlan {
-  if (!value || typeof value !== "object")
-    throw new Error(
-      "Choose a Crowdy JSON floor plan. Download the sample to see the format.",
-    );
-  const plan = value as FloorPlan;
-  const finite = (...numbers: number[]) => numbers.every(Number.isFinite);
-  if (
-    typeof plan.id !== "string" ||
-    !plan.id.trim() ||
-    plan.id.length > 80 ||
-    typeof plan.name !== "string" ||
-    !plan.name.trim() ||
-    plan.name.length > 80 ||
-    plan.width !== 900 ||
-    plan.height !== 600 ||
-    !Number.isFinite(plan.area) ||
-    plan.area <= 0 ||
-    plan.area > 10000 ||
-    !Array.isArray(plan.items) ||
-    plan.items.length > 100 ||
-    !Array.isArray(plan.walls) ||
-    plan.walls.length > 100 ||
-    !Array.isArray(plan.exits) ||
-    plan.exits.length < 1 ||
-    plan.exits.length > 12
-  )
-    throw new Error(
-      "This plan needs a name, a 900 × 600 canvas, valid area, and at least one exit. Use the sample JSON as a template.",
-    );
-  const ids = new Set<string>();
-  for (const item of plan.items) {
-    if (
-      !item ||
-      typeof item.id !== "string" ||
-      ids.has(item.id) ||
-      typeof item.label !== "string" ||
-      item.label.length > 80 ||
-      !["desk", "table", "shelf", "sofa", "plant", "obstacle"].includes(
-        item.kind,
-      ) ||
-      !finite(item.x, item.y, item.width, item.height) ||
-      item.width < 8 ||
-      item.height < 8 ||
-      item.x < 0 ||
-      item.y < 0 ||
-      item.x + item.width > 900 ||
-      item.y + item.height > 600
-    )
-      throw new Error(
-        "An object has invalid dimensions or a duplicate ID. Check its coordinates in the JSON and upload again.",
-      );
-    ids.add(item.id);
-  }
-  for (const wall of plan.walls)
-    if (
-      !wall ||
-      !finite(wall.x1, wall.y1, wall.x2, wall.y2) ||
-      Math.min(wall.x1, wall.x2) < 0 ||
-      Math.max(wall.x1, wall.x2) > 900 ||
-      Math.min(wall.y1, wall.y2) < 0 ||
-      Math.max(wall.y1, wall.y2) > 600
-    )
-      throw new Error(
-        "A wall is outside the 900 × 600 canvas. Correct its coordinates and upload again.",
-      );
-  const exitIds = new Set<string>();
-  for (const exit of plan.exits) {
-    if (
-      !exit ||
-      typeof exit.id !== "string" ||
-      !exit.id.trim() ||
-      exitIds.has(exit.id) ||
-      typeof exit.label !== "string" ||
-      exit.label.length > 80 ||
-      !finite(exit.x, exit.y) ||
-      exit.x < 0 ||
-      exit.x > 900 ||
-      exit.y < 0 ||
-      exit.y > 600
-    )
-      throw new Error(
-        "An exit has invalid coordinates or a duplicate ID. Correct it and upload again.",
-      );
-    exitIds.add(exit.id);
-  }
-  return clonePlan(plan);
-}
+const clearance = (run: SimulationResult) =>
+  run.remaining ? null : (run.clearanceTime ?? run.totalTime);
+const clearanceLabel = (run: SimulationResult) => {
+  const value = clearance(run);
+  return value === null ? "Incomplete" : formatTime(value);
+};
 
 function downloadJson(data: unknown, name: string) {
   const url = URL.createObjectURL(
@@ -127,15 +43,34 @@ function downloadJson(data: unknown, name: string) {
   URL.revokeObjectURL(url);
 }
 
-export default function Workspace() {
-  const [plan, setPlan] = useState<FloorPlan>(SAMPLE_PLAN);
-  const [scenario, setScenario] = useState<Scenario>(DEFAULT_SCENARIO);
+type WorkspaceProps = {
+  workspaceId: string;
+  workspaceName: string;
+  initialPlan: FloorPlan;
+  initialScenario: Scenario;
+  isSample: boolean;
+  ownerId: string | null;
+};
+
+export default function Workspace({
+  workspaceId,
+  workspaceName,
+  initialPlan,
+  initialScenario,
+  isSample,
+  ownerId,
+}: WorkspaceProps) {
+  const router = useRouter();
+  const [plan, setPlan] = useState<FloorPlan>(() => clonePlan(initialPlan));
+  const [scenario, setScenario] = useState<Scenario>(() => ({
+    ...initialScenario,
+  }));
   const [mode, setMode] = useState<Mode>("layout");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [history, setHistory] = useState<FloorPlan[]>([]);
   const [result, setResult] = useState<SimulationResult | null>(null);
   const preview = useMemo(
-    () => runSimulation(plan, scenario),
+    () => plan.native ? null : runSimulation(plan, scenario),
     [plan, scenario],
   );
   const [baseline, setBaseline] = useState<SimulationResult | null>(null);
@@ -152,63 +87,107 @@ export default function Workspace() {
   });
   const [modal, setModal] = useState<"upload" | "help" | "reset" | null>(null);
   const [error, setError] = useState("");
+  const [imageProvider, setImageProvider] = useState("gemini");
+  const [imageWidth, setImageWidth] = useState(20);
   const [notice, setNotice] = useState("");
-  const [saveState, setSaveState] = useState("Loading workspace");
-  const [hydrated, setHydrated] = useState(false);
-  const [savedSetup, setSavedSetup] = useState("");
-  const runTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [runError, setRunError] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [copyError, setCopyError] = useState("");
+  const [savedSetup, setSavedSetup] = useState(() =>
+    signature(initialPlan, initialScenario),
+  );
+  const savedSignature = useRef(signature(initialPlan, initialScenario));
+  const pendingSetup = useRef({ plan, scenario });
+  const openingSetup = useRef({
+    plan: clonePlan(initialPlan),
+    scenario: { ...initialScenario },
+  });
+  const runController = useRef<AbortController | null>(null);
   const currentTime = useRef(0);
   const uploadRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) return;
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) {
-          const data = JSON.parse(stored);
-          const next = validatePlan(data.plan);
-          const s = data.scenario as Scenario;
-          if (
-            s &&
-            Number.isInteger(s.occupancy) &&
-            s.occupancy >= 10 &&
-            s.occupancy <= 200 &&
-            ["standard", "mixed"].includes(s.mobility) &&
-            ["uniform", "workstations"].includes(s.distribution)
-          ) {
-            setPlan(next);
-            setScenario(s);
-          }
-        }
-      } catch {
-        setNotice(
-          "Your previous setup could not be restored. The sample plan is ready.",
-        );
-      }
-      setHydrated(true);
-    });
-    return () => {
-      cancelled = true;
-      if (runTimer.current) clearTimeout(runTimer.current);
-    };
-  }, []);
+  const persistWorkspace = useCallback(() => {
+    if (isSample || !ownerId) return true;
+    const currentSignature = signature(plan, scenario);
+    if (currentSignature === savedSignature.current) return true;
+    try {
+      updateWorkspace(ownerId, workspaceId, { plan, scenario });
+      savedSignature.current = currentSignature;
+      setSavedSetup(currentSignature);
+      setSaveError("");
+      return true;
+    } catch (error) {
+      setSaveError(
+        error instanceof Error
+          ? error.message
+          : "This workspace could not be saved. Export a copy before leaving.",
+      );
+      return false;
+    }
+  }, [isSample, ownerId, workspaceId, plan, scenario]);
 
   useEffect(() => {
-    if (!hydrated) return;
-    const timer = setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ plan, scenario }));
-        setSaveState("Saved in this browser");
-      } catch {
-        setSaveState("Browser storage unavailable");
-      }
-      setSavedSetup(signature(plan, scenario));
-    }, 100);
+    pendingSetup.current = { plan, scenario };
+    if (isSample || signature(plan, scenario) === savedSetup) return;
+    const timer = setTimeout(persistWorkspace, 150);
     return () => clearTimeout(timer);
-  }, [hydrated, plan, scenario]);
+  }, [isSample, plan, scenario, savedSetup, persistWorkspace]);
+
+  useEffect(() => {
+    if (isSample || !ownerId) return;
+    function flush() {
+      const pending = pendingSetup.current;
+      const currentSignature = signature(pending.plan, pending.scenario);
+      if (currentSignature === savedSignature.current) return true;
+      try {
+        updateWorkspace(ownerId!, workspaceId, pending);
+        savedSignature.current = currentSignature;
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    function beforeUnload(event: BeforeUnloadEvent) {
+      if (!flush()) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    }
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("beforeunload", beforeUnload);
+      flush();
+    };
+  }, [isSample, ownerId, workspaceId]);
+
+  useEffect(
+    () => () => {
+      runController.current?.abort();
+      runController.current = null;
+    },
+    [],
+  );
+
+  function saveCopy() {
+    if (!ownerId) return;
+    try {
+      const record = createWorkspace(ownerId, {
+        name: `${workspaceName} copy`.slice(0, 80),
+        plan,
+        scenario,
+      });
+      router.push(`/workspaces/${record.id}`);
+    } catch (error) {
+      setCopyError(
+        error instanceof Error
+          ? error.message
+          : "The copy could not be saved. Export this workspace to keep your work.",
+      );
+    }
+  }
 
   useEffect(() => {
     if (modal) dialogRef.current?.showModal();
@@ -250,21 +229,29 @@ export default function Workspace() {
     result &&
       signature(plan, scenario) !== signature(result.plan, result.scenario),
   );
-  const canCompare = Boolean(baseline && result && baseline.id !== result.id);
+  const sameEngine = Boolean(
+    baseline && result && baseline.engine === result.engine &&
+    baseline.engineVersion === result.engineVersion,
+  );
+  const canCompare = Boolean(
+    baseline && result && baseline.id !== result.id && sameEngine,
+  );
   const sameScenario = Boolean(
     baseline &&
       result &&
       JSON.stringify(baseline.scenario) === JSON.stringify(result.scenario),
   );
   const shownPlan = mode === "layout" ? plan : (result?.plan ?? plan);
-  const shownResult = mode === "layout" ? preview : result;
+  const shownResult = mode === "layout" ? (!stale && result ? result : preview) : result;
   const evacuated = result ? getEvacuatedCount(result, time) : 0;
   const duration = Math.max(
     result?.totalTime ?? 60,
     mode === "compare" ? (baseline?.totalTime ?? 0) : 0,
   );
   const resultDifference =
-    baseline && result ? result.totalTime - baseline.totalTime : 0;
+    baseline && result && clearance(baseline) !== null && clearance(result) !== null
+      ? clearance(result)! - clearance(baseline)!
+      : 0;
   const layoutChanges =
     baseline && result
       ? new Set(
@@ -333,46 +320,81 @@ export default function Workspace() {
     setHistory(history.slice(0, -1));
     setSelectedId(null);
   }
-  function run() {
-    if (busy) {
-      if (runTimer.current) clearTimeout(runTimer.current);
+  async function run() {
+    if (runController.current) {
+      runController.current.abort();
+      runController.current = null;
       setBusy(false);
+      setRunError("");
       setNotice("Run cancelled. Your setup is unchanged.");
       return;
     }
+    const controller = new AbortController();
+    runController.current = controller;
+    const submittedPlan = clonePlan(plan);
+    const submittedScenario = { ...scenario };
     setBusy(true);
+    setRunError("");
     setPlaying(false);
-    runTimer.current = setTimeout(() => {
-      try {
-        const next = runSimulation(plan, scenario, Date.now());
-        setResult(next);
-        setTime(0);
-        setMode("simulation");
-        setRunCount((count) => count + 1);
-        setPlaying(next.totalTime > 0 && !reducedMotion());
-        setNotice(
-          next.remaining
-            ? `Run finished with ${next.remaining} people remaining. Review blocked routes and exits.`
-            : "Run complete. Inspect playback or pin this run as your baseline.",
-        );
-      } catch {
-        setNotice(
-          "The demo run could not finish. Check that an exit is reachable and try again.",
-        );
+    try {
+      const next = await runBackendSimulation(submittedPlan, submittedScenario, {
+        signal: controller.signal,
+      });
+      if (runController.current !== controller || controller.signal.aborted) return;
+      setResult(next);
+      setTime(0);
+      setMode("simulation");
+      setRunCount((count) => count + 1);
+      setPlaying(next.totalTime > 0 && !reducedMotion());
+      setNotice(
+        next.remaining
+          ? `Time limit reached with ${next.remaining} ${next.remaining === 1 ? "person" : "people"} remaining. Inspect the recorded movement and exits.`
+          : "Run complete. Inspect playback or pin this run as your baseline.",
+      );
+    } catch (error) {
+      if (runController.current !== controller || controller.signal.aborted) return;
+      setRunError(
+        error instanceof Error
+          ? error.message
+          : "The simulation could not finish. Your current setup is unchanged.",
+      );
+    } finally {
+      if (runController.current === controller) {
+        runController.current = null;
+        setBusy(false);
       }
-      setBusy(false);
-    }, 550);
+    }
   }
   async function upload(file: File | undefined) {
-    if (!file) return;
-    if (file.size > 1024 * 1024) {
+    if (!file || busy) return;
+    const image = /\.(png|jpe?g|webp)$/i.test(file.name);
+    if (file.size > (image ? 10 : 1) * 1024 * 1024) {
       setError(
-        "This file is too large. Choose a JSON floor plan smaller than 1 MB.",
+        "Choose a JSON floor plan below 1 MB, or PNG/JPEG/WebP below 10 MB.",
       );
       return;
     }
+    setBusy(true);
+    setError("");
+    setNotice(image ? "Extracting the image. This can take a few minutes…" : "Importing floor plan…");
     try {
-      const data = JSON.parse(await file.text());
+      let data;
+      if (image) {
+        const encoded = await new Promise<string>((resolve,reject)=>{
+          const reader = new FileReader(); reader.onload=()=>resolve(String(reader.result).split(",")[1]);
+          reader.onerror=()=>reject(new Error("Could not read this image.")); reader.readAsDataURL(file);
+        });
+        data = {filename:file.name,image_base64:encoded,provider:imageProvider,image_width_m:imageWidth};
+      } else data = JSON.parse(await file.text());
+      const raw = data.plan ?? data;
+      let warnings: string[] = [];
+      if (image || raw.walkable_areas) {
+        const response = await fetch("/api/floorplans",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify(image ? data : {layout:raw})});
+        const imported = await response.json();
+        if(!response.ok) throw new Error(imported.error || "The floor plan could not be imported.");
+        data = imported; warnings=imported.warnings ?? [];
+      }
       const next = validatePlan(data.plan ?? data);
       editPlan(next);
       setSelectedId(null);
@@ -380,7 +402,7 @@ export default function Workspace() {
       setModal(null);
       setError("");
       setNotice(
-        "Floor plan imported. Review the geometry and exits before running.",
+        "Floor plan imported. Review the geometry and exits before running." + (warnings.length ? " " + warnings.join(" ") : ""),
       );
     } catch (cause) {
       setError(
@@ -390,17 +412,18 @@ export default function Workspace() {
             ? cause.message
             : "This floor plan could not be opened. Try the sample JSON.",
       );
-    }
+    } finally {setBusy(false);}
     if (uploadRef.current) uploadRef.current.value = "";
   }
   function reset() {
-    editPlan(clonePlan(SAMPLE_PLAN));
-    setScenario(DEFAULT_SCENARIO);
+    if (busy) return;
+    editPlan(clonePlan(openingSetup.current.plan));
+    setScenario({ ...openingSetup.current.scenario });
     setSelectedId(null);
     setMode("layout");
     setModal(null);
     setNotice(
-      "Sample layout restored. Your previous layout is available with Undo.",
+      "Opening layout restored. Your previous layout is available with Undo.",
     );
   }
   function exportSetup() {
@@ -411,13 +434,22 @@ export default function Workspace() {
         scenario,
         result: result
           ? {
-              model: "Crowdy illustrative grid model",
+              model: result.engine === "jupedsim"
+                ? "JuPedSim CollisionFreeSpeedModel"
+                : "Crowdy illustrative grid model",
+              engine: result.engine,
+              engineVersion: result.engineVersion,
+              modelSettings: result.modelSettings,
+              status: result.status,
               plan: result.plan,
               scenario: result.scenario,
               totalTime: result.totalTime,
+              clearanceTime: clearance(result),
               averageTime: result.averageTime,
+              exited: result.exited,
               remaining: result.remaining,
               peakDensity: result.peakDensity,
+              perExitCounts: result.perExitCounts,
             }
           : null,
       },
@@ -439,48 +471,23 @@ export default function Workspace() {
 
   return (
     <div className="app-shell">
-      <header className="app-header">
-        <Link className="brand" href="/" aria-label="Crowdy home">
-          <span className="brand-symbol">
-            <i />
-            <i />
-            <i />
-            <i />
-          </span>
-          crowdy<span className="brand-period">.</span>
-        </Link>
-        <span className="header-divider" />
-        <div className="breadcrumb">
-          <span>Workspace</span>
-          <Icon name="chevron" size={13} />
-          <strong>Untitled project</strong>
-        </div>
-        <div className="header-right">
-          <span className="demo-badge">
-            <span />
-            Interactive demo
-          </span>
-          <button
-            className="icon-button help-button"
-            aria-label="About this demo"
-            onClick={() => setModal("help")}
-          >
-            <Icon name="help" />
-          </button>
-          <span className="avatar" aria-label="Local workspace">
-            C
-          </span>
-        </div>
-      </header>
+      <AppHeader
+        workspaceName={workspaceName}
+        onHelp={() => setModal("help")}
+        onNavigate={persistWorkspace}
+      />
       <div className="project-bar">
         <div>
-          <div className="project-kicker">EVACUATION PLANNING</div>
-          <h1>{plan.name.replace(/\.json$/i, "")}</h1>
+          <h1>{workspaceName}</h1>
           <p>
             <span className="status-dot" />
-            {hydrated && savedSetup !== signature(plan, scenario)
-              ? "Saving changes…"
-              : saveState}
+            {isSample
+              ? "Sample workspace"
+              : saveError
+                ? "Changes not saved"
+                : savedSetup !== signature(plan, scenario)
+                  ? "Saving changes…"
+                  : "Saved on this device"}
             <span className="text-separator">/</span>Ground floor
           </p>
         </div>
@@ -498,6 +505,44 @@ export default function Workspace() {
           </button>
         </div>
       </div>
+      {isSample && (
+        <div className="workspace-context-strip">
+          <p>
+            This sample is available to everyone. Changes here are temporary.
+          </p>
+          {ownerId ? (
+            <button className="button secondary" onClick={saveCopy}>
+              <Icon name="plus" size={15} />
+              Make a copy
+            </button>
+          ) : (
+            <a className="button secondary" href="/auth/login?returnTo=/">
+              Sign in to create a workspace
+            </a>
+          )}
+        </div>
+      )}
+      {(saveError || copyError) && (
+        <div className="workspace-save-error" role="alert">
+          <span>{saveError || copyError}</span>
+          {saveError && (
+            <button className="text-button" onClick={persistWorkspace}>
+              Retry saving
+            </button>
+          )}
+          <button className="text-button" onClick={exportSetup}>
+            Export a copy
+          </button>
+        </div>
+      )}
+      {runError && (
+        <div className="workspace-save-error" role="alert">
+          <span>{runError}</span>
+          <button className="text-button" onClick={run} disabled={busy}>
+            Retry run
+          </button>
+        </div>
+      )}
       <main className="workspace-grid">
         <aside className="setup-panel" aria-label="Plan and scenario settings">
           <div className="panel-title">
@@ -512,6 +557,7 @@ export default function Workspace() {
             </div>
             <button
               className="plan-card"
+              disabled={busy}
               onClick={() => {
                 setModal("upload");
                 setError("");
@@ -533,6 +579,7 @@ export default function Workspace() {
             </button>
             <button
               className="text-button upload-link"
+              disabled={busy}
               onClick={() => {
                 setModal("upload");
                 setError("");
@@ -544,7 +591,7 @@ export default function Workspace() {
             <div className="scale-row">
               <span>Plan scale</span>
               <span className="mono">
-                32 px / m <Icon name="check" size={12} />
+                {(plan.native?.transform.pixels_per_metre ?? 32).toFixed(1)} px / m <Icon name="check" size={12} />
               </span>
             </div>
           </section>
@@ -693,9 +740,11 @@ export default function Workspace() {
                 <span>10 people</span>
                 <span>200 people</span>
               </div>
-              <label className="field-label" htmlFor="distribution">
-                Starting distribution
-              </label>
+              <label className="field-label" htmlFor="population-seed">Placement seed</label>
+              <input id="population-seed" type="number" min="0" max="4294967295" step="1" value={scenario.seed ?? 42}
+                onChange={event=>{const seed=Number(event.target.value); if(Number.isInteger(seed)&&seed>=0&&seed<=4294967295)
+                  setScenario({...scenario,seed});}} />
+              <label className="field-label" htmlFor="distribution">Starting distribution</label>
               <div className="select-wrap">
                 <select
                   id="distribution"
@@ -745,6 +794,7 @@ export default function Workspace() {
             </span>
             <button
               className="text-button muted"
+              disabled={busy}
               onClick={() => setModal("reset")}
             >
               Reset layout
@@ -802,7 +852,7 @@ export default function Workspace() {
                 {busy
                   ? "Computing crowd movement"
                   : mode === "layout"
-                    ? "Editing layout"
+                    ? plan.native ? "Editing imported geometry · run to place people" : "Editing layout · placement preview"
                     : playing
                       ? "Playing simulation"
                       : "Simulation paused"}
@@ -824,7 +874,7 @@ export default function Workspace() {
                 <div>
                   <div className="compare-label">
                     <span>BASELINE</span>
-                    <strong>{formatTime(baseline.totalTime)}</strong>
+                    <strong>{clearanceLabel(baseline)}</strong>
                   </div>
                   <FloorPlanView
                     {...planProps}
@@ -836,7 +886,7 @@ export default function Workspace() {
                 <div>
                   <div className="compare-label">
                     <span>PROPOSED</span>
-                    <strong>{formatTime(result.totalTime)}</strong>
+                    <strong>{clearanceLabel(result)}</strong>
                   </div>
                   <FloorPlanView
                     {...planProps}
@@ -892,7 +942,6 @@ export default function Workspace() {
                   <Icon name="fit" size={16} />
                 </button>
               </div>
-
             </div>
             {stale && mode !== "layout" && (
               <div className="stale-notice">
@@ -1049,22 +1098,22 @@ export default function Workspace() {
               <button
                 className="inline-help"
                 aria-label="Evacuation time definition"
-                title="Time until all reachable people exit. People without a route are counted as remaining."
+                title="Time until everyone exits. Unavailable if anyone remains at the simulation time limit."
                 onClick={() => setModal("help")}
               >
                 <Icon name="help" size={12} />
               </button>
             </span>
             <div>
-              {result?.exited ? result.totalTime.toFixed(1) : "—"}
-              <span>{result ? "seconds" : "seconds"}</span>
+              {result && clearance(result) !== null ? clearance(result)!.toFixed(1) : "—"}
+              <span>seconds</span>
             </div>
             <p>
               {result
-                ? result.exited
-                  ? `${result.exited} people reached an exit${result.remaining ? ` · ${result.remaining} remaining` : ""}`
-                  : `No reachable exit · ${result.remaining} people remaining`
-                : "Time until the last reachable person exits"}
+                ? result.remaining
+                  ? `${result.exited} exited · ${result.remaining} remaining at ${formatTime(result.totalTime)}`
+                  : `${result.exited} people reached an exit`
+                : "Time until everyone reaches an exit"}
             </p>
           </div>
           <div className="secondary-metrics">
@@ -1075,7 +1124,9 @@ export default function Workspace() {
               </strong>
             </div>
             <div>
-              <span title="Highest sampled density in a 2 m × 2 m cell across the run">Peak sampled density</span>
+              <span title="Highest sampled density in a 2 m × 2 m cell across the run">
+                Peak sampled density
+              </span>
               <strong>
                 {result ? result.peakDensity.toFixed(1) : "—"}
                 <small> people / m²</small>
@@ -1091,6 +1142,12 @@ export default function Workspace() {
                 </small>
               </strong>
             </div>
+            {result?.perExitCounts && Object.entries(result.perExitCounts).map(([id, count]) => (
+              <div key={id}>
+                <span>Via {result.plan.exits.find((exit) => exit.id === id)?.label ?? id}</span>
+                <strong>{count}<small> {count === 1 ? "person" : "people"}</small></strong>
+              </div>
+            ))}
           </div>
           <div className="evacuation-chart">
             <div className="chart-heading">
@@ -1196,15 +1253,17 @@ export default function Workspace() {
                     Baseline pinned
                   </span>
                   <strong className="mono">
-                    {formatTime(baseline.totalTime)}
+                    {clearanceLabel(baseline)}
                   </strong>
                 </div>
                 <p className="helper">
-                  {canCompare
+                  {result && !sameEngine
+                    ? "These runs use different models. Clear the baseline and pin a run from the current model."
+                    : canCompare
                     ? baseline &&
                       result &&
                       (baseline.remaining || result.remaining)
-                      ? "Incomplete runs. Compare people remaining; total times exclude unreachable people."
+                      ? "Incomplete runs. Compare people remaining; evacuation times are unavailable until everyone exits."
                       : sameScenario
                         ? `${layoutChanges} layout object${layoutChanges === 1 ? "" : "s"} changed. Same occupancy and walking profile.`
                         : "Scenario settings differ between runs."
@@ -1256,7 +1315,7 @@ export default function Workspace() {
                 </p>
                 <button
                   className="button subtle pin-button"
-                  disabled={!result || stale}
+                  disabled={!result || stale || busy}
                   onClick={() => {
                     setBaseline(result);
                     setNotice(
@@ -1271,10 +1330,10 @@ export default function Workspace() {
             )}
           </div>
           <div className="model-note">
-            <span>DEMO MODEL</span>
+            <span>JUPEDSIM</span>
             <p>
-              Illustrative grid routing and exit queues. Results are simulated,
-              not a safety assessment.
+              Collision-free movement with obstacle-aware exit routes.
+              Results are simulated, not a safety assessment.
             </p>
             <button
               className="text-button muted"
@@ -1286,15 +1345,7 @@ export default function Workspace() {
           </div>
         </aside>
       </main>
-      <footer className="app-footer">
-        <span>
-          <span className="footer-mark">C</span>Made for the way people move.
-        </span>
-        <span>
-          Cal Hacks 13.0<span className="text-separator">/</span>Browser-local
-          workspace
-        </span>
-      </footer>
+      <AppFooter />
       {notice && (
         <div className="toast" role="status">
           <Icon name="check" size={16} />
@@ -1322,8 +1373,8 @@ export default function Workspace() {
             {modal === "upload"
               ? "Upload floor plan"
               : modal === "reset"
-                ? "Restore the sample layout?"
-                : "About this demo"}
+                ? "Restore the opening layout?"
+                : "Simulation assumptions"}
           </h2>
           <button
             className="icon-button"
@@ -1336,24 +1387,32 @@ export default function Workspace() {
         {modal === "upload" ? (
           <>
             <p>
-              Import a Crowdy JSON floor plan with editable walls, furniture,
-              and exits. Uploading replaces your current layout; Undo restores
-              it.
+              Import a frontend or backend Crowdy JSON layout, or extract an image.
+              Uploading replaces your layout; Undo restores it. Imported furniture stays editable.
             </p>
+            <label className="field-label" htmlFor="image-provider">Image extraction provider</label>
+            <select id="image-provider" value={imageProvider} disabled={busy} onChange={e=>setImageProvider(e.target.value)}>
+              <option value="gemini">Gemini</option><option value="claude">Claude</option>
+            </select>
+            <label className="field-label" htmlFor="image-width">Full image width in meters (left edge to right edge)</label>
+            <input id="image-width" type="number" min="0.01" step="0.1" value={imageWidth} disabled={busy}
+              onChange={e=>{const width=Number(e.target.value);if(width>0&&width<=1000)setImageWidth(width);}} />
+            <p className="muted">For images, confirm this real-world scale before choosing a file. Extraction sends the image to your selected provider.</p>
             <button
               className="upload-dropzone"
+              disabled={busy}
               onClick={() => uploadRef.current?.click()}
             >
               <Icon name="upload" size={26} />
-              <strong>Choose a floor plan</strong>
-              <span>JSON only · up to 1 MB · 900 × 600 canvas</span>
+              <strong>{busy ? "Importing floor plan…" : "Choose a floor plan"}</strong>
+              <span>JSON up to 1 MB · PNG, JPEG, WebP up to 10 MB</span>
             </button>
             <input
               ref={uploadRef}
               className="visually-hidden"
               type="file"
-              accept=".json,application/json"
-              aria-label="Choose floor plan JSON file"
+              accept=".json,.png,.jpg,.jpeg,.webp,application/json,image/png,image/jpeg,image/webp"
+              aria-label="Choose floor plan file"
               onChange={(e) => upload(e.target.files?.[0])}
             />
             {error && (
@@ -1374,15 +1433,15 @@ export default function Workspace() {
               Download sample JSON
             </button>
             <p className="dialog-note">
-              Image and PDF interpretation will be available when the floor-plan
-              backend is connected.
+              PNG, JPEG, and WebP extraction uses your server’s provider key.
+              Export PDF pages as images first. The detailed backend editor remains available for wall and door corrections.
             </p>
           </>
         ) : modal === "reset" ? (
           <>
             <p>
-              This replaces your edited layout and scenario with the sample
-              studio. Your previous layout remains available through Undo;
+              This restores the layout and scenario from when you opened this
+              workspace. Your previous layout remains available through Undo;
               existing run results keep their original inputs.
             </p>
             <div className="dialog-actions">
@@ -1393,7 +1452,7 @@ export default function Workspace() {
                 Keep editing
               </button>
               <button className="button primary" onClick={reset}>
-                Restore sample
+                Restore layout
               </button>
             </div>
           </>
@@ -1407,45 +1466,49 @@ export default function Workspace() {
               <div>
                 <dt>Geometry</dt>
                 <dd>
-                  32 canvas pixels represent 1 metre. The sample area is
-                  approximate. Review imported geometry before running.
+                  32 canvas pixels represent 1 metre. Walls define the floor
+                  bounds; wall segments and furniture block movement. Boundary
+                  exits include a short landing beyond the floor. Review
+                  imported geometry before running.
                 </dd>
               </div>
               <div>
                 <dt>Movement</dt>
                 <dd>
-                  People follow shortest available grid routes around furniture.
-                  Exit queues and reaction delays are simplified. Collisions and
-                  real crowd behavior are not fully modeled.
+                  JuPedSim uses a collision-free speed model. People choose an
+                  exit once using the shortest routed distance around obstacles;
+                  they do not switch destinations to avoid congestion.
                 </dd>
               </div>
               <div>
                 <dt>Reported time</dt>
                 <dd>
-                  Elapsed model time until the last reachable person exits.
-                  Unreachable people remain visible and are excluded from the
-                  average exit time.
+                  Evacuation time is available only when everyone exits.
+                  Otherwise the run stops at 60 simulated seconds and keeps
+                  remaining people visible. Average exit time counts only people
+                  who reached an exit.
                 </dd>
               </div>
               <div>
                 <dt>Playback</dt>
                 <dd>
-                  1× playback advances one simulated second per real second.
+                  Playback follows recorded positions and their simulation
+                  timestamps. 1× advances one simulated second per real second.
                   Reduced motion starts runs paused.
                 </dd>
               </div>
               <div>
                 <dt>Your work</dt>
                 <dd>
-                  Layout and scenario are saved in this browser. Runs and
-                  baselines last for this session. Export a workspace to keep a
-                  copy.
+                  {isSample
+                    ? "Sample edits are temporary. Make a personal copy to keep them, or export this layout."
+                    : "This workspace is saved for your account on this device. Runs and baselines last for this session; export to keep a separate copy."}
                 </dd>
               </div>
             </dl>
             <p className="dialog-note">
-              This frontend demo runs locally in your browser. No backend
-              analysis or floor-plan interpretation is connected.
+              Runs are computed by the simulation service. Layout people are
+              placement previews for the sample. Image extraction uses the selected provider and scale; imported layouts use the native geometry. Export PDF pages as images first.
             </p>
           </>
         )}
