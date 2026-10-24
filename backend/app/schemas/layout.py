@@ -92,6 +92,7 @@ class Layout(InputModel):
     exits: list[ExitDoor | Region] = Field(default_factory=list)
     exit_boundaries: list[ExitBoundary] = Field(default_factory=list)
     rooms: list[Region] = Field(default_factory=list)
+    furniture_labels: dict[str, str] = Field(default_factory=dict)
     room_labels: dict[str, str] = Field(default_factory=dict)
     room_types: dict[str, RoomType] = Field(default_factory=dict)
     building_type: BuildingType = "auto"

@@ -347,7 +347,7 @@ export default function FloorPlanView({
   const personRadius = mode === "layout" && placement ? placement.radius : result?.agentRadius ?? .23;
   const cellWidth = 2 * metre;
   const measuredPeople = result?.engine === "jupedsim" && !(mode === "layout" && placement);
-  const visiblePeople: {agent: AgentPath; point: Point}[] = mode === "layout" && placement ? placement.people.map((point,id)=>({point,
+  const visiblePeople: {agent: AgentPath; point: Point}[] = mode === "layout" && placement ? (placement.displayPeople ?? placement.people).map((point,id)=>({point,
       agent:{id,points:[point],duration:0,delay:0,exitId:null}})) : result
     ? result.agents.flatMap((agent) => {
         const point = positionAt(agent, time);
@@ -796,7 +796,7 @@ export default function FloorPlanView({
             {visiblePeople.map(({ agent, point }) => (
               <g
                 key={agent.id}
-                transform={`translate(${point.x} ${point.y}) rotate(${headingAt(agent,time) * 180 / Math.PI})`}
+                transform={`translate(${point.x} ${point.y}) rotate(${(mode === "layout" && placement?.facingAngles ? placement.facingAngles[agent.id] : headingAt(agent,time)) * 180 / Math.PI})`}
                 data-person-state={!measuredPeople ? "preview" : agent.outcome === "trapped" ? "trapped" : time < agent.delay ? "responding" : "walking"}
               >
               <title>{!measuredPeople ? `${agent.id}: placement preview` : `${agent.sourceId ?? agent.id}${agent.outcome === "trapped" ? ": trapped, no available route" : time < agent.delay ? ": waiting to respond" : ": walking / queuing"} · response ${agent.delay.toFixed(1)} s${agent.desiredSpeed === undefined ? "" : ` · desired speed ${agent.desiredSpeed.toFixed(2)} m/s`}`}</title>

@@ -149,6 +149,8 @@ def _editor_geometry(plan: dict, radius=AGENT_RADIUS):
             obstacles.append(_region(f"editor-wall-{index}-{part}", polygon))
 
     for index, item in enumerate(plan["items"]):
+        if item["kind"] == "chair" and item["width"]*item["height"]/32**2<=2 and max(item["width"],item["height"])/32<=1.8:
+            continue
         lower = pixel_to_metres(item["x"], item["y"] + item["height"])
         upper = pixel_to_metres(item["x"] + item["width"], item["y"])
         obstacle = box(lower[0], lower[1], upper[0], upper[1])
@@ -233,11 +235,15 @@ def editor_to_scenario(plan: dict, settings: dict, starting_population=None, pla
         base_floor = unary_union([Polygon(r.polygon) for r in layout.walkable_areas])
         if starting_population is not None:
             resolved = _reuse_people(scenario, starting_population, settings)
-            if settings["distribution"] == "rooms" and placement_metadata is not None:
+            if settings["distribution"] in ("rooms", "normal") and placement_metadata is not None:
                 from app.services.population.placement import describe_existing
                 describe_existing(plan,settings,resolved,placement_metadata,layout)
             return resolved
-        if settings["distribution"] == "rooms":
+        if settings["distribution"] == "normal":
+            from app.services.population.normal import place_normally
+            starts = place_normally(plan,settings,build_geometry(scenario),base_floor,scenario.exits,radius,
+                placement_metadata if placement_metadata is not None else {},lambda x,y:world_point(x,y,transform),layout)
+        elif settings["distribution"] == "rooms":
             from app.services.population.placement import place_in_rooms
             starts = place_in_rooms(plan, settings, build_geometry(scenario), base_floor, scenario.exits,
                                     radius, placement_metadata if placement_metadata is not None else {}, layout)
@@ -282,11 +288,15 @@ def editor_to_scenario(plan: dict, settings: dict, starting_population=None, pla
         raise ValueError("Walls or furniture leave disconnected areas or passages too narrow for people")
     if starting_population is not None:
         resolved = _reuse_people(scenario, starting_population, settings)
-        if settings["distribution"] == "rooms" and placement_metadata is not None:
+        if settings["distribution"] in ("rooms", "normal") and placement_metadata is not None:
             from app.services.population.placement import describe_existing
             describe_existing(plan,settings,resolved,placement_metadata)
         return resolved
-    if settings["distribution"] == "rooms":
+    if settings["distribution"] == "normal":
+        from app.services.population.normal import place_normally
+        starts = place_normally(plan,settings,walkable,base_floor,exits,radius,
+            placement_metadata if placement_metadata is not None else {},pixel_to_metres)
+    elif settings["distribution"] == "rooms":
         from app.services.population.placement import place_in_rooms
         starts = place_in_rooms(plan, settings, walkable, base_floor, exits, radius,
                                 placement_metadata if placement_metadata is not None else {})
@@ -303,7 +313,7 @@ def _reuse_people(scenario, reference, settings):
             or reference.seed != settings.get("seed", POPULATION_SEED)
             or not math.isclose(reference.radius, scenario.agent_defaults.radius, abs_tol=1e-9)):
         raise ValueError("Baseline population settings differ. Keep occupancy, seed, distribution, walking profile and body width unchanged, or clear the baseline.")
-    if settings["distribution"] == "rooms" and (reference.population_config or PopulationConfig()).model_dump() != PopulationConfig.model_validate(settings.get("population_config") or {}).model_dump():
+    if settings["distribution"] in ("rooms", "normal") and (reference.population_config or PopulationConfig()).model_dump() != PopulationConfig.model_validate(settings.get("population_config") or {}).model_dump():
         raise ValueError("Baseline room placement settings differ. Keep room types, counts and activity unchanged, or clear the baseline.")
     data = scenario.model_dump()
     data.update(occupants=[person.model_dump() for person in reference.occupants], population=None)

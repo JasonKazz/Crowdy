@@ -15,7 +15,8 @@ export type PlanRoom = {id: string; label: string; room_type: RoomType; polygon:
 export type RoomSummary = {id: string; label: string; room_type: RoomType; source: string; area: number;
   usable_area: number; count: number; fixed: boolean; rings: Point[][]};
 export type PopulationPreview = {key: string; radius: number; people: Point[];
-  rooms: RoomSummary[]; buildingType?: string; activity?: string; warnings: string[]};
+  rooms: RoomSummary[]; buildingType?: string; activity?: string; warnings: string[];
+  displayPeople?: Point[]; facingAngles?: number[]; seatedCount?: number; circulatingCount?: number};
 export const ACTIVITY_LABELS: Record<typeof ACTIVITIES[number], string> = {
   auto: "Automatic activity", workday: "Workday · at desks", meeting: "Meeting time", lunch: "Lunch / break",
   class_time: "During class", passing_period: "Between classes", assembly: "Assembly", event: "Event in progress",
@@ -75,7 +76,9 @@ export function placementKey(plan: FloorPlan, scenario: Scenario, baseline?: Sim
 export function adaptPopulationPreview(payload: unknown, plan: FloorPlan, key: string): PopulationPreview {
   if (!payload || typeof payload !== "object") throw new Error("The placement service returned unreadable data.");
   const value = payload as {radius: number; occupants: {position: number[]}[]; room_population?: {
-    rooms: RoomSummary[]; building_type: string; activity: string; warnings: string[]}};
+    rooms: RoomSummary[]; building_type: string; activity: string; warnings: string[];
+    normal_placements?: {seat_position:number[];standing_position:number[];facing:number[];kind:string}[];
+    seated_count?:number;circulating_count?:number}};
   if (!Number.isFinite(value.radius) || value.radius <= 0 || !Array.isArray(value.occupants) ||
       value.occupants.some(p => !p || !Array.isArray(p.position) || p.position.length !== 2 || p.position.some(n => !Number.isFinite(n))))
     throw new Error("The placement service returned invalid starting positions.");
@@ -92,7 +95,16 @@ export function adaptPopulationPreview(payload: unknown, plan: FloorPlan, key: s
   const people = value.occupants.map(({position: [x, y]}) => transform ?
     {x: x * transform.pixels_per_metre + transform.offset_x, y: transform.offset_y - y * transform.pixels_per_metre} :
     {x: x * 32, y: 600 - y * 32});
-  return {key, radius: value.radius, people, rooms: value.room_population?.rooms ?? [],
+  const poses = summary?.normal_placements;
+  if (poses && (!Array.isArray(poses) || poses.length !== people.length || poses.some(p=>
+      !p || !Array.isArray(p.seat_position) || p.seat_position.length!==2 || p.seat_position.some(n=>!Number.isFinite(n)) ||
+      !Array.isArray(p.facing) || p.facing.length!==2 || p.facing.some(n=>!Number.isFinite(n)))))
+    throw new Error("The placement service returned invalid seating poses.");
+  const displayPeople = poses?.map(p=>transform ?
+    {x:p.seat_position[0]*transform.pixels_per_metre+transform.offset_x,y:transform.offset_y-p.seat_position[1]*transform.pixels_per_metre} :
+    {x:p.seat_position[0]*32,y:600-p.seat_position[1]*32});
+  return {key, radius: value.radius, people, displayPeople, facingAngles:poses?.map(p=>Math.atan2(-p.facing[1],p.facing[0])),
+    seatedCount:summary?.seated_count,circulatingCount:summary?.circulating_count, rooms: value.room_population?.rooms ?? [],
     buildingType: value.room_population?.building_type, activity: value.room_population?.activity,
     warnings: value.room_population?.warnings ?? []};
 }

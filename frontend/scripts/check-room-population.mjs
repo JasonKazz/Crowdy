@@ -52,5 +52,30 @@ if(process.env.ROOM_POPULATION_HTTP==='1') {
   assert.deepEqual((await closedResponse.json()).occupants,work.occupants);
   const invalid=await post('/api/populations',{plan,scenario:{...scenario,population:{roomCounts:{missing:7}}}});
   assert.equal(invalid.status,422);
-  console.log('Room placement HTTP checks passed: real imports, workday/lunch counts, fixed counts, closure stability and identical preview/run starts.');
+  const normalScenario={occupancy:24,mobility:'standard',distribution:'normal',seed:42,behaviorMode:'behavioral'};
+  const normalResponse=await post('/api/populations',{plan:SAMPLE_PLAN,scenario:normalScenario});
+  assert.equal(normalResponse.status,200);
+  const normal=await normalResponse.json();
+  assert.equal(normal.room_population.seated_count,21);
+  assert.equal(normal.room_population.circulating_count,3);
+  const normalRunResponse=await post('/api/simulations',{plan:SAMPLE_PLAN,scenario:normalScenario});
+  assert.equal(normalRunResponse.status,200);
+  const normalRun=await normalRunResponse.json();
+  assert.deepEqual(normalRun.scenario.occupants,normal.occupants);
+  assert.equal(normalRun.routing.mode,'adaptive');
+  assert.equal(normalRun.summary.evacuated_count,24);
+  const randomResponse=await post('/api/populations',{plan:SAMPLE_PLAN,scenario:{...normalScenario,distribution:'uniform'}});
+  assert.equal(randomResponse.status,200);
+  assert.notDeepEqual((await randomResponse.json()).occupants,normal.occupants);
+  console.log('Room/Normal/Random HTTP checks passed: imports, counts, exact physical starts, immediate response and adaptive run metadata.');
 }
+
+const normalRequest=simulationRequest({plan:SAMPLE_PLAN,scenario:{...scenario,distribution:'normal'}});
+assert.equal(normalRequest.scenario.distribution,'normal');
+const seated=adaptPopulationPreview({radius:.23,occupants:[{position:[4,5]}],room_population:{rooms:[{id:'office',label:'Office',room_type:'office',count:1,rings:[]}],warnings:[],seated_count:1,circulating_count:0,
+ normal_placements:[{seat_position:[4.1,5.1],standing_position:[4,5],facing:[0,1],kind:'sofa'}]}},SAMPLE_PLAN,'normal');
+assert.deepEqual(seated.people,[{x:128,y:440}]);
+assert.deepEqual(seated.displayPeople,[{x:4.1*32,y:600-5.1*32}]);
+assert.equal(seated.facingAngles[0],-Math.PI/2);
+assert.equal(seated.seatedCount,1);
+console.log('Normal placement contracts passed: separate seated display poses and physical standing starts.');

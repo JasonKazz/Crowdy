@@ -15,7 +15,7 @@ const POSITION_TOLERANCE = 1e-6;
 
 type JsonRecord = Record<string, unknown>;
 type Occupant = { id: string; position: [number, number] };
-type Assignment = { agentId: string; exitId: string | null };
+type Assignment = { agentId: string; exitId: string | null; initialExitId?: string | null };
 type Evacuation = { agentId: string; exitId: string; time: number };
 type Frame = { time: number; agents: { id: string; x: number; y: number }[] };
 
@@ -127,9 +127,9 @@ export function adaptBackendSimulation(
   let behaviorVersion: number | undefined;
   if (result.behavior !== undefined) {
     const behavior = record(result.behavior, "behavior");
-    if (behavior.version !== 1 || behavior.mode !== requestedMode || behavior.seed !== (inputScenario.seed ?? 42))
+    if (![1,2].includes(behavior.version as number) || behavior.mode !== requestedMode || behavior.seed !== (inputScenario.seed ?? 42))
       invalid("behavior settings differ from the requested scenario");
-    behaviorVersion = 1;
+    behaviorVersion = behavior.version as number;
     for (const value of array(behavior.agents, "agent behaviors")) {
       const person = record(value, "agent behavior");
       const id = identifier(person.agent_id, "behavior agent ID");
@@ -137,7 +137,7 @@ export function adaptBackendSimulation(
       const factor = finite(person.speed_factor, "speed factor", 0);
       const speed = finite(person.desired_speed, "desired speed", 0);
       if (!occupantsById.has(id) || behaviorById.has(id) || !speed ||
-          delay > 12 || factor < .85 || factor > 1.15 ||
+          (behavior.version === 2 ? delay !== 0 : delay > 12) || factor < .85 || factor > 1.15 ||
           (requestedMode === "idealized" && (delay !== 0 || factor !== 1)))
         invalid("agent behavior is inconsistent");
       const original = record(array(backendScenario.occupants, "occupants").find(value => record(value,"occupant").id === id), "occupant");
@@ -221,9 +221,10 @@ export function adaptBackendSimulation(
         return { agentId: agentId(assignment.agent_id), exitId: null };
       }
       finite(assignment.route_length, "route length", 0);
-      const exit = exitId(assignment.exit_id);
-      if (blocked.has(exit)) invalid("an agent was assigned to a blocked exit");
-      return { agentId: agentId(assignment.agent_id), exitId: exit };
+      const initialExit = exitId(assignment.exit_id);
+      const exit = assignment.final_exit_id === undefined ? initialExit : exitId(assignment.final_exit_id);
+      if (blocked.has(initialExit) || blocked.has(exit)) invalid("an agent was assigned to a blocked exit");
+      return { agentId: agentId(assignment.agent_id), exitId: exit, initialExitId: initialExit };
     },
   );
   const assignmentsById = new Map(assignments.map((assignment) => [assignment.agentId, assignment]));
@@ -231,6 +232,25 @@ export function adaptBackendSimulation(
     invalid("every occupant must have exactly one assignment");
   const trappedIds = new Set(assignments.filter(a => a.exitId === null).map(a => a.agentId));
   if (trappedIds.size !== trapped) invalid("trapped assignments do not match the summary");
+
+  const exitChanges: NonNullable<SimulationResult["exitChanges"]> = [];
+  if (result.routing !== undefined) {
+    const routing = record(result.routing,"routing");
+    if (routing.version !== 1 || routing.mode !== (requestedMode === "behavioral" ? "adaptive" : "fixed")) invalid("routing mode differs from the request");
+    const choices = new Map(assignments.map(a=>[a.agentId,a.initialExitId ?? a.exitId]));
+    const lastChanges = new Map<string,number>();
+    for (const raw of array(routing.exit_changes,"exit changes")) {
+      const event = record(raw,"exit change");
+      const id = agentId(event.agent_id), from = exitId(event.from_exit_id), to = exitId(event.to_exit_id);
+      const time = finite(event.time,"exit change time",0);
+      if (routing.mode !== "adaptive" || choices.get(id) !== from || from === to || blocked.has(to) ||
+          time > totalTime + TIME_TOLERANCE || time - (lastChanges.get(id) ?? -Infinity) < 5 - TIME_TOLERANCE ||
+          finite(event.estimated_seconds_saved,"estimated queue saving",0) <= 0) invalid("inconsistent congestion rerouting event");
+      choices.set(id,to);lastChanges.set(id,time);
+      exitChanges.push({agentId:id,fromExitId:from,toExitId:to,time});
+    }
+    for (const assignment of assignments) if (choices.get(assignment.agentId) !== assignment.exitId) invalid("final exit differs from the recorded exit changes");
+  }
 
   const evacuations: Evacuation[] = array(result.evacuations, "evacuations").map(
     (value) => {
@@ -342,6 +362,7 @@ export function adaptBackendSimulation(
       points: samples.map((sample) => sample.point),
       samples,
       assignedExitId: assignmentsById.get(occupant.id)!.exitId ?? undefined,
+      initialAssignedExitId: assignmentsById.get(occupant.id)!.initialExitId ?? undefined,
       outcome: event ? "evacuated" : trappedIds.has(occupant.id) ? "trapped" : "moving",
       exitId: event?.exitId ?? null,
       duration: event?.time ?? totalTime,
@@ -380,6 +401,7 @@ export function adaptBackendSimulation(
     status,
     clearanceTime,
     perExitCounts,
+    exitChanges,
     exitWidths,
     ...(exitZones === undefined ? {} : {exitZones}),
   };

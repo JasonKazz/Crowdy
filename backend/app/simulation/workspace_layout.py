@@ -69,6 +69,7 @@ def native_to_editor(data, strict=True):
                 exit_regions.append(door)
     transform = projection(layout)
     pixels = lambda points: [pixel_point(point, transform) for point in points]
+    from app.services.population.furniture import furniture_kind
     items = []
     for region in layout.furniture:
         points = pixels(region.polygon)
@@ -76,8 +77,8 @@ def native_to_editor(data, strict=True):
         width, height = max(p["x"] for p in points) - x, max(p["y"] for p in points) - y
         if width <= 0 or height <= 0:
             raise ValueError(f"Furniture '{region.id}' has no area")
-        items.append({"id": region.id, "label": region.id[:80],
-                      "kind": "desk" if "desk" in region.id.lower() else "obstacle",
+        items.append({"id": region.id, "label": (layout.furniture_labels.get(region.id) or region.id)[:80],
+                      "kind": furniture_kind(region.id,layout.furniture_labels.get(region.id,"")),
                       "x": x, "y": y, "width": width, "height": height,
                       "polygon": [{"x": (p["x"] - x) / width, "y": (p["y"] - y) / height} for p in points]})
     furniture_ids = {region.id for region in layout.furniture}
@@ -137,6 +138,7 @@ def editor_native_layout(plan):
         furniture.append(Region(id=item["id"], polygon=[world_point(
             item["x"] + p["x"] * item["width"], item["y"] + p["y"] * item["height"], transform) for p in points]))
     layout.furniture = furniture
+    layout.furniture_labels.update({item["id"]:item["label"] for item in plan["items"]})
     layout.occupants = []
     layout.population = Population(count=1, seed=42, spawn_area_ids=[r.id for r in layout.walkable_areas])
     return layout, transform

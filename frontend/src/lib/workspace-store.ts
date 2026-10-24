@@ -3,9 +3,9 @@ import {validPlanRooms, validPopulationSettings} from "./room-population.ts";
 
 export const SAMPLE_WORKSPACE_ID = "berkeley-studio";
 export const DEFAULT_SCENARIO: Scenario = {
-  occupancy: 80,
+  occupancy: 24,
   mobility: "standard",
-  distribution: "rooms",
+  distribution: "normal",
   behaviorMode: "idealized",
   bodyWidth: .46,
 };
@@ -45,6 +45,7 @@ const itemKinds = new Set([
   "sofa",
   "plant",
   "obstacle",
+  "chair",
 ]);
 
 function fail(message: string): never {
@@ -209,7 +210,7 @@ function validScenario(value: unknown): value is Scenario {
     value.occupancy >= 1 &&
     value.occupancy <= 200 &&
     (value.mobility === "standard" || value.mobility === "mixed") &&
-    (value.distribution === "uniform" || value.distribution === "workstations" || value.distribution === "rooms") &&
+    (value.distribution === "uniform" || value.distribution === "workstations" || value.distribution === "rooms" || value.distribution === "normal") &&
     (value.population === undefined || validPopulationSettings(value.population)) &&
     (value.behaviorMode === undefined || value.behaviorMode === "idealized" || value.behaviorMode === "behavioral") &&
     (value.bodyWidth === undefined || (finite(value.bodyWidth) && value.bodyWidth >= .4 && value.bodyWidth <= .7)) &&

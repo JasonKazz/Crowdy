@@ -87,10 +87,10 @@ assert.equal(
 );
 assert.equal(
   getWorkspace(ownerA, first.id).scenario.occupancy,
-  80,
+  24,
   "A supplied scenario is cloned",
 );
-DEFAULT_SCENARIO.occupancy = 80;
+DEFAULT_SCENARIO.occupancy = 24;
 const listed = listWorkspaces(ownerA);
 listed[0].plan.items[0].label = "Changed outside the store";
 assert.equal(getWorkspace(ownerA, first.id).plan.items[0].label, "Desk");

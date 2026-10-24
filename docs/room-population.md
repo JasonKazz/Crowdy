@@ -1,43 +1,41 @@
-# Room-aware population placement
+# Starting placement and evacuation choices
 
-Import a floor plan, keep **Rooms & activity · automatic**, and run. Building type and activity default to Auto. The extraction keeps readable room labels and semantic room polygons. Small/compact plans infer room use locally from those labels; their geometry response deliberately stays within Claude's structured-output grammar budget. The staged global structure pass can also return `building_type` and `room_classifications` (`room_type:room_id` strings on the provider wire). Unknown uses stay editable.
+Choose **Normal** for people at chairs, desks, meeting tables and couches, with a small circulating group. Choose **Random** to scatter people across clear, reachable floor space. Total occupancy and seed remain adjustable. Building/activity menus are no longer required. Legacy `rooms` and `workstations` API distributions remain supported, but the UI migrates those saved choices to Normal.
 
-The backend clips room observations to the floor, gives overlapping polygons deterministic ownership, and limits room zones to known physical partitions. Complete wall centerlines, with their known door cuts temporarily closed for zoning only, can recover enclosed spaces omitted by vision. Remaining floor is shown as Other/open space. This does not add walls, invent doors, or establish that extraction matches the image. The compact and staged prompts now explicitly inventory all room labels and inspect each room for visible interior door openings. Missing door geometry still needs correction. A detected interior opening can be narrowed at a known adjacent wall face by at most two processed-image pixels per jamb (and 5% of its width per jamb). This only corrects endpoint roundoff; it never removes walls or clears furniture/middle-of-opening obstructions. The correction is recorded for review.
+## Normal placement
 
-## Controls
+Visible individual chairs supply observed seat anchors. Desks, tables and couches supply inferred seating positions when chairs are absent; these assumptions are disclosed in the UI. The built-in sample uses the chair locations drawn by its renderer and the fronts of its couches. Usable desk positions are prioritized before additional furniture seats. Seat candidates must have a clear standing position connected to a physical exit, maintain the configured body clearance and respect optional room counts.
 
-**Building type** is an optional override: automatic, office, school, venue, residential, or other. **Time / activity** supports automatic selection, workday, meeting time, lunch/break, during class, between classes, assembly, event, residential daytime and residential evening. These are illustrative activity weights, not clock-based schedules or measured occupancies. The detected building picks a default activity. Selecting another activity weights usable room area by room use; it does not infer total building occupancy.
+The default target is 90% seated/at desks and 10% circulating for crowds of at least five. This is an editable scene assumption, not a measured occupancy estimate. If there are too few usable seats, remaining occupants circulate and a warning reports the shortage. The algorithm does not invent more chairs to fill the crowd. Reduce occupancy or correct missing furniture for a mostly seated scene. Individual small chairs are treated as movable seating rather than fixed obstacles; tables, couches, grouped seating blocks and other large barriers remain solid. This simplification applies to both evacuation modes.
 
-Set total occupancy (1–200), then optionally edit each room's type or people count. A changed room count is fixed; the remaining people are apportioned among automatic rooms. Zero is a valid fixed count. Auto beside a fixed room releases that override. Reset rooms clears count and type overrides. If fixed counts exceed the current total, the UI raises the total, up to the 200-person limit. Direct API requests with counts above total are rejected. If every usable room is fixed, fixed counts must equal total. No person is silently moved from a full fixed room into another room.
+**The layout preview shows pre-alarm seated poses. Run begins at adjacent clear standing positions. Sit-to-stand motion is not simulated.** The preview API returns these physical standing starts as `occupants`, plus separate `normal_placements` display poses. The same plan/settings give exactly the same preview occupants and initial native run occupants.
 
-Unknown room types and room-use guesses remain visible. Rooms with no body-clear route to any physical exit receive no automatically placed occupants and produce a review warning. Blocking exits for a scenario does not affect this initial physical reachability check or reshuffle the crowd. An all-blocked scenario can therefore trap the same starting people. A room count on unusable space fails with a room-specific error.
+Room labels/types and automatic room zoning remain available. Expand **Adjust room counts (optional)** to change a room count or type. Fixed counts reserve that room's share of total occupancy; automatic placements use the remaining share. A physically full/unreachable fixed room produces a specific error rather than moving its people into another room. Room type changes label metadata in Normal mode; they do not impose activity weighting.
 
-## One placement path
+`POST /api/populations` proxies to `POST /api/populations/preview`. Use `scenario.distribution: "normal"` or `"uniform"` (Random). Optional `population_config.room_counts` and `room_types` use room IDs. The old activity settings remain accepted only for legacy room-weighted requests. Both current UI modes use the backend for placement previews, with debounce, cancellation and stale-response guards. Saved baselines retain their exact physical starting people.
 
-`POST /api/populations` forwards to `POST /api/populations/preview`. It accepts the same plan/scenario as Run and returns explicit occupants, radius, and room summaries/rings/counts. The same `editor_to_scenario` placement path supplies Run. Seed, geometry, body width, room configuration and total occupancy therefore produce identical preview and initial run positions. Furniture and wall edits are included. The browser debounces changes and cancels obsolete preview requests; stale positions are hidden rather than displayed on changed geometry.
+## Evacuation modes
 
-The Python API's scenario adds `distribution: "rooms"` and optional `population_config`:
+**Direct · nearest exit** starts immediately at base walking speeds and retains each person's initially nearest reachable exit. It is not a globally optimal evacuation solver.
 
-```json
-{
-  "building_type": "auto",
-  "activity": "lunch",
-  "room_counts": {"meeting-room": 12},
-  "room_types": {"meeting-room": "meeting"}
-}
-```
+**Natural · avoids crowded exits** starts immediately, varies intrinsic walking speeds by an illustrative ±15%, and reconsiders exits once per simulation second. It estimates route travel time plus doorway queue service time. People consider switching when at least three other assigned occupants are near their doorway; an alternative must save at least 1.5 estimated seconds and 20% of estimated remaining time. People within one metre of their chosen exit or already outside its threshold keep that exit. A five-second cooldown and three-switch limit reduce back-and-forth choices. Alternatives must have a body-clear route and cannot be blocked exits. Native JuPedSim still determines every movement and collision.
 
-The frontend stores equivalent camelCase `scenario.population` fields. Semantic rooms and placement settings persist in account-scoped browser workspaces and JSON exports. Existing workspaces without these fields retain their original uniform/workstation setting. New imports and new workspaces default to rooms. Matched comparisons freeze room configuration along with the starting people; changing activity/counts requires clearing the baseline.
+The native response records initial route assignments, final exit IDs and timestamped congestion switches. Frontend validation checks the switch chain, closures and cooldown; playback preserves the measured native frames. The results show how many people changed exits. These queue estimates are illustrative, not calibrated predictions of human decision-making, and need not improve every run.
 
-## Real-time limits
+**Sideways squeezing is not implemented.** Directional ellipses are a visual representation. JuPedSim's current collision-free-speed model and Crowdy's route clearance still use a circular body with a default 46 cm diameter. A physically narrower sideways posture requires independently oriented body geometry, collision checks and routing through narrow gaps; shrinking a radius or rotating only the drawing would not implement it.
 
-Placement previews update without running an evacuation. At Run, the backend computes a complete trajectory and returns it for playback. Changes to walls, furniture or exits during playback are not injected into that recorded run. Streaming simulation would need a persistent session, timed commands, route updates when an exit changes, safe handling of an obstacle moved onto a person, and a WebSocket/SSE connection. This change does not implement that session lifecycle or larger-population scaling.
+## Extraction and scale
 
-## Checks
+Image observations retain furniture labels so desks, tables, sofas and clear individual chairs can be classified for seating. Native geometry stays authoritative in metres. Chairs omitted or merged by vision cannot be treated as verified observed seats. Furniture-edge seats and room-use labels remain reviewable assumptions; this change does not establish an image extraction accuracy benchmark. Scale still follows the existing detected/estimated/manual calibration flow.
 
-- Backend: `python -m unittest discover -s tests -v`.
-- Frontend contracts: `npm run test:room-population` and `npm run test:workspaces`.
-- Both local services: `ROOM_POPULATION_HTTP=1 npm run test:room-population` checks real JSON import, workday/lunch redistribution, count overrides, closure stability and exact preview/run starting positions.
-- Import `examples/room_aware_office.json` for a measured two-room example. Compare Workday and Lunch, set a fixed room count, then run.
+The earlier bounded door-jamb correction remains: an interior opening may narrow at a known neighboring wall face by at most two processed-image pixels and 5% of width per jamb. It does not remove walls or clear furniture obstructions.
 
-The live Claude office-image smoke check recovered eight labeled activity regions. Its scale evidence conflicted, so it correctly requested a measurement rather than silently accepting an estimate. A separate geometry/placement smoke check used an explicitly assumed 20 m image width; this is not a verified measurement or extraction-accuracy benchmark.
+## Live interaction limits
+
+Editing furniture, walls, counts or seed updates the initial placement preview. Run computes a full native trajectory for playback. Edits during playback do not enter that recorded simulation. True live edits still require a persistent simulation session and command stream.
+
+## Validation
+
+Run `python -m unittest discover -s tests -v` from `backend/`. The Normal placement tests check renderer seat anchors, observed chair labels, solid major furniture, body-clear standing starts, exact preview/run occupants, count reservations, repeatability and overflow warnings. The congestion fixture uses a 0.8 m west doorway and a second east exit; tests verify actual exit switches, event consistency, cooldown, closure handling, bounded displacement, body separation and geometry clearance.
+
+Frontend checks include `npm run test:room-population`, `test:backend-simulation`, `test:workspaces`, TypeScript, ESLint and real HTTP proxy checks. The browser sample uses 24 people so Normal placement can be mostly seated. Import `examples/room_aware_office.json` to test a separate two-room native layout.

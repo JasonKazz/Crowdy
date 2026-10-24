@@ -75,7 +75,7 @@ export function validatePlan(value: unknown): FloorPlan {
       typeof item.label !== "string" ||
       !item.label.trim() ||
       item.label.length > 80 ||
-      !["desk", "table", "shelf", "sofa", "plant", "obstacle"].includes(
+      !["desk", "table", "shelf", "sofa", "plant", "obstacle", "chair"].includes(
         item.kind,
       ) ||
       !finite(item.x, item.y, item.width, item.height) ||

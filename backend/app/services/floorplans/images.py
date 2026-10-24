@@ -303,6 +303,7 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
         name=drawing.name or "Extracted floor plan", source_image=source, extraction=info,
         walkable_areas=floors,
         furniture=furniture, walls=walls, doors=doors,
+        furniture_labels={item.id:item.label for item in drawing.furniture},
         exits=exits,
         rooms=[region(item) for item in drawing.rooms],
         room_labels={item.id: item.label for item in drawing.rooms},

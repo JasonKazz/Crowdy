@@ -10,7 +10,7 @@ export function simulationRequest(input: Record<string, unknown>) {
       scenario.occupancy < 1 ||
       scenario.occupancy > 200 ||
       !["standard", "mixed"].includes(scenario.mobility) ||
-      !["uniform", "workstations", "rooms"].includes(scenario.distribution) ||
+      !["uniform", "workstations", "rooms", "normal"].includes(scenario.distribution) ||
       (scenario.behaviorMode !== undefined && !["idealized", "behavioral"].includes(scenario.behaviorMode)) ||
       (scenario.bodyWidth !== undefined && (typeof scenario.bodyWidth !== "number" || !Number.isFinite(scenario.bodyWidth) || scenario.bodyWidth < .4 || scenario.bodyWidth > .7)) ||
       (scenario.seed !== undefined && (!Number.isInteger(scenario.seed) || scenario.seed < 0 || scenario.seed > 4294967295))

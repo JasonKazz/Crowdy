@@ -57,8 +57,7 @@ counter, or built-in structure does not make it walkable: retain that physical b
 Distinguish that from decorative hatching on open floor, text, dimensions, and door arcs.
 Preserve individual desk footprints when their boundaries are visible. Solid units that
 touch may share an edge; do not invent aisles between touching desks, and do not fill
-real aisles with a bounding rectangle around a whole cluster. Small movable chairs and
-decorative plants are optional; substantial tables, desks, counters, storage and sofas
+real aisles with a bounding rectangle around a whole cluster. Keep clearly visible individual chairs as separate labeled Chair footprints so seated starting positions can be identified. Do not merge chairs with their table. Decorative plants are optional; substantial tables, desks, counters, storage and sofas
 are the priority. Do not substitute small chairs for missing major furniture.
 Thin internal seams on a tabletop do not create smaller desks: trace each complete
 physical tabletop. Inspect staggered/overlapping-looking pairs carefully; a second

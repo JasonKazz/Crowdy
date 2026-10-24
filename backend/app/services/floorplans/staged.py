@@ -143,7 +143,9 @@ bedroom, restroom, storage, unknown. Use unknown when room use is ambiguous.
 """
 DETAILS = """STAGE: high-resolution local detail. This image is an overlapping crop of a larger plan.
 Extract ALL visible substantial furniture footprints, including EVERY table in repeated banquet
-rows, counters, cabinets, storage and sofas. Small chairs are optional. Never replace multiple
+rows, counters, cabinets, storage and sofas. Label desks, tables, sofas and clearly visible
+individual chairs distinctly for seat placement. Keep isolated clear chair footprints; dense
+rows may omit tiny chairs to preserve tables and walls within the detail budget. Never replace multiple
 separate tables and their aisles with one large rectangle. Ignore colored marker circles.
 Include furniture crossing the crop edge as accurately as visible; report clipped objects.
 For repeated ROUND TABLES, use round_table_rows: one record per straight regular row,

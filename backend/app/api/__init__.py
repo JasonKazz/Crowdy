@@ -128,7 +128,7 @@ class NativeView(InputModel):
 class EditorItem(InputModel):
     id: str = Field(min_length=1, max_length=128)
     label: str = Field(min_length=1, max_length=80)
-    kind: Literal["desk", "table", "shelf", "sofa", "plant", "obstacle"]
+    kind: Literal["desk", "table", "shelf", "sofa", "plant", "obstacle", "chair"]
     x: float = Field(ge=0, le=900)
     y: float = Field(ge=0, le=600)
     width: float = Field(gt=0, le=900)
@@ -193,7 +193,7 @@ class EditorPlan(InputModel):
 class EditorSettings(InputModel):
     occupancy: int = Field(ge=1, le=200)
     mobility: Literal["standard", "mixed"]
-    distribution: Literal["uniform", "workstations", "rooms"]
+    distribution: Literal["uniform", "workstations", "rooms", "normal"]
     seed: int = Field(default=42, ge=0, le=2**32 - 1)
     blocked_exit_ids: list[str] = Field(default_factory=list, max_length=30)
     behavior_mode: Literal["idealized", "behavioral"] = "idealized"
@@ -205,7 +205,7 @@ class StartingPopulation(InputModel):
     occupants: list[Occupant] = Field(min_length=1, max_length=200)
     radius: float = Field(gt=0)
     mobility: Literal["standard", "mixed"]
-    distribution: Literal["uniform", "workstations", "rooms"]
+    distribution: Literal["uniform", "workstations", "rooms", "normal"]
     seed: int = Field(ge=0, le=2**32 - 1)
     population_config: PopulationConfig | None = None
 

@@ -12,7 +12,7 @@ export type PlanItem = {
   y: number;
   width: number;
   height: number;
-  kind: "desk" | "table" | "shelf" | "sofa" | "plant" | "obstacle";
+  kind: "desk" | "table" | "shelf" | "sofa" | "plant" | "obstacle" | "chair";
   polygon?: Point[];
 };
 export type Wall = { x1: number; y1: number; x2: number; y2: number };
@@ -40,7 +40,7 @@ export type FloorPlan = {
 export type Scenario = {
   occupancy: number;
   mobility: "standard" | "mixed";
-  distribution: "uniform" | "workstations" | "rooms";
+  distribution: "uniform" | "workstations" | "rooms" | "normal";
   population?: PopulationSettings;
   seed?: number;
   blockedExitIds?: string[];
@@ -56,6 +56,7 @@ export type AgentPath = {
   exitId: string | null;
   /** Intended exit; unlike exitId, this does not imply an evacuation. */
   assignedExitId?: string;
+  initialAssignedExitId?: string;
   outcome?: "evacuated" | "trapped" | "moving";
   /** Final simulation time at which this person passes the exit. */
   duration: number;
@@ -99,6 +100,7 @@ export type SimulationResult = {
   clearanceTime?: number | null;
   perExitCounts?: Record<string, number>;
   exitWidths?: Record<string, number>;
+  exitChanges?: {agentId:string;fromExitId:string;toExitId:string;time:number}[];
   /** Compiled target strips for this run's body size, in canvas coordinates. */
   exitZones?: {id: string; polygon: Point[]}[];
 };
