@@ -156,8 +156,8 @@ function validPlan(value: unknown): value is FloorPlan {
       !finite(item.height) ||
       item.x < 0 ||
       item.y < 0 ||
-      item.width < 8 ||
-      item.height < 8 ||
+      item.width < (value.native ? .001 : 8) ||
+      item.height < (value.native ? .001 : 8) ||
       item.x + item.width > 900 ||
       item.y + item.height > 600
     )
@@ -206,7 +206,8 @@ function validScenario(value: unknown): value is Scenario {
     value.occupancy >= 10 &&
     value.occupancy <= 200 &&
     (value.mobility === "standard" || value.mobility === "mixed") &&
-    (value.distribution === "uniform" || value.distribution === "workstations")
+    (value.distribution === "uniform" || value.distribution === "workstations") &&
+    (value.seed === undefined || (finite(value.seed) && Number.isInteger(value.seed) && value.seed >= 0 && value.seed <= 4294967295))
   );
 }
 
@@ -217,6 +218,7 @@ function copyPlan(plan: FloorPlan): FloorPlan {
     width: plan.width,
     height: plan.height,
     area: plan.area,
+    ...(plan.native ? {native: structuredClone(plan.native)} : {}),
     items: plan.items.map((item) => ({
       id: item.id,
       label: item.label,
@@ -225,6 +227,7 @@ function copyPlan(plan: FloorPlan): FloorPlan {
       width: item.width,
       height: item.height,
       kind: item.kind,
+      ...(item.polygon ? {polygon: structuredClone(item.polygon)} : {}),
     })),
     walls: plan.walls.map((wall) => ({
       x1: wall.x1,
@@ -246,6 +249,7 @@ function copyScenario(scenario: Scenario): Scenario {
     occupancy: scenario.occupancy,
     mobility: scenario.mobility,
     distribution: scenario.distribution,
+    ...(scenario.seed === undefined ? {} : {seed: scenario.seed}),
   };
 }
 

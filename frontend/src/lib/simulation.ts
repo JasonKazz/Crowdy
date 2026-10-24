@@ -12,6 +12,7 @@ export type PlanItem = {
   width: number;
   height: number;
   kind: "desk" | "table" | "shelf" | "sofa" | "plant" | "obstacle";
+  polygon?: Point[];
 };
 export type Wall = { x1: number; y1: number; x2: number; y2: number };
 export type Exit = { id: string; label: string; x: number; y: number };
@@ -24,11 +25,19 @@ export type FloorPlan = {
   items: PlanItem[];
   walls: Wall[];
   exits: Exit[];
+  native?: {
+    layout: Record<string, unknown>;
+    transform: {pixels_per_metre: number; offset_x: number; offset_y: number};
+    floors: Point[][];
+    walls: Point[][];
+    exit_zones: {id: string; polygon: Point[]}[];
+  };
 };
 export type Scenario = {
   occupancy: number;
   mobility: "standard" | "mixed";
   distribution: "uniform" | "workstations";
+  seed?: number;
 };
 export type AgentPath = {
   id: number;

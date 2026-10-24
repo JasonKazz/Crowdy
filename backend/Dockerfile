@@ -16,7 +16,9 @@ COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir --only-binary=:all: -r requirements.txt
 
 COPY app ./app
-RUN useradd --create-home --uid 10001 crowdy
+RUN useradd --create-home --uid 10001 crowdy \
+    && mkdir -p /srv/crowdy/data/editor \
+    && chown -R crowdy:crowdy /srv/crowdy/data
 USER crowdy
 
 EXPOSE 8000

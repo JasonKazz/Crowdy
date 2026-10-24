@@ -1,4 +1,8 @@
 # Crowdy
+
+## Integrated app
+
+The Next.js workspace and the current JuPedSim backend run together. See [integration setup and checks](docs/integration.md) for the two-terminal startup, supported imports, and remaining UI limitations. The standalone layout editor below is also available for detailed wall and door corrections.
 Interactive evacuation planning from furnished floor plans, with editable layouts, scenario-based occupancy, crowd simulation, and before-and-after comparisons. Built at Cal Hacks 13.0.
 
 ## Frontend
@@ -7,9 +11,7 @@ Live demo: https://crowdy-calhacks13.vercel.app
 
 The Next.js app lives in `frontend/` and uses TypeScript, Tailwind CSS, ESLint, and the App Router. Use Node.js 20.9 or newer.
 
-Auth0 provides sign-in, account creation, and sign-out. For local setup, configure the ignored `frontend/.env.local` using `frontend/.env.example` and the instructions in [frontend/README.md](frontend/README.md). Keep an existing onboarding-generated environment file.
-
-The home page uses one workspace list. Berkeley studio appears for everyone with a **Sample** tag, alongside personal workspaces for signed-in users. Personal workspaces are saved per account in the current browser; the shared sample always opens with its original layout. Workspaces include furniture editing, scenario controls, playback, density overlays, and baseline comparisons. Runs use the Python JuPedSim backend through a same-origin Next.js API. Image/PDF floor-plan interpretation is not connected.
+The workspace includes furniture editing, scenario controls, playback, density overlays, and baseline comparisons. The simulation is an illustrative browser-local model; backend analysis and image/PDF interpretation are not connected yet.
 
 ```sh
 cd frontend
@@ -19,42 +21,31 @@ npm run dev
 
 Open http://localhost:3000. Run `npm run lint` to check the code and `npm run build` to create a production build.
 
-## Backend
-
-Use Python 3.12. From the repository root, create a local environment and start the FastAPI service:
-
-```sh
-python3.12 -m venv backend/.venv
-backend/.venv/bin/python -m pip install -r backend/requirements.txt
-cd backend
-.venv/bin/python -m uvicorn app.api:app --host 127.0.0.1 --port 8000
-```
-
-Run the frontend in a second terminal. During development, its API defaults to `http://127.0.0.1:8000`. Override this with `CROWDY_BACKEND_URL` in `frontend/.env.local` when needed. Both processes must be running for simulations.
-
-| Frontend endpoint | Backend endpoint | Purpose |
-| --- | --- | --- |
-| `GET /api/simulations` | `GET /health` | Check the simulation service |
-| `POST /api/simulations` | `POST /api/simulations` | Run an editor `{ plan, scenario }` snapshot |
-
-The frontend proxy validates the editor request and forwards it to FastAPI. The backend converts canvas geometry to meters, generates the population, and runs JuPedSim's Collision Free Speed Model. Playback uses returned trajectory timestamps and evacuation events. A time-limited run reports people remaining and no clearance time; it is not a completed evacuation. These model results are not a safety assessment.
+## Backend structure
 
 ```text
 backend/app/
 ├── api/
 ├── schemas/
 ├── services/
-│   └── population/
-└── simulation/
+│   ├── floorplans/
+│   ├── population/
+│   ├── scenarios/
+│   └── analysis/
+├── simulation/
+├── worker/
+└── storage/
 examples/
 docs/
 ```
 
+Unused backend directories retain `.gitkeep` placeholders.
+
 ## Local configuration
 
-Next.js loads `frontend/.env.local`. The Python service reads its process environment; it does not automatically load the repository's `.env`. The root `.env.example` is a template for container or hosting configuration. An optional `CROWDY_BACKEND_TOKEN` must have the same value on the Python service and the Next.js server; the proxy sends it as a bearer token. Keep this token and `CROWDY_BACKEND_URL` server-side, without a `NEXT_PUBLIC_` prefix.
+Copy `.env.example` to `.env` in the repository root and update it locally. `.env` files, credentials, uploads, local databases, and generated results are ignored by Git. Commit only placeholder values in `.env.example`.
 
-Environment files, credentials, uploads, local databases, and generated results are ignored by Git. Commit only placeholders.
+The local editor loads image-provider keys and model names from the repository root `.env` with existing process variables taking precedence. Other `CROWDY_*` variables remain proposed configuration. Data paths are relative to `backend/`.
 
 ## Local simulation
 
@@ -71,19 +62,56 @@ The original `simple_room.json` and commands without arguments still work. Resul
 
 A scenario supplies either explicit `occupants` or `population` settings. The latter contains `count`, `seed`, and `spawn_area_ids` referencing walkable-area IDs. Placement is uniform within the selected connected area, excluding furniture and exit zones, with clearance between bodies and boundaries. It does not infer activities or seating. The saved result includes the resolved starting positions and the generation settings.
 
-Agents choose an exit once, by shortest routed distance to an interior target point in each exit zone. This accounts for obstacles but does not optimize for congestion or dynamically change destinations. The result records initial `assignments`, departure `evacuations`, and `summary.per_exit_counts`. `clearance_time` is null if anyone remains at the time limit.
+Agents choose an available exit using routes that leave room for their full body radius around walls and furniture. A visibility graph on the clearance geometry supplies safe corners; look-ahead steering follows the route while JuPedSim handles local movement and interactions. Routes are checked before simulation, so a point-sized gap cannot silently trap people. Exit choice is fixed for the run and does not optimize congestion. Results include planned paths in `assignments`, exterior-door `door_crossings`, final `evacuations`, and per-exit counts. `building_clearance_time` records when the last full body crosses the building boundary; `clearance_time` records arrival in the thin evacuation strip just outside the doorway and is null if anyone remains. The strip starts one body radius plus 2 cm beyond the wall, so the full person must clear the doorway.
 
 The example uses meters, with x increasing right and y increasing up. The current geometry validator requires one connected walkable polygon; population placement also requires one connected spawn polygon.
 
-## Deployment
+## Blocked-exit comparison
 
-The frontend is deployed separately to Vercel; see [frontend/README.md](frontend/README.md#deploy-to-vercel). A hosted backend URL has not been configured by this change. Production simulations require a reachable Python service and the server-only `CROWDY_BACKEND_URL` setting in Vercel. Set the same optional `CROWDY_BACKEND_TOKEN` on both services.
+From `backend/`, compare the same starting population with both exits available and with the east exit unavailable:
 
-The backend includes a Python 3.12 Docker image using published native wheels. Use Linux x86-64: [JuPedSim 1.4.2](https://pypi.org/project/jupedsim/1.4.2/#files) publishes a CPython 3.12 Linux wheel for that architecture. From the repository root:
-
-```sh
-docker build --platform linux/amd64 -t crowdy-backend backend
-docker run --platform linux/amd64 --rm -p 8000:8000 crowdy-backend
+```bash
+python -m app.simulation.compare_exits ../examples/two_exit_room.json --block-exit exit-east
+python -m app.simulation.animate data/two_exit_room_baseline_result.json
+python -m app.simulation.animate data/two_exit_room_blocked_result.json
+open data/two_exit_room_baseline_animation.html
+open data/two_exit_room_blocked_animation.html
 ```
 
-The container listens on `0.0.0.0:${PORT:-8000}` and supports `--env-file .env` for local configuration. A Python web-service host can instead install `backend/requirements.txt` and run `uvicorn app.api:app --host 0.0.0.0 --port "$PORT"` from `backend/` ([Render's FastAPI guide](https://render.com/docs/deploy-fastapi)). Keep the backend private or configure its shared token when exposing it publicly. The browser communicates with the Next.js origin, so a separate browser CORS allowlist is not required for this proxy setup.
+This writes two result snapshots and `data/two_exit_room_comparison.json`. The comparison resolves the population once and reuses the exact IDs, positions, geometry, speeds, and time settings. The clearance-time difference is only reported when both runs evacuate everyone. Repeating a comparison for the same input filename replaces its previous comparison files.
+
+For an individual run, set `settings.blocked_exit_ids` to a list of exit IDs. Unknown IDs, duplicate IDs, and blocking every exit are rejected. Closure means the exit is unavailable as a destination for the entire simulation; it does not remove its landing from the floor or model a physical barricade, changing hazard, or timed closure. People choose among the available exits at the start. Playback shows blocked exit zones in red and counts departures per exit.
+
+## Local layout editor
+
+The backend includes a standalone browser page for testing layout edits against the real Python simulator. Manual JSON editing needs no API keys. Image extraction uses Gemini, Claude, or both; no running Next.js app or JavaScript dependencies are needed.
+
+From `backend/`, with the Python environment activated:
+
+```bash
+python -m app.simulation.editor
+```
+
+Open http://127.0.0.1:8765 and leave the terminal running. Press Ctrl+C to stop the editor. If that port is already in use, add `--port 8766` and open the matching address.
+
+The example office has furniture, an interior partition with a sliding door opening, and two exits. Drag furniture, walls, and exits; drag a door along its parent wall. The inspector edits object size and position, wall endpoints and thickness, and door width. Add/remove objects, undo/redo, preview seeded people with **Check layout**, and choose **Run simulation** followed by **Open animation**. Invalid geometry is reported before simulation.
+
+**Export editable layout** saves unfinished work as JSON. **Import JSON** accepts editable layouts or the existing scenario examples. To start with another file:
+
+```bash
+python -m app.simulation.editor ../examples/two_exit_room.json
+```
+
+Each run saves `layout.json`, `scenario.json`, `result.json`, and `playback.html` in a separate `backend/data/editor/<run_id>/` directory. Existing saved files remain after restarting; run links are available during the current server session. Source examples are never overwritten. See [the editor guide](docs/layout-editor.md) for the geometry format and limitations.
+
+The canvas offers Select/Move, Resize, Rotate, Vertices, Pan, drawing furniture and walls, placing doors and exits, zoom, layers/locks, duplicate/delete, and undo/redo. Floors start locked. **Check layout** can display the planned routes. Green evacuation strips sit immediately outside their doorways. People disappear after their full body clears the wall; they do not walk to the far side of an invented outside hallway. Previously saved exterior-geometry settings remain readable, but do not move the evacuation strip.
+
+Run the Python checks with `python -m unittest discover -s tests -v`. Node checks: `node tests/editor_geometry.test.cjs`, `node tests/editor_startup.test.cjs`, `node tests/editor_image_tools.test.cjs`, and `node tests/editor_population.test.cjs`. `examples/narrow_table_regression.json` preserves the 40 starting people from the formerly stuck table layout. The browser defaults to automatic placement so People and Seed are editable; to inspect the exact regression positions, disable automatic placement and import this JSON. Backend simulation commands and API imports preserve fixed positions.
+
+## Start from an image
+
+Install the updated requirements with `python -m pip install -r requirements.txt` from `backend/`. Put real `GEMINI_API_KEY` and `ANTHROPIC_API_KEY` values in the root `.env` and restart the editor. `.env.example` contains placeholders and configurable `GEMINI_MODEL`/`ANTHROPIC_MODEL` defaults. The page shows configured/missing status, never key values.
+
+Choose **Upload floor plan image** (PNG, JPEG, or WebP, up to 10 MiB), enter a known distance in meters, and choose **Mark two points to set scale**. Click the two ends of that distance on the image. Choose a provider and **Extract layout**, or **Compare both models** to make one request to each provider. Inspect the candidates, choose a layout, and adjust its walls, doors, furniture, floor corners, and exits over the image before checking and simulating it. Room labels are observations; population placement remains uniform.
+
+Both providers receive the same resized PNG. Extractions and geometry warnings are saved separately; neither a faster response nor a passed geometry check establishes extraction accuracy. Scale must be confirmed before simulation, and unrecognized exterior exits must be added manually. See [image extraction details](docs/image-extraction.md).

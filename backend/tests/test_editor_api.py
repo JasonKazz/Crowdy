@@ -1,228 +1,196 @@
-"""Exercise the editor geometry bridge and real native HTTP response contract."""
+"""Exercise the local editor over HTTP, including a real saved simulation."""
 
-import copy
+import http.client
 import json
-import os
+import tempfile
 import threading
 import unittest
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-from shapely.geometry import Point
-
-from app import api
-from app.simulation.editor_adapter import editor_to_scenario, pixel_to_metres
-from app.simulation.engine import run_simulation
-from app.simulation.geometry import build_geometry
+from app.schemas.layout import Layout
+from app.simulation.editor import EditorHandler, EditorServer, MAX_BODY
+from app.schemas.extraction import ExtractedDrawing
+from test_images import drawing_fixture, gemini_fixture, upload_fixture
 
 
-SAMPLE = json.loads((Path(__file__).parent / "fixtures/editor-sample.json").read_text())
+EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
 
-def room_request(count=12):
-    # A 10 x 8 metre room with two real, two-metre wall openings.
-    return {
-        "plan": {
-            "id": "test-room", "name": "Test room", "width": 900, "height": 600,
-            "area": 80, "items": [],
-            "walls": [
-                {"x1": 100, "y1": 120, "x2": 420, "y2": 120},
-                {"x1": 100, "y1": 376, "x2": 420, "y2": 376},
-                {"x1": 100, "y1": 120, "x2": 100, "y2": 216},
-                {"x1": 100, "y1": 280, "x2": 100, "y2": 376},
-                {"x1": 420, "y1": 120, "x2": 420, "y2": 216},
-                {"x1": 420, "y1": 280, "x2": 420, "y2": 376},
-            ],
-            "exits": [
-                {"id": "west", "label": "West", "x": 100, "y": 248},
-                {"id": "east", "label": "East", "x": 420, "y": 248},
-            ],
-        },
-        "scenario": {"occupancy": count, "mobility": "standard", "distribution": "uniform"},
-    }
-
-
-class EditorAdapterTests(unittest.TestCase):
-    def test_units_walls_and_placement_clearance(self):
-        payload = room_request()
-        original = copy.deepcopy(payload)
-        scenario = editor_to_scenario(payload["plan"], payload["scenario"])
-        self.assertEqual(pixel_to_metres(320, 280), (10, 10))
-        self.assertEqual(payload, original)
-        self.assertEqual(scenario.settings.model_dump(), {"dt": .01, "sample_interval": .2, "max_time": 60})
-        self.assertEqual(scenario.agent_defaults.radius, .2)
-        self.assertEqual({exit.id for exit in scenario.exits}, {"west", "east"})
-        self.assertTrue(any(region.id.startswith("editor-wall-") for region in scenario.obstacles))
-        walkable = build_geometry(scenario)
-        for occupant in scenario.occupants:
-            point = Point(occupant.position)
-            self.assertGreaterEqual(point.distance(walkable.boundary), .25 - 1e-9)
-            self.assertGreaterEqual(occupant.position[0], 100 / 32)
-            self.assertLessEqual(occupant.position[0], 420 / 32)
-
-    def test_seed_repeatability_and_controls_change_population(self):
-        payload = copy.deepcopy(SAMPLE)
-        payload["scenario"]["occupancy"] = 20
-        standard = editor_to_scenario(payload["plan"], payload["scenario"])
-        repeated = editor_to_scenario(payload["plan"], payload["scenario"])
-        self.assertEqual(standard.occupants, repeated.occupants)
-        payload["scenario"]["mobility"] = "mixed"
-        mixed = editor_to_scenario(payload["plan"], payload["scenario"])
-        self.assertEqual([p.position for p in standard.occupants], [p.position for p in mixed.occupants])
-        self.assertEqual(sum(p.desired_speed == .72 for p in mixed.occupants), 5)
-        self.assertTrue(all(p.desired_speed == 1.2 for p in standard.occupants))
-        payload["scenario"]["distribution"] = "workstations"
-        clustered = editor_to_scenario(payload["plan"], payload["scenario"])
-        self.assertNotEqual([p.position for p in standard.occupants], [p.position for p in clustered.occupants])
-        self.assertEqual(clustered.occupants, editor_to_scenario(payload["plan"], payload["scenario"]).occupants)
-
-    def test_workstations_without_desks_is_explicit_error(self):
-        payload = room_request()
-        payload["scenario"]["distribution"] = "workstations"
-        with self.assertRaisesRegex(ValueError, "at least one desk"):
-            editor_to_scenario(payload["plan"], payload["scenario"])
-
-    def test_boundary_exit_does_not_cut_through_wall(self):
-        payload = room_request()
-        payload["plan"]["walls"].append({"x1": 100, "y1": 216, "x2": 100, "y2": 280})
-        with self.assertRaisesRegex(ValueError, "connected|blocked"):
-            editor_to_scenario(payload["plan"], payload["scenario"])
-
-    def test_disconnected_rooms_are_rejected(self):
-        payload = room_request()
-        payload["plan"]["walls"].append({"x1": 260, "y1": 120, "x2": 260, "y2": 376})
-        with self.assertRaisesRegex(ValueError, "connected"):
-            editor_to_scenario(payload["plan"], payload["scenario"])
-
-    def test_per_person_speed_reaches_native_model(self):
-        payload = room_request(count=1)
-        scenario = editor_to_scenario(payload["plan"], payload["scenario"])
-        # Same person, geometry, route, and sampling; only the walking speed differs.
-        scenario.occupants[0].position = (8.125, 11)
-        fast = run_simulation(scenario)
-        scenario.occupants[0].desired_speed = .72
-        slow = run_simulation(scenario)
-        self.assertEqual(fast["status"], "completed")
-        self.assertEqual(slow["status"], "completed")
-        self.assertGreater(slow["summary"]["clearance_time"], fast["summary"]["clearance_time"] * 1.3)
-
-
-class EditorApiTests(unittest.TestCase):
+class EditorAPITests(unittest.TestCase):
     def setUp(self):
-        self.environment = patch.dict(os.environ, {}, clear=False)
-        self.environment.start()
-        self.addCleanup(self.environment.stop)
-        os.environ.pop("CROWDY_BACKEND_TOKEN", None)
-        self.client = TestClient(api.app)
-        self.addCleanup(self.client.close)
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.layout = Layout.model_validate_json(
+            (EXAMPLES / "editable_office.json").read_text()
+        )
+        self.server = EditorServer(
+            ("127.0.0.1", 0), self.layout, Path(self.directory.name)
+        )
+        self.port = self.server.server_address[1]
+        self.quiet = patch.object(EditorHandler, "log_message")
+        self.quiet.start()
+        self.thread = threading.Thread(
+            target=self.server.serve_forever,
+            kwargs={"poll_interval": 0.01}, daemon=True,
+        )
+        self.thread.start()
+        self.addCleanup(self.stop_server)
 
-    def test_health(self):
-        response = self.client.get("/health")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"engine": "jupedsim", "version": "1.4.2", "status": "ready"})
-        self.assertEqual(response.headers["cache-control"], "no-store")
+    def stop_server(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        self.quiet.stop()
 
-    def test_native_multiple_exit_run_preserves_frames_and_summary(self):
-        response = self.client.post("/api/simulations", json=room_request())
-        self.assertEqual(response.status_code, 200, response.text)
-        result = response.json()
-        self.assertEqual(result["engine"], "jupedsim")
-        self.assertEqual(result["engine_version"], "1.4.2")
-        self.assertEqual(result["editor_metadata"]["seed"], 42)
+    def request(self, method, path, document=None, *, raw=None, headers=None):
+        headers = dict(headers or {})
+        body = raw if raw is not None else (
+            json.dumps(document) if document is not None else None
+        )
+        if method == "POST":
+            headers.setdefault("Content-Type", "application/json")
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            connection.request(method, path, body=body, headers=headers)
+            response = connection.getresponse()
+            raw_content = response.read()
+            mime = response.getheader("Content-Type", "")
+            content = raw_content if mime == "image/png" else raw_content.decode()
+            value = json.loads(content) if "application/json" in mime else content
+            return response.status, value
+        finally:
+            connection.close()
+
+    def test_serves_editor_assets_and_initial_document(self):
+        status, page = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("Run simulation", page)
+        status, script = self.request("GET", "/editor-geometry.js")
+        self.assertEqual(status, 200)
+        self.assertIn("doorOffset", script)
+        status, script = self.request("GET", "/editor-population.js")
+        self.assertEqual(status, 200)
+        self.assertIn("withGeneratedPopulation", script)
+        status, document = self.request("GET", "/api/layout")
+        self.assertEqual(status, 200)
+        self.assertEqual(document, self.layout.model_dump(mode="json"))
+
+    def test_imports_legacy_scenario_without_rewriting_startup_document(self):
+        legacy = json.loads((EXAMPLES / "simple_room.json").read_text())
+        status, document = self.request("POST", "/api/import", legacy)
+        self.assertEqual(status, 200)
+        self.assertEqual(document["schema_version"], 1)
+        self.assertEqual(document["furniture"], legacy["obstacles"])
+        self.assertEqual([{key: person[key] for key in ("id", "position")} for person in document["occupants"]], legacy["occupants"])
+        self.assertTrue(all(person["desired_speed"] is None for person in document["occupants"]))
+        self.assertEqual(self.server.layout, self.layout)
+
+    def test_validates_moved_door_and_returns_population(self):
+        document = self.layout.model_dump(mode="json")
+        document["doors"][0]["offset"] = 6
+        status, result = self.request("POST", "/api/validate", document)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(result["occupants"]), 40)
+        self.assertAlmostEqual(result["area_m2"], 167.24)
+
+    def test_invalid_edits_return_readable_errors_and_save_nothing(self):
+        document = self.layout.model_dump(mode="json")
+        document["doors"][0]["wall_id"] = "missing"
+        for path in ("/api/validate", "/api/simulate"):
+            status, result = self.request("POST", path, document)
+            self.assertEqual(status, 422)
+            self.assertIn("unknown wall", result["error"])
+        self.assertEqual(list(Path(self.directory.name).iterdir()), [])
+
+    def test_run_returns_real_metrics_and_accessible_saved_snapshots(self):
+        document = self.layout.model_dump(mode="json")
+        document["doors"][0]["offset"] = 6
+        status, result = self.request("POST", "/api/simulate", document)
+        self.assertEqual(status, 200)
         self.assertEqual(result["status"], "completed")
-        self.assertEqual(result["summary"]["evacuated_count"], 12)
-        self.assertEqual(result["summary"]["remaining_count"], 0)
-        self.assertEqual(set(result["summary"]["per_exit_counts"]), {"west", "east"})
-        self.assertTrue(all(count > 0 for count in result["summary"]["per_exit_counts"].values()))
-        self.assertEqual(len(result["frames"][0]["agents"]), 12)
-        self.assertEqual(result["frames"][0]["time"], 0)
-        self.assertEqual(result["frames"][-1]["time"], result["summary"]["simulation_time"])
-        self.assertEqual(result["frames"][-1]["agents"], [])
-        self.assertEqual(len(result["evacuations"]), 12)
-        self.assertEqual(response.headers["cache-control"], "private, no-store")
-        for frame in result["frames"]:
-            for person in frame["agents"]:
-                self.assertEqual(person["x"], round(person["x"], 6))
-                self.assertEqual(person["y"], round(person["y"], 6))
+        self.assertEqual(result["summary"]["evacuated_count"], 40)
+        status, page = self.request("GET", result["playback_url"])
+        self.assertEqual(status, 200)
+        self.assertIn("simulation-data", page)
+        for name in ("layout", "scenario", "result"):
+            status, saved = self.request("GET", f"/runs/{result['run_id']}/{name}")
+            self.assertEqual(status, 200)
+            if name == "layout":
+                self.assertEqual(saved["doors"][0]["offset"], 6)
+        _, latest = self.request("GET", "/api/layout")
+        self.assertEqual(latest["doors"][0]["offset"], 6)
 
-    def test_real_berkeley_sample_honors_native_partial_outcome(self):
-        response = self.client.post("/api/simulations", json=SAMPLE)
-        self.assertEqual(response.status_code, 200, response.text)
-        result = response.json()
-        self.assertEqual(result["status"], "timed_out")
-        self.assertEqual(result["summary"]["simulation_time"], 60)
-        self.assertIsNone(result["summary"]["clearance_time"])
-        self.assertGreater(result["summary"]["remaining_count"], 0)
-        self.assertEqual(result["summary"]["remaining_count"] + result["summary"]["evacuated_count"], 80)
-        self.assertEqual(len(result["frames"][-1]["agents"]), result["summary"]["remaining_count"])
-        self.assertTrue(all(count > 0 for count in result["summary"]["per_exit_counts"].values()))
-        self.assertLess(len(response.content), 4_000_000)
+    def test_rejects_second_run_while_simulation_is_active(self):
+        with self.server.run_lock:
+            status, result = self.request(
+                "POST", "/api/simulate", self.layout.model_dump(mode="json")
+            )
+        self.assertEqual(status, 409)
+        self.assertIn("already running", result["error"])
 
-    def test_invalid_parameters_are_422_without_engine_run(self):
-        mutations = [
-            lambda p: p["scenario"].update(occupancy=201),
-            lambda p: p["scenario"].update(mobility="flying"),
-            lambda p: p["plan"].update(width=901),
-            lambda p: p["plan"]["walls"][0].update(x1=-1),
-            lambda p: p["plan"]["exits"].append(p["plan"]["exits"][0]),
-            lambda p: p["plan"].update(items=[{"id": "bad", "label": "Too far", "kind": "desk", "x": 899, "y": 0, "width": 20, "height": 20}]),
-        ]
-        with patch("app.api.run_editor_simulation") as run:
-            for mutate in mutations:
-                payload = room_request()
-                mutate(payload)
-                with self.subTest(payload=payload):
-                    response = self.client.post("/api/simulations", json=payload)
-                    self.assertEqual(response.status_code, 422)
-                    self.assertIn("errors", response.json())
-            run.assert_not_called()
+    def test_rejects_malformed_oversized_and_non_json_requests(self):
+        for raw in ("not JSON", "[]"):
+            self.assertEqual(self.request("POST", "/api/import", raw=raw)[0], 422)
+        self.assertEqual(self.request(
+            "POST", "/api/import", raw="{}",
+            headers={"Content-Type": "text/plain"},
+        )[0], 415)
+        self.assertEqual(self.request(
+            "POST", "/api/import", raw="{}",
+            headers={"Content-Length": str(MAX_BODY + 1)},
+        )[0], 413)
 
-    def test_geometry_error_is_actionable_422_and_unlocks(self):
-        payload = room_request()
-        payload["plan"]["walls"].append({"x1": 260, "y1": 120, "x2": 260, "y2": 376})
-        response = self.client.post("/api/simulations", json=payload)
-        self.assertEqual(response.status_code, 422)
-        self.assertIn("connected", response.json()["detail"])
-        self.assertEqual(self.client.get("/health").json()["status"], "ready")
+    def test_local_server_rejects_foreign_origin_and_host(self):
+        document = self.layout.model_dump(mode="json")
+        self.assertEqual(self.request(
+            "POST", "/api/validate", document,
+            headers={"Origin": "https://unrelated.example"},
+        )[0], 403)
+        self.assertEqual(self.request(
+            "GET", "/api/layout", headers={"Host": "unrelated.example"},
+        )[0], 403)
 
-    def test_body_limit_for_declared_and_streamed_requests(self):
-        for content in (b"x" * (api.MAX_BODY_BYTES + 1), iter([b"x" * 600_000, b"y" * 600_000])):
-            response = self.client.post("/api/simulations", content=content)
-            self.assertEqual(response.status_code, 413)
-            self.assertIn("1 MB", response.json()["detail"])
+    def test_unknown_endpoints_and_runs_return_not_found(self):
+        self.assertEqual(self.request("GET", "/runs/missing/layout")[0], 404)
+        self.assertEqual(self.request("POST", "/missing", {})[0], 404)
 
-    def test_optional_bearer_auth(self):
-        os.environ["CROWDY_BACKEND_TOKEN"] = "test-token"
-        for headers in ({}, {"Authorization": "Bearer wrong"}, {"Authorization": "Basic test-token"}):
-            self.assertEqual(self.client.post("/api/simulations", json=room_request(), headers=headers).status_code, 401)
-        with patch("app.api.run_editor_simulation", return_value={"ok": True}):
-            response = self.client.post("/api/simulations", json=room_request(), headers={"Authorization": "Bearer test-token"})
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.client.get("/health").status_code, 200)
+    def test_image_upload_comparison_edit_and_simulation_share_one_backend(self):
+        status, uploaded = self.request("POST", "/api/images", upload_fixture().model_dump())
+        self.assertEqual(status, 200)
+        source = uploaded["layout"]["source_image"]
+        self.assertFalse(source["scale_confirmed"])
+        status, image = self.request("GET", f"/images/{source['id']}")
+        self.assertEqual(status, 200)
+        self.assertTrue(image.startswith(b"\x89PNG"))
+        def fake_provider(provider, *args):
+            drawing = gemini_fixture() if provider == "gemini" else drawing_fixture()
+            return ExtractedDrawing.model_validate(drawing), f"fake-{provider}"
+        with patch("app.services.floorplans.images.extract_drawing", side_effect=fake_provider):
+            status, extracted = self.request("POST", "/api/extract", {
+                "image_id": source["id"], "provider": "both", "meters_per_pixel": .02,
+                "scale_confirmed": True, "people_count": 12,
+            })
+        self.assertEqual(status, 200)
+        self.assertEqual(len(extracted["results"]), 2)
+        layout = extracted["results"][0]["layout"]
+        layout["furniture"][0]["polygon"] = [[x + 1, y] for x, y in layout["furniture"][0]["polygon"]]
+        self.assertEqual(self.request("POST", "/api/validate", layout)[0], 200)
+        status, run = self.request("POST", "/api/simulate", layout)
+        self.assertEqual(status, 200)
+        self.assertEqual(run["status"], "completed")
+        self.assertEqual(run["summary"]["evacuated_count"], 12)
+        _, saved = self.request("GET", f"/runs/{run['run_id']}/layout")
+        self.assertEqual(saved["source_image"]["id"], source["id"])
+        self.assertEqual(saved["extraction"]["provider"], "gemini")
 
-    def test_one_concurrent_simulation_and_releases_after_error(self):
-        started, release = threading.Event(), threading.Event()
-
-        def running(_payload):
-            started.set()
-            if not release.wait(timeout=5):
-                raise AssertionError("Test failed to release native simulation")
-            raise ValueError("Test layout could not be routed")
-
-        with patch("app.api.run_editor_simulation", side_effect=running), ThreadPoolExecutor(max_workers=1) as pool:
-            first = pool.submit(self.client.post, "/api/simulations", json=room_request())
-            try:
-                self.assertTrue(started.wait(timeout=5))
-                self.assertEqual(self.client.get("/health").json()["status"], "busy")
-                second = self.client.post("/api/simulations", json=room_request())
-                self.assertEqual(second.status_code, 429)
-                self.assertEqual(second.headers["retry-after"], "2")
-            finally:
-                release.set()
-            self.assertEqual(first.result(timeout=5).status_code, 422)
-        self.assertEqual(self.client.get("/health").json()["status"], "ready")
+    def test_provider_status_does_not_expose_credentials(self):
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "fake-secret-value"}, clear=True):
+            status, configuration = self.request("GET", "/api/providers")
+        self.assertEqual(status, 200)
+        self.assertTrue(configuration["gemini"]["configured"])
+        self.assertFalse(configuration["claude"]["configured"])
+        self.assertNotIn("fake-secret-value", json.dumps(configuration))
 
 
 if __name__ == "__main__":

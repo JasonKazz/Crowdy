@@ -51,6 +51,13 @@ const fixture = {
 const planInput = structuredClone(SAMPLE_PLAN);
 const scenarioInput = structuredClone(scenario);
 const result = adaptBackendSimulation(fixture, planInput, scenarioInput, 1234);
+const transformedPlan = structuredClone(planInput);
+transformedPlan.native = {transform:{pixels_per_metre:20,offset_x:100,offset_y:500},
+  layout:{},floors:[],walls:[],exit_zones:[]};
+const transformed = adaptBackendSimulation(fixture, transformedPlan, scenarioInput, 1234);
+assert.deepEqual(positionAt(transformed.agents[0],0),{x:140,y:300},"Native layouts must use their calibrated view transform");
+assert.deepEqual(positionAt(transformed.agents[1],4),{x:170,y:280});
+assert.equal(transformed.agents[0].duration,2.5,"Coordinate conversion must preserve native departure times");
 assert.equal(result.engine, "jupedsim");
 assert.equal(result.engineVersion, "1.4.2");
 assert.deepEqual(result.modelSettings, { dt: 0.01, sampleInterval: 0.2, maxTime: 60, seed: 42 });

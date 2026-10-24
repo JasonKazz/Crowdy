@@ -252,6 +252,18 @@ assert.equal(
   "The original browser layout must remain untouched",
 );
 
+const polygonPlan = structuredClone(plan);
+polygonPlan.items[0].polygon = [{x:0,y:0},{x:1,y:0},{x:.5,y:1}];
+polygonPlan.native = {layout:{name:"Source geometry"},transform:{pixels_per_metre:20,offset_x:0,offset_y:600},
+  floors:[[{x:0,y:0},{x:900,y:0},{x:900,y:600}]],walls:[],exit_zones:[]};
+const calibrated = createWorkspace(ownerB,{name:"Calibrated geometry",plan:polygonPlan,scenario:{...DEFAULT_SCENARIO,seed:7}});
+polygonPlan.native.layout.name="Changed outside saved workspace";
+polygonPlan.items[0].polygon[0].x=.2;
+const restored = getWorkspace(ownerB,calibrated.id);
+assert.equal(restored.scenario.seed,7);
+assert.equal(restored.plan.native.layout.name,"Source geometry");
+assert.equal(restored.plan.items[0].polygon[0].x,0,"Saving must preserve and clone furniture polygons");
+
 console.log(
   "Workspace checks passed: account isolation, sample protection, cloned inputs, update ordering, corruption preservation, storage failures, and change notifications.",
 );

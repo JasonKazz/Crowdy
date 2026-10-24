@@ -69,6 +69,11 @@ export function adaptBackendSimulation(
   inputScenario: Scenario,
   createdAt = Date.now(),
 ): SimulationResult {
+  const transform = inputPlan.native?.transform;
+  const toCanvas = (x: number, y: number): Point => transform ? {
+    x: finite(x * transform.pixels_per_metre + transform.offset_x, "converted agent x"),
+    y: finite(transform.offset_y - y * transform.pixels_per_metre, "converted agent y"),
+  } : pixelPoint(x, y);
   const result = record(payload, "result");
   if (result.engine !== "jupedsim") invalid("engine must be jupedsim");
   if (result.status !== "completed" && result.status !== "timed_out")
@@ -212,7 +217,7 @@ export function adaptBackendSimulation(
       // A removal event can coincide with the last frame containing that agent.
       if (evacuation && frame.time > evacuation.time + TIME_TOLERANCE)
         invalid("an evacuated agent reappears in a frame");
-      const point = pixelPoint(agent.x, agent.y);
+      const point = toCanvas(agent.x, agent.y);
       if (index === 0) {
         const original = occupantsById.get(agent.id)!.position;
         if (Math.abs(agent.x - original[0]) > POSITION_TOLERANCE || Math.abs(agent.y - original[1]) > POSITION_TOLERANCE)
@@ -220,15 +225,16 @@ export function adaptBackendSimulation(
       }
       samplesById.get(agent.id)!.push({ time: frame.time, point });
       // Fixed 2 m × 2 m cells, each with an area of 4 m².
-      const x = Math.floor(point.x / 64) * 64;
-      const y = Math.floor(point.y / 64) * 64;
+      const cellWidth = 2 * (transform?.pixels_per_metre ?? 32);
+      const x = Math.floor(point.x / cellWidth) * cellWidth;
+      const y = Math.floor(point.y / cellWidth) * cellWidth;
       const key = `${x},${y}`;
       const bin = bins.get(key) ?? { count: 0, x, y };
       bin.count++;
       bins.set(key, bin);
       if (bin.count / 4 > peakDensity) {
         peakDensity = bin.count / 4;
-        hotspot = { x: x + 32, y: y + 32 };
+        hotspot = { x: x + cellWidth / 2, y: y + cellWidth / 2 };
       }
     }
     for (const occupant of occupants) {

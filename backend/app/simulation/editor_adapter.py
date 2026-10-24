@@ -12,7 +12,7 @@ from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 from shapely.prepared import prep
 
-from app.schemas.scenario import Occupant, Region, Scenario
+from app.schemas.scenario import ExitBoundary, Occupant, Region, Scenario
 from app.simulation.geometry import build_geometry
 
 PIXELS_PER_METRE = 32.0
@@ -98,7 +98,11 @@ def _editor_geometry(plan: dict):
             landing = _along(origin, normal, -0.15, 1.5, 0.7)
             floor_parts.append(landing)
             areas.append(_region(f"editor-landing-{index}", landing))
-            stage = _along(origin, normal, 0.65, 1.15, 0.35)
+            stage = _along(origin, normal, AGENT_RADIUS + .02, AGENT_RADIUS + .20, .35)
+            # RoutePlanner reads the first edge as the cross-door threshold.
+            # Keep that edge tangent to the doorway, as the layout compiler does.
+            corners = list(stage.exterior.coords)[:-1]
+            stage = Polygon([corners[i] for i in (0, 3, 2, 1)])
             boundary_exits.append(BoundaryExit(exit["id"], exit["label"], origin, normal))
         else:
             if not base_floor.contains(Point(centre)):
@@ -128,7 +132,7 @@ def _editor_geometry(plan: dict):
     return base_floor, areas, obstacles, exits, boundary_exits
 
 
-def _positions(plan: dict, settings: dict, walkable, base_floor, exits):
+def _positions(plan: dict, settings: dict, walkable, base_floor, exits, convert=pixel_to_metres):
     spawn = walkable.intersection(base_floor)
     exit_buffer = unary_union([Polygon(exit.polygon) for exit in exits]).buffer(SPAWN_CLEARANCE)
     spawn = spawn.difference(exit_buffer)
@@ -139,14 +143,14 @@ def _positions(plan: dict, settings: dict, walkable, base_floor, exits):
     boundary = spawn.boundary
     count = settings["occupancy"]
     desks = [
-        pixel_to_metres(item["x"] + item["width"] / 2, item["y"] + item["height"] / 2)
+        convert(item["x"] + item["width"] / 2, item["y"] + item["height"] / 2)
         for item in sorted(plan["items"], key=lambda item: item["id"])
         if item["kind"] == "desk"
     ]
     clustered = settings["distribution"] == "workstations"
     if clustered and not desks:
         raise ValueError("Around workstations needs at least one desk; add a desk or choose Across the floor plan")
-    rng = random.Random(POPULATION_SEED)
+    rng = random.Random(settings.get("seed", POPULATION_SEED))
     min_x, min_y, max_x, max_y = base_floor.bounds
     positions = []
     for _ in range(max(5000, count * 400)):
@@ -170,6 +174,15 @@ def _positions(plan: dict, settings: dict, walkable, base_floor, exits):
 
 
 def editor_to_scenario(plan: dict, settings: dict) -> Scenario:
+    if plan.get("native"):
+        from app.services.floorplans.layout import compile_layout
+        from app.simulation.workspace_layout import editor_native_layout, world_point
+        layout, transform = editor_native_layout(plan)
+        scenario = compile_layout(layout)
+        base_floor = unary_union([Polygon(r.polygon) for r in layout.walkable_areas])
+        starts = _positions(plan, settings, build_geometry(scenario), base_floor, scenario.exits,
+                            convert=lambda x, y: world_point(x, y, transform))
+        return _with_people(scenario, starts, settings)
     base_floor, areas, obstacles, exits, boundary_exits = _editor_geometry(plan)
     # Population is a temporary schema-valid placeholder. Explicit starts below
     # let mixed walking profiles keep per-person model parameters.
@@ -179,6 +192,10 @@ def editor_to_scenario(plan: dict, settings: dict) -> Scenario:
         "walkable_areas": [region.model_dump() for region in areas],
         "obstacles": [region.model_dump() for region in obstacles],
         "exits": [region.model_dump() for region in exits],
+        "exit_boundaries": [ExitBoundary(id=exit.identifier,
+            start=(exit.origin[0] - exit.normal[1] * .7, exit.origin[1] + exit.normal[0] * .7),
+            end=(exit.origin[0] + exit.normal[1] * .7, exit.origin[1] - exit.normal[0] * .7),
+            outward=exit.normal, outside_space="open").model_dump() for exit in boundary_exits],
         "population": {"count": settings["occupancy"], "seed": POPULATION_SEED, "spawn_area_ids": ["editor-floor"]},
         "agent_defaults": {"radius": AGENT_RADIUS, "desired_speed": 1.2},
         "settings": {"dt": 0.01, "sample_interval": 0.2, "max_time": 60.0},
@@ -199,9 +216,13 @@ def editor_to_scenario(plan: dict, settings: dict) -> Scenario:
     if body_space.is_empty or body_space.geom_type != "Polygon":
         raise ValueError("Walls or furniture leave disconnected areas or passages too narrow for people")
     starts = _positions(plan, settings, walkable, base_floor, exits)
+    return _with_people(scenario, starts, settings)
+
+
+def _with_people(scenario, starts, settings):
     slower = set()
     if settings["mobility"] == "mixed":
-        slower = set(random.Random(POPULATION_SEED + 1).sample(range(len(starts)), math.ceil(len(starts) / 4)))
+        slower = set(random.Random(settings.get("seed", POPULATION_SEED) + 1).sample(range(len(starts)), math.ceil(len(starts) / 4)))
     occupants = [
         Occupant(id=f"p{index + 1:04d}", position=position, desired_speed=0.72 if index in slower else 1.2)
         for index, position in enumerate(starts)

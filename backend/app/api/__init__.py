@@ -8,15 +8,21 @@ import os
 import secrets
 import threading
 from importlib.metadata import version
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from app.schemas.scenario import InputModel
+from app.schemas.layout import Layout
+from app.schemas.extraction import ImageUpload, ExtractionRequest
+from app.services.floorplans.images import save_image, extract_image
+from app.services.floorplans.providers import load_environment, provider_status
+from app.simulation.workspace_layout import native_to_editor
 from app.simulation.editor_adapter import POPULATION_SEED, editor_to_scenario
 from app.simulation.engine import run_simulation
 
@@ -24,6 +30,8 @@ MAX_BODY_BYTES = 1_048_576
 ENGINE_VERSION = version("jupedsim")
 _simulation_lock = threading.Lock()
 logger = logging.getLogger(__name__)
+load_environment()
+_extraction_lock = threading.Lock()
 
 
 class BodyLimitMiddleware:
@@ -35,13 +43,14 @@ class BodyLimitMiddleware:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         headers = dict(scope.get("headers", []))
+        limit = 14 * 1024 * 1024 if scope.get("path") == "/api/floorplans" else self.limit
         try:
             declared = int(headers.get(b"content-length", b"0"))
         except ValueError:
             return await JSONResponse({"detail": "Invalid Content-Length"}, status_code=400)(scope, receive, send)
         if declared < 0:
             return await JSONResponse({"detail": "Invalid Content-Length"}, status_code=400)(scope, receive, send)
-        if declared > self.limit:
+        if declared > limit:
             return await self.too_large(scope, receive, send)
         body = bytearray()
         while True:
@@ -51,7 +60,7 @@ class BodyLimitMiddleware:
             if message["type"] != "http.request":
                 continue
             chunk = message.get("body", b"")
-            if len(body) + len(chunk) > self.limit:
+            if len(body) + len(chunk) > limit:
                 return await self.too_large(scope, receive, send)
             body.extend(chunk)
             if not message.get("more_body", False):
@@ -69,11 +78,30 @@ class BodyLimitMiddleware:
 
     async def too_large(self, scope, receive, send):
         response = JSONResponse(
-            {"detail": "Floor-plan request exceeds the 1 MB limit. Reduce the layout size and try again."},
+            {"detail": "Image request exceeds the 14 MB encoded limit. Choose an image up to 10 MB."
+             if scope.get("path") == "/api/floorplans" else
+             "Floor-plan request exceeds the 1 MB limit. Reduce the layout size and try again."},
             status_code=413,
             headers={"Cache-Control": "private, no-store"},
         )
         return await response(scope, receive, send)
+
+
+class NormalizedPoint(InputModel):
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+
+
+class ViewTransform(InputModel):
+    pixels_per_metre: float = Field(gt=0)
+    offset_x: float
+    offset_y: float
+
+
+class NativeView(InputModel):
+    model_config = ConfigDict(extra="ignore")
+    layout: Layout
+    transform: ViewTransform
 
 
 class EditorItem(InputModel):
@@ -82,8 +110,9 @@ class EditorItem(InputModel):
     kind: Literal["desk", "table", "shelf", "sofa", "plant", "obstacle"]
     x: float = Field(ge=0, le=900)
     y: float = Field(ge=0, le=600)
-    width: float = Field(ge=8, le=900)
-    height: float = Field(ge=8, le=600)
+    width: float = Field(gt=0, le=900)
+    height: float = Field(gt=0, le=600)
+    polygon: list[NormalizedPoint] | None = Field(default=None, min_length=3, max_length=300)
 
     @model_validator(mode="after")
     def within_canvas(self):
@@ -115,6 +144,7 @@ class EditorPlan(InputModel):
     items: list[EditorItem] = Field(max_length=200)
     walls: list[EditorWall] = Field(max_length=300)
     exits: list[EditorExit] = Field(min_length=1, max_length=20)
+    native: NativeView | None = None
 
     @model_validator(mode="after")
     def unique_ids(self):
@@ -129,6 +159,7 @@ class EditorSettings(InputModel):
     occupancy: int = Field(ge=1, le=200)
     mobility: Literal["standard", "mixed"]
     distribution: Literal["uniform", "workstations"]
+    seed: int = Field(default=42, ge=0, le=2**32 - 1)
 
 
 class SimulationRequest(InputModel):
@@ -172,17 +203,22 @@ def run_editor_simulation(payload: SimulationRequest):
             agent["y"] = round(agent["y"], 6)
     result["engine"] = "jupedsim"
     result["engine_version"] = ENGINE_VERSION
-    result["editor_metadata"] = {"seed": POPULATION_SEED, "walking_profile": settings["mobility"], "distribution": settings["distribution"], "pixels_per_metre": 32}
+    result["editor_metadata"] = {"seed": settings.get("seed", POPULATION_SEED), "walking_profile": settings["mobility"],
+        "distribution": settings["distribution"], "pixels_per_metre": plan["native"]["transform"]["pixels_per_metre"] if plan.get("native") else 32}
     return result
 
 
-@app.post("/api/simulations")
-async def simulate(payload: SimulationRequest, response: Response, authorization: str | None = Header(default=None)):
+def require_backend_token(authorization):
     expected_token = os.environ.get("CROWDY_BACKEND_TOKEN")
     if expected_token:
         scheme, _, supplied_token = (authorization or "").partition(" ")
         if scheme.lower() != "bearer" or not secrets.compare_digest(supplied_token.encode(), expected_token.encode()):
             raise HTTPException(status_code=401, detail="Backend authorization is required", headers={"WWW-Authenticate": "Bearer", "Cache-Control": "private, no-store"})
+
+
+@app.post("/api/simulations")
+async def simulate(payload: SimulationRequest, response: Response, authorization: str | None = Header(default=None)):
+    require_backend_token(authorization)
     if not _simulation_lock.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="A simulation is already running. Wait for it to finish and try again.", headers={"Retry-After": "2", "Cache-Control": "private, no-store"})
     try:
@@ -196,3 +232,48 @@ async def simulate(payload: SimulationRequest, response: Response, authorization
         raise HTTPException(status_code=500, detail="The JuPedSim engine could not complete this run. Review the layout or try again.", headers={"Cache-Control": "private, no-store"}) from exc
     finally:
         _simulation_lock.release()
+
+
+class FloorPlanImport(InputModel):
+    layout: dict | None = None
+    filename: str | None = None
+    image_base64: str | None = None
+    provider: Literal["gemini", "claude"] = "gemini"
+    image_width_m: float = Field(default=20, gt=0, le=1000)
+
+
+@app.get("/api/floorplans")
+def floorplan_providers(response: Response):
+    response.headers["Cache-Control"] = "private, no-store"
+    return provider_status()
+
+
+def import_floorplan(payload):
+    if payload.layout is not None:
+        return {"plan": native_to_editor(payload.layout), "warnings": []}
+    if not payload.filename or not payload.image_base64:
+        raise ValueError("Choose a backend layout JSON or a floor plan image")
+    root = Path(os.environ.get("CROWDY_STORAGE_DIR", "data")) / "editor"
+    source = save_image(ImageUpload(filename=payload.filename, image_base64=payload.image_base64), root)
+    result = extract_image(ExtractionRequest(image_id=source.id, provider=payload.provider,
+        meters_per_pixel=payload.image_width_m / source.width_px, scale_confirmed=True), root)["results"][0]
+    if "error" in result:
+        raise ValueError(result["error"])
+    return {"plan": native_to_editor(result["layout"]), "warnings": result.get("warnings", [])}
+
+
+@app.post("/api/floorplans")
+async def floorplan_import(payload: FloorPlanImport, response: Response, authorization: str | None = Header(default=None)):
+    require_backend_token(authorization)
+    if not _extraction_lock.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="A floor plan is already being imported. Please wait.")
+    try:
+        result = await run_in_threadpool(import_floorplan, payload)
+        response.headers["Cache-Control"] = "private, no-store"
+        return result
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)[:600]) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="Floor plan storage is unavailable. Check the backend data directory.") from exc
+    finally:
+        _extraction_lock.release()

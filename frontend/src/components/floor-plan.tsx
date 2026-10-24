@@ -67,6 +67,8 @@ function Chair({
 
 function Furniture({ item }: { item: PlanItem }) {
   const { width: w, height: h } = item;
+  if (item.polygon) return <polygon points={item.polygon.map(p=>`${p.x*w},${p.y*h}`).join(" ")}
+    fill="#dce2d7" stroke="#7f8d77" strokeWidth="1.2" />;
   if (item.kind === "plant") {
     const r = Math.min(w, h) / 2;
     return (
@@ -316,6 +318,8 @@ export default function FloorPlanView({
   const isSample = plan.id === "berkeley-studio";
   const viewWidth = plan.width || 900;
   const viewHeight = plan.height || 600;
+  const metre = plan.native?.transform.pixels_per_metre ?? 32;
+  const cellWidth = 2 * metre;
   const visiblePeople = result
     ? result.agents.flatMap((agent) => {
         const point = positionAt(agent, time);
@@ -330,8 +334,8 @@ export default function FloorPlanView({
   >();
   if (showDensity) {
     for (const { point } of visiblePeople) {
-      const x = Math.floor(point.x / 64) * 64;
-      const y = Math.floor(point.y / 64) * 64;
+      const x = Math.floor(point.x / cellWidth) * cellWidth;
+      const y = Math.floor(point.y / cellWidth) * cellWidth;
       const key = `${x},${y}`;
       const cell = densityCells.get(key) ?? { x, y, count: 0 };
       cell.count++;
@@ -496,6 +500,9 @@ export default function FloorPlanView({
               </text>
             </g>
           </>
+        ) : plan.native ? (
+          <g aria-label="Imported floor outline">{plan.native.floors.map((points,index)=><polygon key={index}
+            points={points.map(p=>`${p.x},${p.y}`).join(" ")} fill="#fbfcfa" stroke="#79866e" strokeWidth="1.5" />)}</g>
         ) : (
           <rect
             x="1"
@@ -522,8 +529,8 @@ export default function FloorPlanView({
                   key={key}
                   x={cell.x}
                   y={cell.y}
-                  width="64"
-                  height="64"
+                  width={cellWidth}
+                  height={cellWidth}
                   fill={color}
                   fillOpacity={0.12 + strength * 0.36}
                   stroke="#ffffff"
@@ -674,6 +681,8 @@ export default function FloorPlanView({
               y2={wall.y2}
             />
           ))}
+          {plan.native?.walls.map((points,index)=><polygon key={`native-${index}`} points={points.map(p=>`${p.x},${p.y}`).join(" ")}
+            fill="#65705f" strokeWidth="0" />)}
         </g>
 
         {isSample ? (
@@ -684,7 +693,8 @@ export default function FloorPlanView({
         ) : null}
 
         <g aria-label="Exits">
-          {plan.exits.map((exit) => {
+          {plan.native ? plan.native.exit_zones.map(zone=><polygon key={zone.id} points={zone.polygon.map(p=>`${p.x},${p.y}`).join(" ")}
+            fill="#b9dcc1" stroke="#4d7750" strokeWidth="1"><title>{zone.id}</title></polygon>) : plan.exits.map((exit) => {
             const left = exit.x < viewWidth / 2;
             return (
               <g key={exit.id}>
@@ -742,7 +752,7 @@ export default function FloorPlanView({
                 key={agent.id}
                 cx={point.x}
                 cy={point.y}
-                r="3.15"
+                r={plan.native ? metre * .2 : 3.15}
                 fill={
                   agent.id % 7 === 0
                     ? "#bb8e61"
@@ -759,7 +769,7 @@ export default function FloorPlanView({
         ) : null}
 
         <g
-          transform={`translate(96 ${viewHeight - 47})`}
+          transform={`translate(96 ${viewHeight - 47}) scale(${metre/32})`}
           fill="#67765d"
           fontSize="10"
           fontFamily="var(--font-ibm-mono), monospace"

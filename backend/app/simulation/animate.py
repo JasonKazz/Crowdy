@@ -4,8 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
+
 from app.schemas.scenario import Scenario
-from app.simulation.geometry import build_geometry
+from app.simulation.geometry import build_geometry, region_to_polygon
 
 
 HTML = r'''<!doctype html>
@@ -64,14 +67,17 @@ HTML = r'''<!doctype html>
         <option value="4">4×</option>
       </select>
     </div>
+    <div id="exit-counts" class="legend muted"></div>
     <div class="legend muted">Blue: people &nbsp; · &nbsp; Gray: furniture
-      &nbsp; · &nbsp; Green: exit &nbsp; · &nbsp; Distances in meters</div>
+      &nbsp; · &nbsp; Green: available exit &nbsp; · &nbsp; Red: blocked exit
+      &nbsp; · &nbsp; Distances in meters</div>
   </section>
 </main>
 <script id="simulation-data" type="application/json">__DATA__</script>
 <script>
 const data = JSON.parse(document.getElementById('simulation-data').textContent);
 const scenario = data.scenario;
+const blockedExits = new Set(scenario.settings.blocked_exit_ids || []);
 const frames = data.frames;
 const duration = frames[frames.length - 1].time;
 const exitedAt = new Map(data.evacuations.map(e => [e.agent_id, e.time]));
@@ -131,7 +137,8 @@ function render() {
   ctx.fillRect(0, 0, width, height);
 
   const boundary = data.geometry.boundary;
-  const xs = boundary.map(p => p[0]), ys = boundary.map(p => p[1]);
+  const visiblePoints = boundary.concat(scenario.exits.flatMap(exit => exit.polygon));
+  const xs = visiblePoints.map(p => p[0]), ys = visiblePoints.map(p => p[1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const padding = 30;
@@ -162,7 +169,14 @@ function render() {
   ctx.fillStyle = '#fff'; ctx.fill('evenodd');
   ctx.strokeStyle = '#46556b'; ctx.lineWidth = 2; ctx.stroke();
   scenario.obstacles.forEach(o => polygon(o.polygon, '#b7c2d2', '#70829a'));
-  scenario.exits.forEach(e => polygon(e.polygon, '#b4efcf', '#248258'));
+  (scenario.exit_boundaries || []).forEach(door => {
+    ctx.beginPath(); ctx.moveTo(...screen(...door.start)); ctx.lineTo(...screen(...door.end));
+    ctx.strokeStyle = blockedExits.has(door.id) ? '#dc2626' : '#b9e4ff';
+    ctx.lineWidth = Math.max(3, .08 * scale); ctx.stroke();
+  });
+  scenario.exits.forEach(e => polygon(e.polygon,
+    blockedExits.has(e.id) ? '#fecaca' : '#b4efcf',
+    blockedExits.has(e.id) ? '#b42318' : '#248258'));
 
   for (const agent of positionsAt(time)) {
     const [x, y] = screen(agent.x, agent.y);
@@ -176,6 +190,11 @@ function render() {
 
   const exited = data.evacuations.filter(e => e.time <= time).length;
   counts.textContent = `${scenario.occupants.length - exited} remaining · ${exited} exited`;
+  document.getElementById('exit-counts').textContent = scenario.exits.map(e => {
+    const count = data.evacuations.filter(event => event.exit_id === e.id && event.time <= time).length;
+    const label = blockedExits.has(e.id) ? ' (blocked)' : '';
+    return `${e.id}${label}: ${count} exited`;
+  }).join(' · ');
   clock.textContent = `${time.toFixed(2)} / ${duration.toFixed(2)} s`;
   timeline.value = duration > 0 ? Math.round(time / duration * 10000) : 0;
   play.textContent = playing ? 'Pause' : 'Play';
@@ -216,6 +235,29 @@ requestAnimationFrame(tick);
 </html>'''
 
 
+def render_html(result: dict) -> str:
+    """Render either saved or in-memory results without changing the caller's data."""
+    if not result.get("frames"):
+        raise ValueError("The result must contain at least one frame")
+    scenario = Scenario.model_validate(result["scenario"])
+    geometry = build_geometry(scenario)
+    # Outside clearance geometry supports the routing/body checks. It is not
+    # another hall to draw: people leave at the strip beside the actual door.
+    generated_aprons = {f"exit-apron:{boundary.id}" for boundary in scenario.exit_boundaries}
+    if generated_aprons:
+        interior = unary_union([region_to_polygon(region) for region in scenario.walkable_areas
+                                if region.id not in generated_aprons]).intersection(geometry)
+        if isinstance(interior, Polygon) and not interior.is_empty:
+            geometry = interior
+    payload = dict(result)
+    payload["geometry"] = {
+        "boundary": list(geometry.exterior.coords),
+        "holes": [list(ring.coords) for ring in geometry.interiors],
+    }
+    encoded = json.dumps(payload, separators=(",", ":"), allow_nan=False)
+    return HTML.replace("__DATA__", encoded.replace("<", "\\u003c"))
+
+
 def main():
     repo_root = Path(__file__).resolve().parents[3]
     data_dir = repo_root / "backend" / "data"
@@ -233,21 +275,9 @@ def main():
         )
 
     result = json.loads(input_path.read_text(encoding="utf-8"))
-    if not result.get("frames"):
-        raise ValueError("The result must contain at least one frame")
-
-    scenario = Scenario.model_validate(result["scenario"])
-    geometry = build_geometry(scenario)
-    result["geometry"] = {
-        "boundary": list(geometry.exterior.coords),
-        "holes": [list(ring.coords) for ring in geometry.interiors],
-    }
-
-    payload = json.dumps(result, separators=(",", ":"), allow_nan=False)
-    payload = payload.replace("<", "\\u003c")
     stem = input_path.stem.removesuffix("_result")
     output_path = data_dir / f"{stem}_animation.html"
-    output_path.write_text(HTML.replace("__DATA__", payload), encoding="utf-8")
+    output_path.write_text(render_html(result), encoding="utf-8")
     print(f"Saved animation: {output_path}")
 
 

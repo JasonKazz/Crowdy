@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crowdy · Layout editor</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f5f8;color:#172339;font:15px system-ui,sans-serif}
+main{max-width:1640px;margin:24px auto;padding:0 20px}h1{font-size:27px;margin:8px 0}
+.brand{color:#335cce;font-weight:750;letter-spacing:.06em}.muted{color:#58677c;font-size:14px}
+.toolbar,.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.toolbar{margin:20px 0}
+button,select,input,.button{font:inherit;border:1px solid #cbd4e1;border-radius:7px;padding:8px 10px;background:white;color:inherit}
+button,.button{cursor:pointer}button:disabled{opacity:.5;cursor:wait}.primary{background:#335cce;color:white;border-color:#335cce}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 285px;gap:16px}.card{background:white;border:1px solid #dbe1ea;border-radius:12px;padding:16px}
+svg{width:100%;height:68vh;min-height:520px;display:block;touch-action:none;background:#f8fafc;border-radius:8px}
+.inspector label{display:block;margin:12px 0}.inspector input,.inspector select{width:100%;margin-top:5px}
+.inspector input[type=checkbox]{width:auto}.inspector h2{font-size:18px;margin:0 0 10px}
+#status{white-space:pre-wrap;margin:14px 0;padding:12px;border-radius:8px;background:#edf2ff;overflow-wrap:anywhere}
+#status.error{background:#feecec;color:#9f2020}.legend{line-height:1.8;margin-top:10px}
+#downloads{display:flex;gap:14px;flex-wrap:wrap;margin:12px 0}a{color:#335cce}
+#object-list{width:100%}.settings{margin:16px 0}.settings label{display:flex;align-items:center;gap:8px}.settings input{width:85px}
+.image-tools{margin:18px 0}.image-tools h2{font-size:18px;margin:0 0 12px}.image-tools .row{margin:10px 0}
+#provider-status,#image-note{white-space:pre-wrap;line-height:1.6}.candidate{border:1px solid #dbe1ea;border-radius:8px;padding:12px;margin-top:10px}
+#candidates{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.candidate p{white-space:pre-wrap;margin:8px 0}
+@media(max-width:850px){.layout{grid-template-columns:1fr}svg{height:440px}}
+
+.toolbelt{margin-bottom:16px;padding:12px;position:sticky;top:0;z-index:5;box-shadow:0 4px 16px #17233909}
+.toolbelt button[aria-pressed=true]{background:#e6edff;border-color:#335cce;color:#193e9a;box-shadow:inset 0 0 0 1px #335cce}
+.canvas-options{margin:10px 0}.canvas-options button{padding:5px 10px}.canvas-options label{font-size:13px}
+.divider{width:1px;height:25px;background:#cbd4e1}#tool-hint{font-size:13px}
+#object-tree{max-height:155px;overflow:auto;display:grid;gap:3px;margin:8px 0}
+#object-tree button{text-align:left;font-size:13px;padding:5px 8px;border:0;background:#f5f7fa}
+#object-tree button[aria-pressed=true]{background:#e6edff;color:#193e9a}
+.layers{border-block:1px solid #e5eaf1;padding:9px 0;margin:12px 0;font-size:13px}.layers summary,.image-tools summary{cursor:pointer;font-weight:650}
+#layers label{display:flex;align-items:center;justify-content:space-between;margin:8px 0}#layers input{width:auto;margin:0}
+#plan{user-select:none}#plan .selection-handle{vector-effect:non-scaling-stroke}
+</style>
+</head>
+<body><main>
+<div class="brand">CROWDY</div><h1>Arrange your floor plan</h1>
+<div class="muted">Draw, arrange and check your evacuation layout. Distances are in meters.</div>
+<details class="card image-tools"><summary>Image import, scale &amp; AI extraction</summary>
+  <h2>Start with a floor plan image</h2>
+  <div class="row">
+    <button id="upload-image" class="primary">Upload floor plan image</button>
+    <input id="image-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+    <label>Model <select id="provider"><option value="gemini">Gemini</option><option value="claude">Claude</option></select></label>
+    <button id="extract-image">Extract layout</button><button id="compare-image">Compare both models</button>
+  </div>
+  <div id="provider-status" class="muted">Checking provider configuration…</div>
+  <div class="row">
+    <label>Known distance (m) <input id="known-distance" type="number" min="0.01" step="0.1" value="5" style="width:85px"></label>
+    <button id="calibrate">Mark two points to set scale</button>
+    <label><input id="show-image" type="checkbox"> Compare with original image (fixed reference)</label>
+  </div>
+  <div id="image-note" class="muted">Upload PNG, JPEG, or WebP. Set scale using a distance you know, then extract with either provider or compare both. Extraction sends the image to the selected provider.</div>
+  <div id="candidates"></div>
+</details>
+<div class="toolbar">
+  <button id="import">Import JSON</button><input id="file" type="file" accept=".json,application/json" hidden>
+  <button id="export">Export editable layout</button><button id="undo">Undo</button><button id="redo">Redo</button>
+  <button id="validate">Check layout</button><button id="run" class="primary">Run simulation</button>
+</div>
+<div class="row settings">
+  <label>People <input id="people" type="number" min="1" max="5000" step="1"></label>
+  <label>Seed <input id="seed" type="number" min="0" max="4294967295" step="1"></label>
+  <label><input id="auto-population" type="checkbox" checked> Automatically place people</label>
+  <button id="regenerate">Regenerate people</button>
+  <label>Speed (m/s) <input id="speed" type="number" min="0.1" step="0.1"></label>
+  <label>Time limit (s) <input id="max-time" type="number" min="0.1" step="1"></label>
+  <label><input id="snap" type="checkbox" checked> Snap to 0.1 m</label>
+</div>
+<div class="toolbelt card">
+  <div class="row" role="toolbar" aria-label="Canvas tools">
+    <button data-tool="move" title="Select and move (V)">Select / Move</button>
+    <button data-tool="resize" title="Resize whole shape (S)">Resize</button>
+    <button data-tool="rotate" title="Rotate around center (R)">Rotate</button>
+    <button data-tool="vertices" title="Edit individual vertices (E)">Vertices</button>
+    <button data-tool="pan" title="Pan (H), or hold Space">Pan</button>
+    <span class="divider"></span>
+    <button data-tool="draw-furniture">Draw furniture</button>
+    <button data-tool="draw-wall">Draw wall</button>
+    <button data-tool="place-door">Place door</button>
+    <button data-tool="place-exit">Place exit</button>
+  </div>
+  <div class="row canvas-options">
+    <button id="zoom-in" aria-label="Zoom in">＋</button><button id="zoom-out" aria-label="Zoom out">−</button>
+    <button id="fit-view">Fit view</button><span id="zoom-label" class="muted"></span>
+    <label><input id="grid" type="checkbox" checked> Grid</label>
+    <label><input id="show-routes" type="checkbox"> Show planned routes</label>
+    <button id="duplicate">Duplicate</button><button id="delete">Delete</button>
+  </div>
+  <div id="tool-hint" class="muted"></div>
+</div>
+<div class="layout">
+  <section class="card"><svg id="plan" role="img" aria-label="Editable floor plan"></svg>
+    <div class="legend muted">Pale floor · gray furniture · dark walls · blue door openings · green evacuation strips just outside · red blocked exits</div>
+    <div id="population-note" class="muted"></div>
+  </section>
+  <aside class="card inspector">
+    <label>Selected object<select id="object-list"></select></label>
+    <div id="object-tree" aria-label="Objects"></div>
+    <details class="layers"><summary>Layers &amp; locks</summary><div id="layers"></div></details>
+    <div id="inspector"></div>
+    <hr><div class="row"><select id="add-kind" aria-label="New object type">
+      <option value="furniture">Furniture</option><option value="walls">Wall</option>
+      <option value="doors">Door opening</option><option value="exits">Exterior exit door</option>
+    </select><button id="add">Add</button></div>
+    <p class="muted">The green exit strip sits just outside the doorway. People are removed once their full body has cleared the wall.</p>
+    <p class="muted">Drag doors onto a wall or exterior edge. Use Resize for whole shapes; Vertices for individual corners. Hold Space to pan, scroll to zoom. Floors start locked.</p>
+  </aside>
+</div>
+<div id="status" role="status" aria-live="polite">Loading layout…</div>
+<div id="downloads"></div>
+<p class="muted">Check layout previews starting people. Runs save separate input and result snapshots. Export unfinished edits before closing this page.</p>
+</main>
+<script src="editor-geometry.js"></script>
+<script src="editor-image-tools.js"></script>
+<script src="editor-population.js"></script>
+<script src="editor-app.js"></script>
+</body></html>

@@ -70,14 +70,21 @@ def build_geometry(scenario: Scenario) -> Polygon:
         point = Point(occupant.position)
 
         if not walkable.contains(point):
+            obstacle_id = next((region.id for region, polygon in zip(scenario.obstacles, obstacles)
+                                if polygon.covers(point)), None)
+            reason = (f"inside obstacle '{obstacle_id}'" if obstacle_id is not None
+                      else "outside the floor or on its boundary")
             raise ValueError(
-                f"Occupant '{occupant.id}' is outside walkable space"
+                f"Occupant '{occupant.id}' is {reason}. "
+                "Enable automatic placement or regenerate people in the editor, "
+                "or correct this fixed starting position."
             )
 
         if point.distance(walkable.boundary) < radius:
             raise ValueError(
                 f"Occupant '{occupant.id}' is too close to a wall "
-                "or obstacle"
+                "or obstacle. Enable automatic placement or regenerate people "
+                "in the editor, or correct this fixed starting position."
             )
 
         for other_id, other_point in positions:

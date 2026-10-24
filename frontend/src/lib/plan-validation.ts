@@ -45,8 +45,8 @@ export function validatePlan(value: unknown): FloorPlan {
         item.kind,
       ) ||
       !finite(item.x, item.y, item.width, item.height) ||
-      item.width < 8 ||
-      item.height < 8 ||
+      item.width < (plan.native ? 0.001 : 8) ||
+      item.height < (plan.native ? 0.001 : 8) ||
       item.x < 0 ||
       item.y < 0 ||
       item.x + item.width > 900 ||
@@ -56,6 +56,9 @@ export function validatePlan(value: unknown): FloorPlan {
         "An object has invalid dimensions or a duplicate ID. Check its coordinates in the JSON and upload again.",
       );
     ids.add(item.id);
+    if (item.polygon && (!Array.isArray(item.polygon) || item.polygon.length < 3 || item.polygon.length > 300 ||
+      item.polygon.some(p => !p || !finite(p.x,p.y) || p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1)))
+      throw new Error("Furniture polygon coordinates must be inside its bounding box.");
   }
   for (const wall of plan.walls)
     if (
@@ -90,6 +93,16 @@ export function validatePlan(value: unknown): FloorPlan {
         "An exit has invalid coordinates or a duplicate ID. Correct it and upload again.",
       );
     exitIds.add(exit.id);
+  }
+  if (plan.native) {
+    const native = plan.native, transform = native.transform;
+    const validPoints = (points: unknown): boolean => Array.isArray(points) && points.length >= 3 && points.length <= 300 &&
+      points.every(p => p && finite(p.x, p.y));
+    if (!native.layout || !transform || !finite(transform.pixels_per_metre,transform.offset_x,transform.offset_y) ||
+      transform.pixels_per_metre <= 0 || !Array.isArray(native.floors) || !native.floors.every(validPoints) ||
+      !Array.isArray(native.walls) || !native.walls.every(validPoints) || !Array.isArray(native.exit_zones) ||
+      !native.exit_zones.every(zone => typeof zone.id === "string" && validPoints(zone.polygon)))
+      throw new Error("The imported layout is missing its geometry or scale. Import it again.");
   }
   return structuredClone(plan);
 }

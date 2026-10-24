@@ -1,5 +1,6 @@
 // Run with both the Next.js app and Python service running locally.
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import { SAMPLE_PLAN, positionAt } from "../src/lib/simulation.ts";
 import { adaptBackendSimulation } from "../src/lib/backend-simulation.ts";
 
@@ -75,6 +76,26 @@ try {
     x: 80, y: 280, width: 740, height: 40,
   });
   await rejected({ plan: blocked, scenario }, 422);
+  const layout = JSON.parse(readFileSync(new URL("../../examples/narrow_table_regression.json",import.meta.url),"utf8"));
+  const imported = await fetch(new URL("/api/floorplans",base),{method:"POST",
+    headers:{"Content-Type":"application/json",Origin:base.origin},body:JSON.stringify({layout})});
+  assert.equal(imported.status,200);
+  const nativePlan = (await imported.json()).plan;
+  assert.ok(nativePlan.native.layout.doors.length);
+  nativePlan.items[1].x+=5;
+  const seededScenario = {...scenario,seed:7};
+  const nativeResponse = await post({plan:nativePlan,scenario:seededScenario});
+  assert.equal(nativeResponse.status,200);
+  const nativePayload = await nativeResponse.json();
+  const nativeResult = adaptBackendSimulation(nativePayload,nativePlan,seededScenario,3);
+  assert.equal(nativeResult.exited,20);
+  assert.equal(nativeResult.remaining,0);
+  assert.equal(nativeResult.modelSettings.seed,7);
+  const start = nativePayload.scenario.occupants[0].position;
+  const transform=nativePlan.native.transform;
+  assert.deepEqual(positionAt(nativeResult.agents[0],0),nativeResult.agents[0].samples[0].point);
+  assert.ok(Math.abs(nativeResult.agents[0].samples[0].point.x-(start[0]*transform.pixels_per_metre+transform.offset_x))<.0001);
+  passed+=2;
   console.log(`Backend integration checks passed: ${passed} HTTP checks, real JuPedSim playback, two exit summaries, validation, and blocked-geometry recovery.`);
 } catch (error) {
   console.error(`Backend integration checks failed: ${error instanceof Error ? error.message : "unknown failure"}`);

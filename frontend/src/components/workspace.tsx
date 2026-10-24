@@ -70,7 +70,7 @@ export default function Workspace({
   const [history, setHistory] = useState<FloorPlan[]>([]);
   const [result, setResult] = useState<SimulationResult | null>(null);
   const preview = useMemo(
-    () => runSimulation(plan, scenario),
+    () => plan.native ? null : runSimulation(plan, scenario),
     [plan, scenario],
   );
   const [baseline, setBaseline] = useState<SimulationResult | null>(null);
@@ -87,6 +87,8 @@ export default function Workspace({
   });
   const [modal, setModal] = useState<"upload" | "help" | "reset" | null>(null);
   const [error, setError] = useState("");
+  const [imageProvider, setImageProvider] = useState("gemini");
+  const [imageWidth, setImageWidth] = useState(20);
   const [notice, setNotice] = useState("");
   const [runError, setRunError] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -365,14 +367,34 @@ export default function Workspace({
   }
   async function upload(file: File | undefined) {
     if (!file || busy) return;
-    if (file.size > 1024 * 1024) {
+    const image = /\.(png|jpe?g|webp)$/i.test(file.name);
+    if (file.size > (image ? 10 : 1) * 1024 * 1024) {
       setError(
-        "This file is too large. Choose a JSON floor plan smaller than 1 MB.",
+        "Choose a JSON floor plan below 1 MB, or PNG/JPEG/WebP below 10 MB.",
       );
       return;
     }
+    setBusy(true);
+    setError("");
+    setNotice(image ? "Extracting the image. This can take a few minutes…" : "Importing floor plan…");
     try {
-      const data = JSON.parse(await file.text());
+      let data;
+      if (image) {
+        const encoded = await new Promise<string>((resolve,reject)=>{
+          const reader = new FileReader(); reader.onload=()=>resolve(String(reader.result).split(",")[1]);
+          reader.onerror=()=>reject(new Error("Could not read this image.")); reader.readAsDataURL(file);
+        });
+        data = {filename:file.name,image_base64:encoded,provider:imageProvider,image_width_m:imageWidth};
+      } else data = JSON.parse(await file.text());
+      const raw = data.plan ?? data;
+      let warnings: string[] = [];
+      if (image || raw.walkable_areas) {
+        const response = await fetch("/api/floorplans",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify(image ? data : {layout:raw})});
+        const imported = await response.json();
+        if(!response.ok) throw new Error(imported.error || "The floor plan could not be imported.");
+        data = imported; warnings=imported.warnings ?? [];
+      }
       const next = validatePlan(data.plan ?? data);
       editPlan(next);
       setSelectedId(null);
@@ -380,7 +402,7 @@ export default function Workspace({
       setModal(null);
       setError("");
       setNotice(
-        "Floor plan imported. Review the geometry and exits before running.",
+        "Floor plan imported. Review the geometry and exits before running." + (warnings.length ? " " + warnings.join(" ") : ""),
       );
     } catch (cause) {
       setError(
@@ -390,7 +412,7 @@ export default function Workspace({
             ? cause.message
             : "This floor plan could not be opened. Try the sample JSON.",
       );
-    }
+    } finally {setBusy(false);}
     if (uploadRef.current) uploadRef.current.value = "";
   }
   function reset() {
@@ -569,7 +591,7 @@ export default function Workspace({
             <div className="scale-row">
               <span>Plan scale</span>
               <span className="mono">
-                32 px / m <Icon name="check" size={12} />
+                {(plan.native?.transform.pixels_per_metre ?? 32).toFixed(1)} px / m <Icon name="check" size={12} />
               </span>
             </div>
           </section>
@@ -718,9 +740,11 @@ export default function Workspace({
                 <span>10 people</span>
                 <span>200 people</span>
               </div>
-              <label className="field-label" htmlFor="distribution">
-                Starting distribution
-              </label>
+              <label className="field-label" htmlFor="population-seed">Placement seed</label>
+              <input id="population-seed" type="number" min="0" max="4294967295" step="1" value={scenario.seed ?? 42}
+                onChange={event=>{const seed=Number(event.target.value); if(Number.isInteger(seed)&&seed>=0&&seed<=4294967295)
+                  setScenario({...scenario,seed});}} />
+              <label className="field-label" htmlFor="distribution">Starting distribution</label>
               <div className="select-wrap">
                 <select
                   id="distribution"
@@ -828,7 +852,7 @@ export default function Workspace({
                 {busy
                   ? "Computing crowd movement"
                   : mode === "layout"
-                    ? "Editing layout · placement preview"
+                    ? plan.native ? "Editing imported geometry · run to place people" : "Editing layout · placement preview"
                     : playing
                       ? "Playing simulation"
                       : "Simulation paused"}
@@ -1363,24 +1387,32 @@ export default function Workspace({
         {modal === "upload" ? (
           <>
             <p>
-              Import a Crowdy JSON floor plan with editable walls, furniture,
-              and exits. Uploading replaces your current layout; Undo restores
-              it.
+              Import a frontend or backend Crowdy JSON layout, or extract an image.
+              Uploading replaces your layout; Undo restores it. Imported furniture stays editable.
             </p>
+            <label className="field-label" htmlFor="image-provider">Image extraction provider</label>
+            <select id="image-provider" value={imageProvider} disabled={busy} onChange={e=>setImageProvider(e.target.value)}>
+              <option value="gemini">Gemini</option><option value="claude">Claude</option>
+            </select>
+            <label className="field-label" htmlFor="image-width">Full image width in meters (left edge to right edge)</label>
+            <input id="image-width" type="number" min="0.01" step="0.1" value={imageWidth} disabled={busy}
+              onChange={e=>{const width=Number(e.target.value);if(width>0&&width<=1000)setImageWidth(width);}} />
+            <p className="muted">For images, confirm this real-world scale before choosing a file. Extraction sends the image to your selected provider.</p>
             <button
               className="upload-dropzone"
+              disabled={busy}
               onClick={() => uploadRef.current?.click()}
             >
               <Icon name="upload" size={26} />
-              <strong>Choose a floor plan</strong>
-              <span>JSON only · up to 1 MB · 900 × 600 canvas</span>
+              <strong>{busy ? "Importing floor plan…" : "Choose a floor plan"}</strong>
+              <span>JSON up to 1 MB · PNG, JPEG, WebP up to 10 MB</span>
             </button>
             <input
               ref={uploadRef}
               className="visually-hidden"
               type="file"
-              accept=".json,application/json"
-              aria-label="Choose floor plan JSON file"
+              accept=".json,.png,.jpg,.jpeg,.webp,application/json,image/png,image/jpeg,image/webp"
+              aria-label="Choose floor plan file"
               onChange={(e) => upload(e.target.files?.[0])}
             />
             {error && (
@@ -1401,8 +1433,8 @@ export default function Workspace({
               Download sample JSON
             </button>
             <p className="dialog-note">
-              Image and PDF interpretation will be available when the floor-plan
-              backend is connected.
+              PNG, JPEG, and WebP extraction uses your server’s provider key.
+              Export PDF pages as images first. The detailed backend editor remains available for wall and door corrections.
             </p>
           </>
         ) : modal === "reset" ? (
@@ -1476,7 +1508,7 @@ export default function Workspace({
             </dl>
             <p className="dialog-note">
               Runs are computed by the simulation service. Layout people are
-              placement previews. Image and PDF interpretation is not connected.
+              placement previews for the sample. Image extraction uses the selected provider and scale; imported layouts use the native geometry. Export PDF pages as images first.
             </p>
           </>
         )}
