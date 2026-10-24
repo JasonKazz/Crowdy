@@ -1,6 +1,22 @@
 # Crowdy
 Interactive evacuation planning from furnished floor plans, with editable layouts, scenario-based occupancy, crowd simulation, and before-and-after comparisons. Built at Cal Hacks 13.0.
 
+## Frontend
+
+Live demo: https://crowdy-calhacks13.vercel.app
+
+The Next.js app lives in `frontend/` and uses TypeScript, Tailwind CSS, ESLint, and the App Router. Use Node.js 20.9 or newer.
+
+The workspace includes furniture editing, scenario controls, playback, density overlays, and baseline comparisons. The simulation is an illustrative browser-local model; backend analysis and image/PDF interpretation are not connected yet.
+
+```sh
+cd frontend
+npm install
+npm run dev
+```
+
+Open http://localhost:3000. Run `npm run lint` to check the code and `npm run build` to create a production build.
+
 ## Backend structure
 
 ```text
@@ -19,7 +35,7 @@ examples/
 docs/
 ```
 
-Empty directories contain `.gitkeep` placeholders. This scaffold does not add any frontend files or application implementation.
+The backend directories currently contain `.gitkeep` placeholders.
 
 ## Local configuration
 
