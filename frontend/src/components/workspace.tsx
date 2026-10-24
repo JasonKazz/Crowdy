@@ -1257,7 +1257,7 @@ export default function Workspace({
                 </strong>
                 <span>
                   {mode === "layout" ? currentPopulation ? `${currentPopulation.people.length} people placed${result ? " · Play shows the recorded run" : ""}` : "Run a scenario to inspect movement" : result
-                    ? `${evacuated} / ${result.scenario.occupancy} exited${mode !== "layout" && responding ? ` · ${responding} responding` : ""}`
+                    ? `${evacuated} / ${result.scenario.occupancy} exited${responding ? ` · ${responding} responding` : ""}`
                     : "Run a scenario to inspect movement"}
                 </span>
               </div>
