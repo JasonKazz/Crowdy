@@ -511,6 +511,7 @@ export default function Workspace({
               engine: result.engine,
               engineVersion: result.engineVersion,
               modelSettings: result.modelSettings,
+              placementExcludedArea: result.placementExcludedArea,
               status: result.status,
               plan: result.plan,
               scenario: result.scenario,
@@ -1186,6 +1187,8 @@ export default function Workspace({
           </div>
           {(result?.plan??plan).native&&nativeLayout(result?.plan??plan).source_image?.calibration?.method==="estimated"&&
             <p className="scale-estimate-note">Estimated scale: these results use assumed object sizes. Calibrate with a known measurement for more reliable distances and density.</p>}
+          {result && (result.placementExcludedArea ?? 0) > .01 &&
+            <p className="scale-estimate-note">Automatic placement excluded {result.placementExcludedArea!.toFixed(1)} m² with no body-clear route to an exit. These areas had no starting occupants; review narrow gaps and enclosed rooms before interpreting the results.</p>}
           <p className="results-subtitle">
             {result
               ? `${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`

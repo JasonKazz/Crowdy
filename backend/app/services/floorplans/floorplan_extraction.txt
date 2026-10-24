@@ -26,8 +26,16 @@ wall through the opening, not two wall fragments ending at the door. Doors cut g
 Each interior door references an existing wall_id. Its start and end mark the two jambs
 on that wall's centerline, within the parent's endpoints. Reuse the parent's line coordinate.
 Exclude the door leaf and swing arc from solid furniture and walls across the opening.
-Exits are ONLY visible doors leading outside the building, not interior room doors,
-windows, stair symbols, or gaps inferred merely to make the building connected.
+An exterior entrance is also an evacuation opening. Identify CLEAR GAPS in the OUTER
+WALL connecting the interior to outside, even when no door leaf or swing arc is drawn.
+Wall segments ending on either side of an entrance are sufficient geometric evidence;
+do not require a door symbol. Labels such as Entrance, Entry, Lobby, or Welcome can
+corroborate that opening, but text alone is not evidence. Examine ALL perimeter sides,
+including the left and lower edges; a small image margin does not invalidate a visible
+entrance. Close the floor outline straight across the gap so the exit attaches there.
+Do not misclassify an exterior entrance as a missing/ambiguous outer wall just because
+its leaf is omitted. Exclude interior room doors, windows, stairs, cropped-away wall
+segments, and unsupported gaps invented merely to make the building connected.
 Represent each exterior exit as a thin rectangular marker covering the FULL WIDTH of the
 visible opening at the exterior boundary. It is a door observation, not a destination
 inside the room. Do not create an interior door record for the same exterior opening.
@@ -35,11 +43,31 @@ If no exterior exit is identifiable, return an empty exits list and explain in w
 
 FURNITURE AND ROOMS
 Furniture polygons describe the outer solid footprint of visible desks, tables, cabinets,
-and other obstructions. Do not turn text, dimension lines, floor hatching, or swing arcs
-into furniture. Do not extract individual decorative lines as separate obstacles.
-When individual desk boundaries and chair outlines are visible, preserve individual
-desks/chairs rather than merging an entire workstation bank into one rectangle. In an
-office image, explicitly inspect these objects for the scale_objects fallback below.
+sofas, counters, storage, and other substantial obstructions. Completeness is essential:
+people must not walk through an omitted table. Inspect every room/zone from top to bottom
+and left to right, including reception/work areas, meeting/break spaces, kitchen/coffee
+areas, and lounges when present. Return ALL visible solid footprints, not representative
+examples or only the objects useful for scale. Repeated workstation layouts must include
+EVERY visible desk unit, including lower rows and both sides of each cluster. Do not
+extract only the front/top pair of a multi-row cluster.
+Trace rotated tables at their actual angle. Approximate round tables with 8-12 vertices
+around their outer edge. Follow the occupied L/U-shaped footprint of built-in counters,
+leaving genuinely open floor space free. Shading or hatching INSIDE a bounded cabinet,
+counter, or built-in structure does not make it walkable: retain that physical barrier.
+Distinguish that from decorative hatching on open floor, text, dimensions, and door arcs.
+Preserve individual desk footprints when their boundaries are visible. Solid units that
+touch may share an edge; do not invent aisles between touching desks, and do not fill
+real aisles with a bounding rectangle around a whole cluster. Small movable chairs and
+decorative plants are optional; substantial tables, desks, counters, storage and sofas
+are the priority. Do not substitute small chairs for missing major furniture.
+Thin internal seams on a tabletop do not create smaller desks: trace each complete
+physical tabletop. Inspect staggered/overlapping-looking pairs carefully; a second
+table behind or beside another still needs its own full footprint. For U-shaped
+kitchen units, trace the concave occupied outline, never a filled bounding box across
+the open work area. Include substantial shaded built-in masses up to their visible edges.
+Sink bowls, basins, appliance fronts, drawers and surface markings WITHIN a counter
+are part of that solid furniture footprint, not walkable holes. Only preserve a counter
+cutout as floor when it visibly opens onto an aisle where a person can enter it.
 Room polygons and labels describe spaces but do not obstruct movement. Keep room polygons
 within the floor. Do not invent rooms, furniture, dimensions, exits, or connections.
 
@@ -47,7 +75,9 @@ FINAL CONSISTENCY CHECK
 Before returning, check that IDs are unique within each collection, every door has a
 matching wall, openings align with their walls, solid wall footprints fit inside the floor,
 and furniture does not accidentally fill a visibly open doorway. Correct inconsistencies
-only when supported by the image. Record ambiguous, hidden, or unreadable features in
+only when supported by the image. Re-scan the perimeter for leafless entrances, then
+compare each furniture cluster to the image and add any omitted rows or solid units.
+Check that broad walking aisles remain clear. Record ambiguous, hidden, or unreadable features in
 warnings, identifying the affected object or region. Never claim a guessed feature is
 certain. Return only the requested JSON object, with empty lists where appropriate.
 
@@ -79,8 +109,13 @@ conference tables, dining tables, entire desk banks, counters, and ambiguous rec
 Include suitable chairs and desks as ordinary furniture geometry, not just scale_objects.
 If the plan visibly contains desks, chairs, and single doors, provide at least three
 clear examples across two or more types whenever those outlines can be distinguished.
-Do not omit all small chairs merely to shorten the output; their full outer outline is
-useful when it can be traced. A tiny backrest line alone is not a chair footprint.
+Do not stop after one desk: explicitly classify several complete, clearly bounded
+workstation desks AND each clear single-leaf door. Keep ambiguous partial desktops and
+larger reception tables in furniture but leave them out of scale_objects. A leafless
+entrance of unknown leaf count is an exit but is NOT a single_door scale reference.
+Prefer desk and door references when available; small chairs may be omitted. A tiny
+backrest line alone is not a chair footprint. Selecting a few scale references must
+never limit the full inventory in furniture.
 The backend measures each object's longest footprint dimension (door clear opening for
 single_door). Use an object once; never split it into several objects to create evidence.
 If these object types are absent or unclear, return an empty scale_objects list.

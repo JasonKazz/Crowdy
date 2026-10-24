@@ -91,7 +91,14 @@ def supplement_scale_objects(source, drawing, provider):
     references = list(drawing.scale_objects)
     known = {item.object_id for item in references}
     inferred_ids = set()
+    # Respect explicitly selected clear examples. Generic furniture labels can
+    # include unusually sized desks or partial units useful as barriers but not
+    # as scale anchors; adding every such label can invalidate a sound estimate.
+    explicit_anchors = [item for item in _object_evidence(source, drawing, provider)
+                        if item.kind != "single_door"]
     for item in drawing.furniture:
+        if len(explicit_anchors) >= 2:
+            break
         label = item.label.lower().strip()
         if item.id in known or re.search(r"\b(bank|group|row|conference|reception|welcome|counter|bench|lounge|sofa)\b", label):
             continue

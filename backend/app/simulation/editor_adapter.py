@@ -14,6 +14,7 @@ from shapely.prepared import prep
 
 from app.schemas.scenario import ExitBoundary, Occupant, Region, Scenario
 from app.simulation.geometry import build_geometry
+from app.simulation.routing import body_clear_components
 
 PIXELS_PER_METRE = 32.0
 CANVAS_HEIGHT = 600.0
@@ -158,6 +159,14 @@ def _editor_geometry(plan: dict):
     return base_floor, areas, obstacles, exits, boundary_exits
 
 
+def placement_access(walkable, exits, radius=AGENT_RADIUS):
+    targets = unary_union([Polygon(exit.polygon) for exit in exits])
+    components = body_clear_components(walkable, radius)
+    reachable = [part for part in components if part.intersection(targets).area >= 1e-8]
+    excluded = sum(part.area for part in components if part not in reachable)
+    return unary_union(reachable), excluded
+
+
 def _positions(plan: dict, settings: dict, walkable, base_floor, exits, convert=pixel_to_metres):
     spawn = walkable.intersection(base_floor)
     exit_buffer = unary_union([Polygon(exit.polygon) for exit in exits]).buffer(SPAWN_CLEARANCE)
@@ -166,6 +175,8 @@ def _positions(plan: dict, settings: dict, walkable, base_floor, exits, convert=
     if usable.is_empty or usable.area <= 0:
         raise ValueError("The layout has no clear space for people; move obstacles away from walls and exits")
     prepared = prep(spawn)
+    reachable, _ = placement_access(walkable, exits)
+    accessible = prep(reachable)
     boundary = spawn.boundary
     count = settings["occupancy"]
     desks = [
@@ -187,6 +198,11 @@ def _positions(plan: dict, settings: dict, walkable, base_floor, exits, convert=
             candidate = (rng.uniform(min_x, max_x), rng.uniform(min_y, max_y))
         point = Point(candidate)
         if not prepared.contains(point) or point.distance(boundary) < SPAWN_CLEARANCE:
+            continue
+        # Automatic occupants cannot enter furniture pockets through gaps
+        # narrower than their bodies. Explicit starting positions still retain
+        # the route planner's normal trapped-occupant error.
+        if not accessible.covers(point):
             continue
         if any(math.dist(candidate, other) < AGENT_SEPARATION for other in positions):
             continue

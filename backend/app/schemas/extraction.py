@@ -76,11 +76,12 @@ class ExtractedDrawing(InputModel):
     floor_outline: list[DrawingPoint] = Field(min_length=3, max_length=300,
         description="Usable interior building boundary in vertex order, including connected rooms and corridors.")
     rooms: list[DrawingRegion] = Field(max_length=100)
-    furniture: list[DrawingRegion] = Field(max_length=200)
+    furniture: list[DrawingRegion] = Field(max_length=200,
+        description="ALL visible substantial solid furniture footprints: every desk/table unit in repeated clusters, round/rotated tables, counters, cabinets, storage and sofas. Not just representative scale examples. Small chairs optional; preserve real aisles.")
     walls: list[DrawingWall] = Field(max_length=200)
     doors: list[DrawingDoor] = Field(max_length=200)
     exits: list[DrawingRegion] = Field(max_length=30,
-        description="Thin full-opening-width markers at visible exterior doorways; never interior room doors.")
+        description="Thin full-width markers at clear exterior entrances/openings, including gaps between outer-wall ends with no door leaf or swing symbol. Entry/Welcome labels may corroborate. Never interior doors, windows, or unsupported gaps.")
     warnings: list[str] = Field(max_length=30,
         description="Ambiguous or unreadable features, identifying their object ID or location; do not invent geometry.")
     scale_references: list[ScaleReference] = Field(default_factory=list, max_length=20,

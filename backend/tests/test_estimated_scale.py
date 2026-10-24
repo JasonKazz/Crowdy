@@ -57,6 +57,18 @@ def estimate(drawing, provider="claude"):
 
 
 class EstimatedScaleTests(unittest.TestCase):
+    def test_unclassified_unusual_desk_does_not_override_selected_scale_anchors(self):
+        drawing = omitted_door_drawing()
+        # A useful barrier need not be a standard-sized scale reference.
+        drawing["furniture"].append(region("small_desk", 700, 150, 720, 170))
+        drawing["furniture"][-1]["label"] = "Desk"
+        result, reason = estimate(drawing)
+        self.assertIsNotNone(result, reason)
+        self.assertNotIn("small_desk", [obj.object_id for obj in result.calibration.estimated_objects])
+        # An explicit conflicting classification still requires review.
+        drawing["scale_objects"].append({"object_id": "small_desk", "kind": "office_desk"})
+        self.assertIsNone(estimate(drawing)[0])
+
     def test_door_inference_uses_the_final_consensus_in_both_coordinate_systems(self):
         drawing = omitted_door_drawing()
         claude, reason = estimate(drawing)

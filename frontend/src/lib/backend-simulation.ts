@@ -276,6 +276,9 @@ export function adaptBackendSimulation(
     createdAt,
     engine: "jupedsim",
     agentRadius,
+    placementExcludedArea: result.editor_metadata === undefined ? 0 : finite(
+      record(result.editor_metadata, "editor metadata").excluded_spawn_area_m2 ?? 0,
+      "excluded placement area", 0),
     ...(engineVersion === undefined ? {} : { engineVersion }),
     ...(modelSettings === undefined ? {} : { modelSettings }),
     status,

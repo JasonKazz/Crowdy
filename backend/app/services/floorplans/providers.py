@@ -146,7 +146,7 @@ def output_schema() -> dict:
     # Keep classifications flat on the wire, then restore and validate typed
     # objects locally. Both providers use exactly the same representation.
     result["properties"]["scale_objects"] = {"type": "array", "items": {"type": "string"},
-        "description": "Suitable existing objects as kind:object_id strings; kind must be single_door, office_chair, or office_desk. Examples: single_door:door_1, office_chair:chair_3. Empty when unclear. Do not supply sizes."}
+        "description": "Suitable existing objects as kind:object_id strings; kind must be single_door, office_chair, or office_desk. Include several complete workstation desks AND clear single-leaf doors when visible, at least three objects across two types. Exclude partial desktops, reception tables, and leafless openings of unknown leaf count from scale evidence. Examples: single_door:door_1, office_desk:desk_3. Empty when unclear. Do not supply sizes."}
     return result
 
 

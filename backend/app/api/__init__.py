@@ -25,7 +25,7 @@ from app.services.floorplans.images import save_image, extract_image, finish_cal
 from app.services.floorplans.providers import load_environment, provider_status
 from app.services.floorplans.calibration import recalibrate_layout
 from app.simulation.workspace_layout import editor_native_layout, native_to_editor
-from app.simulation.editor_adapter import POPULATION_SEED, editor_to_scenario
+from app.simulation.editor_adapter import POPULATION_SEED, editor_to_scenario, placement_access
 from app.simulation.engine import run_simulation
 
 MAX_BODY_BYTES = 1_048_576
@@ -214,6 +214,8 @@ def run_editor_simulation(payload: SimulationRequest):
     settings = payload.scenario.model_dump()
     scenario = editor_to_scenario(plan, settings)
     result = run_simulation(scenario)
+    from app.simulation.geometry import build_geometry
+    _, excluded_area = placement_access(build_geometry(scenario), scenario.exits, scenario.agent_defaults.radius)
     # Preserve native simulation timestamps and outcomes. Micrometre coordinate
     # precision keeps maximum-size results small enough for the Next.js proxy.
     for frame in result["frames"]:
@@ -223,6 +225,7 @@ def run_editor_simulation(payload: SimulationRequest):
     result["engine"] = "jupedsim"
     result["engine_version"] = ENGINE_VERSION
     result["editor_metadata"] = {"seed": settings.get("seed", POPULATION_SEED), "walking_profile": settings["mobility"],
+        "excluded_spawn_area_m2": round(excluded_area, 4),
         "distribution": settings["distribution"], "pixels_per_metre": plan["native"]["transform"]["pixels_per_metre"] if plan.get("native") else 32}
     return result
 

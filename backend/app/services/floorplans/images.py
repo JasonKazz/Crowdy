@@ -11,6 +11,8 @@ import warnings
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
 
 from app.schemas.extraction import (
     CalibrationInfo, ExtractedDrawing, ExtractionInfo, ExtractionRequest, ImageUpload, ScaleReference, SourceImage,
@@ -51,6 +53,14 @@ def save_image(upload: ImageUpload, root: Path) -> SourceImage:
                 # Both providers see the identical image, within Claude's standard-tier
                 # native pixel budget: at most 39 x 39 patches of 28 pixels.
                 corrected.thumbnail((1092, 1092), Image.Resampling.LANCZOS)
+                # Small plans contain tiny repeated desks and door symbols.
+                # Present them at a consistent readable size to both providers;
+                # all observations and the overlay use this same stored frame.
+                longest = max(corrected.size)
+                if longest < 1000:
+                    factor = 1000 / longest
+                    corrected = corrected.resize(tuple(max(1, round(side * factor)) for side in corrected.size),
+                                                 Image.Resampling.LANCZOS)
                 image = Image.new("RGB", corrected.size, "white")
                 image.paste(corrected, mask=corrected.getchannel("A"))
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning):
@@ -145,10 +155,30 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
                    for point in (start, end)]
         doors.append({"id": door.id, "wall_id": door.wall_id,
                       "offset": sum(offsets) / 2, "width": abs(offsets[1] - offsets[0])})
+    furniture = [region(item) for item in drawing.furniture]
+    # Adjacent counters can enclose sink/appliance cavities. Merge only such
+    # closed furniture clusters and fill their inaccessible interiors. Open U
+    # shapes and rooms bounded by walls remain untouched. One merged item also
+    # moves as a whole in the editor, with no stale filler left behind.
+    shapes = [Polygon(item.polygon) for item in furniture]
+    if shapes and all(shape.is_valid for shape in shapes):
+        solids = unary_union(shapes)
+        pieces = [solids] if isinstance(solids, Polygon) else list(solids.geoms)
+        for piece in pieces:
+            if not piece.interiors:
+                continue
+            exterior = Polygon(piece.exterior)
+            members = [item for item in furniture if exterior.covers(Polygon(item.polygon))]
+            if not members:  # Already absorbed by an enclosing furniture cluster.
+                continue
+            member_ids = {item.id for item in members}
+            furniture = [item for item in furniture if item.id not in member_ids]
+            furniture.append(Region(id=members[0].id, polygon=list(piece.exterior.coords)[:-1]))
+            info.warnings.append("Joined touching furniture around an enclosed cavity into one solid editable barrier; open aisles were preserved.")
     return Layout(
         name=drawing.name or "Extracted floor plan", source_image=source, extraction=info,
         walkable_areas=[Region(id="floor", polygon=[position(point) for point in drawing.floor_outline])],
-        furniture=[region(item) for item in drawing.furniture], walls=walls, doors=doors,
+        furniture=furniture, walls=walls, doors=doors,
         exits=[region(item) for item in drawing.exits],
         rooms=[region(item) for item in drawing.rooms],
         room_labels={item.id: item.label for item in drawing.rooms},
