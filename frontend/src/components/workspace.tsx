@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import AppHeader from "./app-header";
 import AppFooter from "./app-footer";
 import { validatePlan } from "@/lib/plan-validation";
-import { runBackendSimulation } from "@/lib/backend-simulation";
+import { runBackendSimulation, sameStartingPopulation } from "@/lib/backend-simulation";
 import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
 import FloorPlanView from "./floor-plan";
 import Icon, { type IconName } from "./icon";
@@ -271,7 +271,7 @@ export default function Workspace({
     baseline.engineVersion === result.engineVersion,
   );
   const canCompare = Boolean(
-    baseline && result && baseline.id !== result.id && sameEngine,
+    baseline && result && baseline.id !== result.id && sameEngine && sameStartingPopulation(baseline, result),
   );
   const sameScenario = Boolean(
     baseline &&
@@ -320,6 +320,8 @@ export default function Workspace({
     if (busy) return;
     setHistory((previous) => [...previous.slice(-19), clonePlan(plan)]);
     setPlan(next);
+    if ((scenario.blockedExitIds ?? []).some(id => !next.exits.some(exit=>exit.id===id)))
+      setScenario({...scenario,blockedExitIds:(scenario.blockedExitIds ?? []).filter(id=>next.exits.some(exit=>exit.id===id))});
   }
   function moveItem(id: string, x: number, y: number) {
     const item = plan.items.find((item) => item.id === id);
@@ -367,7 +369,7 @@ export default function Workspace({
   }
   function acceptImport(data: {plan: unknown;warnings?:string[]}) {
     const next=validatePlan(data.plan);
-    editPlan(next);setSelectedId(null);setGeometrySelection(null);setGeometryTool("select");
+    editPlan(next);setBaseline(null);setResult(null);setScenario({...scenario,blockedExitIds:[]});setSelectedId(null);setGeometrySelection(null);setGeometryTool("select");
     setMode("layout");setModal(null);setPendingCalibration(null);setCalibratingExisting(false);setError("");setRunError("");
     const calibration=next.native?nativeLayout(next).source_image?.calibration:null;
     setNotice((calibration?.method==="automatic"?`Scale detected from ${calibration.label}. `:
@@ -416,6 +418,7 @@ export default function Workspace({
     try {
       const next = await runBackendSimulation(submittedPlan, submittedScenario, {
         signal: controller.signal,
+        baseline: baseline ?? undefined,
       });
       if (runController.current !== controller || controller.signal.aborted) return;
       setResult(next);
@@ -424,8 +427,10 @@ export default function Workspace({
       setRunCount((count) => count + 1);
       setPlaying(next.totalTime > 0 && !reducedMotion());
       setNotice(
-        next.remaining
-          ? `Time limit reached with ${next.remaining} ${next.remaining === 1 ? "person" : "people"} remaining. Inspect the recorded movement and exits.`
+        next.trapped && !next.movingRemaining
+          ? `${next.exited} evacuated; ${next.trapped} trapped with no available route. Trapped people remain visible in red.`
+          : next.remaining
+          ? `Time limit reached: ${next.trapped ?? 0} trapped and ${next.movingRemaining ?? next.remaining} still moving; ${next.remaining} ${next.remaining === 1 ? "person" : "people"} remaining. Inspect the recorded movement and exits.`
           : "Run complete. Inspect playback or pin this run as your baseline.",
       );
     } catch (error) {
@@ -490,6 +495,7 @@ export default function Workspace({
     if (busy) return;
     editPlan(clonePlan(openingSetup.current.plan));
     setScenario({ ...openingSetup.current.scenario });
+    setBaseline(null);
     setSelectedId(null);
     setMode("layout");
     setModal(null);
@@ -501,6 +507,11 @@ export default function Workspace({
     downloadJson(
       {
         version: 1,
+        comparison: canCompare && baseline && result ? {
+          sameStartingPeople: sameStartingPopulation(baseline,result), baseline, after: result,
+          clearanceTimeChange: clearance(baseline) !== null && clearance(result) !== null ? clearance(result)!-clearance(baseline)! : null,
+          evacuatedChange:result.exited-baseline.exited, trappedChange:(result.trapped??0)-(baseline.trapped??0),
+        } : null,
         plan,
         scenario,
         result: result
@@ -512,6 +523,9 @@ export default function Workspace({
               engineVersion: result.engineVersion,
               modelSettings: result.modelSettings,
               placementExcludedArea: result.placementExcludedArea,
+              trapped: result.trapped,
+              movingRemaining: result.movingRemaining,
+              startingOccupants: result.startingOccupants,
               status: result.status,
               plan: result.plan,
               scenario: result.scenario,
@@ -542,6 +556,7 @@ export default function Workspace({
     showReference:mode==="layout"&&showReference,
     referenceOpacity,
     geometrySelection,
+    blockedExitIds: scenario.blockedExitIds,
     geometryTool,
     onGeometrySelect:(selection:GeometrySelection)=>{setGeometrySelection(selection);setSelectedId(null);},
     onGeometryChange:busy?undefined:editPlan,
@@ -793,7 +808,7 @@ export default function Workspace({
               <span className="step-number">03</span>
               <h2>Scenario</h2>
             </div>
-            <fieldset disabled={busy}>
+            <fieldset disabled={busy || Boolean(baseline)}>
               <div className="occupancy-label">
                 <label htmlFor="occupancy">Occupancy</label>
                 <span>
@@ -886,6 +901,19 @@ export default function Workspace({
                   ? "Default walking speed: 1.2 m/s."
                   : "Includes slower walkers. Speed: 0.7–1.2 m/s."}
               </p>
+            </fieldset>
+            {baseline && <p className="helper">Baseline starting people are fixed. Clear the baseline to change occupancy, seed or walking profile.</p>}
+            <fieldset disabled={busy} className="exit-availability">
+              <legend>Blocked exits</legend>
+              <p className="helper">Unavailable for the entire run. Blocking every exit is allowed. Doorway geometry stays unchanged.</p>
+              {plan.exits.map(exit => <label key={exit.id} className="exit-toggle">
+                <input type="checkbox" aria-label={`Block ${exit.label}`}
+                  checked={(scenario.blockedExitIds ?? []).includes(exit.id)}
+                  onChange={event => setScenario({...scenario,blockedExitIds:event.target.checked
+                    ? [...(scenario.blockedExitIds ?? []),exit.id]
+                    : (scenario.blockedExitIds ?? []).filter(id => id !== exit.id)})} />
+                {exit.label}
+              </label>)}
             </fieldset>
           </section>
           <div className="setup-bottom">
@@ -1180,7 +1208,7 @@ export default function Workspace({
                 ? "Running"
                 : result
                   ? result.remaining
-                    ? "Partial"
+                    ? result.status === "trapped" ? "Trapped" : "Time limit"
                     : "Complete"
                   : "Not run"}
             </span>
@@ -1216,7 +1244,7 @@ export default function Workspace({
             <p>
               {result
                 ? result.remaining
-                  ? `${result.exited} exited · ${result.remaining} remaining at ${formatTime(result.totalTime)}`
+                  ? `${result.exited} exited · ${result.trapped ?? 0} trapped · ${result.movingRemaining ?? result.remaining} still moving at ${formatTime(result.totalTime)}`
                   : `${result.exited} people reached an exit`
                 : "Time until everyone reaches an exit"}
             </p>
@@ -1247,6 +1275,8 @@ export default function Workspace({
                 </small>
               </strong>
             </div>
+            <div><span>Trapped · no available route</span><strong className={result?.trapped ? "warning-text" : ""}>{result?.trapped ?? "—"}</strong></div>
+            <div><span>Still moving at time limit</span><strong>{result?.movingRemaining ?? "—"}</strong></div>
             {result?.perExitCounts && Object.entries(result.perExitCounts).map(([id, count]) => (
               <div key={id}>
                 <span>Via {result.plan.exits.find((exit) => exit.id === id)?.label ?? id}</span>
@@ -1368,12 +1398,19 @@ export default function Workspace({
                     ? baseline &&
                       result &&
                       (baseline.remaining || result.remaining)
-                      ? "Incomplete runs. Compare people remaining; evacuation times are unavailable until everyone exits."
+                      ? "Identical starting people. Compare evacuated, trapped, and still moving; full evacuation time is unavailable when anyone remains."
                       : sameScenario
-                        ? `${layoutChanges} layout object${layoutChanges === 1 ? "" : "s"} changed. Same occupancy and walking profile.`
-                        : "Scenario settings differ between runs."
+                        ? `${layoutChanges} layout object${layoutChanges === 1 ? "" : "s"} changed. Identical starting people and walking speeds.`
+                        : "Identical starting people; exit availability changed."
                     : "Edit the layout and run again to compare."}
                 </p>
+                {canCompare && result && <dl className="comparison-outcomes">
+                  <div><dt>Evacuated · before → after</dt><dd>{baseline.exited} → {result.exited}</dd></div>
+                  <div><dt>Trapped · before → after</dt><dd>{baseline.trapped ?? 0} → {result.trapped ?? 0}</dd></div>
+                  <div><dt>Still moving · before → after</dt><dd>{baseline.movingRemaining ?? baseline.remaining} → {result.movingRemaining ?? result.remaining}</dd></div>
+                  <div><dt>Peak density · before → after</dt><dd>{baseline.peakDensity.toFixed(1)} → {result.peakDensity.toFixed(1)} people/m²</dd></div>
+                  {Object.entries(result.perExitCounts ?? {}).map(([id, total]) => <div key={id}><dt>{result.plan.exits.find(e=>e.id===id)?.label ?? id} · before → after</dt><dd>{baseline.perExitCounts?.[id] ?? 0} → {total}</dd></div>)}
+                </dl>}
                 {canCompare &&
                   baseline &&
                   result &&
@@ -1424,7 +1461,7 @@ export default function Workspace({
                   onClick={() => {
                     setBaseline(result);
                     setNotice(
-                      "Baseline pinned for this session. Edit the layout and run again.",
+                      "Baseline pinned. Starting positions and walking speeds will be reused exactly. Block exits or edit the layout, then run again.",
                     );
                   }}
                 >
@@ -1581,7 +1618,7 @@ export default function Workspace({
               <div>
                 <dt>Geometry</dt>
                 <dd>
-                  32 canvas pixels represent 1 metre. Walls define the floor
+                  Imported plans use their measured or estimated scale; the sample uses 32 pixels per metre. Walls define the floor
                   bounds; wall segments and furniture block movement. Boundary
                   exits include a short landing beyond the floor. Review
                   imported geometry before running.
@@ -1599,8 +1636,9 @@ export default function Workspace({
                 <dt>Reported time</dt>
                 <dd>
                   Evacuation time is available only when everyone exits.
-                  Otherwise the run stops at 60 simulated seconds and keeps
-                  remaining people visible. Average exit time counts only people
+                  Trapped people have no body-clear route to an available exit at the start and remain stationary and visible in red.
+                  The run ends when everyone with a route has left, or at the configured time limit. People with a route still inside at that limit are reported separately.
+                  Average exit time counts only people
                   who reached an exit.
                 </dd>
               </div>

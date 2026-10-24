@@ -57,7 +57,6 @@ class BlockedExitTests(unittest.TestCase):
         for blocked, message in (
             (["missing"], "Unknown blocked exit IDs"),
             (["exit-east", "exit-east"], "Blocked exit IDs must be unique"),
-            (["exit-east", "exit-west"], "At least one exit must remain available"),
         ):
             with self.subTest(blocked=blocked):
                 data = load("two_exit_room.json").model_dump()
@@ -65,11 +64,42 @@ class BlockedExitTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValidationError, message):
                     Scenario.model_validate(data)
 
-    def test_engine_revalidates_modified_configuration(self):
+    def test_all_blocked_exits_report_trapped_at_time_zero(self):
         source = load("two_exit_room.json")
         source.settings.blocked_exit_ids = ["exit-east", "exit-west"]
-        with self.assertRaisesRegex(ValidationError, "At least one exit"):
+        result = run_simulation(source)
+        self.assertEqual(result["status"], "trapped")
+        self.assertEqual(result["summary"]["trapped_count"], 50)
+        self.assertEqual(result["summary"]["moving_remaining_count"], 0)
+        self.assertEqual(len(result["frames"][0]["agents"]), 50)
+        self.assertEqual(result["summary"]["simulation_time"], 0)
+        self.assertIsNone(result["summary"]["clearance_time"])
+
+    def test_engine_still_revalidates_unknown_closures(self):
+        source = load("two_exit_room.json")
+        source.settings.blocked_exit_ids = ["unknown"]
+        with self.assertRaisesRegex(ValidationError,"Unknown blocked"):
             run_simulation(source)
+
+    def test_trapped_people_stay_visible_while_others_evacuate(self):
+        from test_exterior_exits import room
+        from app.schemas.scenario import Occupant, Region
+        from app.services.floorplans.layout import compile_layout
+        layout = room()
+        layout.furniture = [Region(id="barrier", polygon=[(4.8,.1),(5.2,.1),(5.2,7.9),(4.8,7.9)])]
+        layout.occupants = [Occupant(id="trapped", position=(2,4)), Occupant(id="escaping", position=(8,4))]
+        result = run_simulation(compile_layout(layout))
+        self.assertEqual(result["status"], "trapped")
+        self.assertEqual(result["summary"]["evacuated_count"], 1)
+        self.assertEqual(result["summary"]["trapped_count"], 1)
+        self.assertEqual(result["summary"]["moving_remaining_count"], 0)
+        self.assertEqual(result["frames"][-1]["agents"], [{"id":"trapped","x":2.,"y":4.}])
+        self.assertTrue(all(any(p["id"]=="trapped" for p in frame["agents"]) for frame in result["frames"]))
+        layout.settings.max_time = .1
+        result = run_simulation(compile_layout(layout))
+        self.assertEqual(result["status"], "timed_out")
+        self.assertEqual(result["summary"]["trapped_count"], 1)
+        self.assertEqual(result["summary"]["moving_remaining_count"], 1)
 
     def test_comparison_requires_all_open_baseline_and_a_closure(self):
         source = load("two_exit_room.json")

@@ -133,7 +133,7 @@ class RoutePlanner:
         return target, path, index
 
 
-def plan_routes(scenario, geometry=None, planner=None):
+def plan_routes(scenario, geometry=None, planner=None, allow_trapped=False):
     planner = planner or RoutePlanner(geometry if geometry is not None else build_geometry(scenario), scenario.agent_defaults.radius)
     blocked = set(scenario.settings.blocked_exit_ids)
     boundaries = {boundary.id: boundary for boundary in scenario.exit_boundaries}
@@ -155,6 +155,11 @@ def plan_routes(scenario, geometry=None, planner=None):
                 distance, points = planned
                 choices.append((distance, region.id, points))
         if not choices:
+            if allow_trapped:
+                routes.append({"agent_id": person.id, "exit_id": None, "route_length": None,
+                               "path": [person.position], "status": "trapped",
+                               "reason": "No body-clear route to an available exit"})
+                continue
             raise ValueError(f"No body-clear route to an available exit for occupant '{person.id}' "
                              f"(radius {scenario.agent_defaults.radius:g} m). Move furniture, widen the passage, or choose another exit.")
         distance, exit_id, points = min(choices, key=lambda choice: (choice[0], choice[1]))

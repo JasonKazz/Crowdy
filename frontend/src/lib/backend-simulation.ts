@@ -14,7 +14,7 @@ const POSITION_TOLERANCE = 1e-6;
 
 type JsonRecord = Record<string, unknown>;
 type Occupant = { id: string; position: [number, number] };
-type Assignment = { agentId: string; exitId: string };
+type Assignment = { agentId: string; exitId: string | null };
 type Evacuation = { agentId: string; exitId: string; time: number };
 type Frame = { time: number; agents: { id: string; x: number; y: number }[] };
 
@@ -76,7 +76,7 @@ export function adaptBackendSimulation(
   } : pixelPoint(x, y);
   const result = record(payload, "result");
   if (result.engine !== "jupedsim") invalid("engine must be jupedsim");
-  if (result.status !== "completed" && result.status !== "timed_out")
+  if (result.status !== "completed" && result.status !== "timed_out" && result.status !== "trapped")
     invalid("status is unsupported");
   const status = result.status;
   const backendScenario = record(result.scenario, "scenario");
@@ -134,6 +134,18 @@ export function adaptBackendSimulation(
   const summary = record(result.summary, "summary");
   const evacuated = count(summary.evacuated_count, "evacuated count");
   const remaining = count(summary.remaining_count, "remaining count");
+  const trapped = count(summary.trapped_count ?? 0, "trapped count");
+  const movingRemaining = count(summary.moving_remaining_count ?? remaining, "moving remaining count");
+  if (trapped + movingRemaining !== remaining) invalid("remaining outcomes do not match the summary");
+  if ((status === "trapped" && (!trapped || movingRemaining)) ||
+      (status === "timed_out" && !movingRemaining)) invalid("status does not match remaining outcomes");
+  const blocked = new Set(inputScenario.blockedExitIds ?? []);
+  if (blocked.size !== (inputScenario.blockedExitIds ?? []).length || [...blocked].some(id => !knownExits.has(id)))
+    invalid("blocked exits do not match the plan");
+  const reportedBlocked = backendScenario.settings === undefined ? [] :
+    array(record(backendScenario.settings, "model settings").blocked_exit_ids ?? [], "blocked exits");
+  if (JSON.stringify([...reportedBlocked].sort()) !== JSON.stringify([...blocked].sort()))
+    invalid("reported blocked exits differ from the requested scenario");
   const totalTime = finite(summary.simulation_time, "simulation time", 0);
   if (evacuated + remaining !== occupants.length)
     invalid("summary counts do not match the population");
@@ -149,13 +161,22 @@ export function adaptBackendSimulation(
   const assignments: Assignment[] = array(result.assignments, "assignments").map(
     (value) => {
       const assignment = record(value, "assignment");
+      if (assignment.exit_id === null) {
+        if (assignment.status !== "trapped" || assignment.route_length !== null)
+          invalid("a trapped assignment must have no route");
+        return { agentId: agentId(assignment.agent_id), exitId: null };
+      }
       finite(assignment.route_length, "route length", 0);
-      return { agentId: agentId(assignment.agent_id), exitId: exitId(assignment.exit_id) };
+      const exit = exitId(assignment.exit_id);
+      if (blocked.has(exit)) invalid("an agent was assigned to a blocked exit");
+      return { agentId: agentId(assignment.agent_id), exitId: exit };
     },
   );
   const assignmentsById = new Map(assignments.map((assignment) => [assignment.agentId, assignment]));
   if (assignments.length !== occupants.length || assignmentsById.size !== occupants.length)
     invalid("every occupant must have exactly one assignment");
+  const trappedIds = new Set(assignments.filter(a => a.exitId === null).map(a => a.agentId));
+  if (trappedIds.size !== trapped) invalid("trapped assignments do not match the summary");
 
   const evacuations: Evacuation[] = array(result.evacuations, "evacuations").map(
     (value) => {
@@ -221,6 +242,11 @@ export function adaptBackendSimulation(
       if (evacuation && frame.time > evacuation.time + TIME_TOLERANCE)
         invalid("an evacuated agent reappears in a frame");
       const point = toCanvas(agent.x, agent.y);
+      if (trappedIds.has(agent.id)) {
+        const start = occupantsById.get(agent.id)!.position;
+        if (Math.abs(agent.x-start[0]) > POSITION_TOLERANCE || Math.abs(agent.y-start[1]) > POSITION_TOLERANCE)
+          invalid("a trapped agent moved from its recorded starting position");
+      }
       if (index === 0) {
         const original = occupantsById.get(agent.id)!.position;
         if (Math.abs(agent.x - original[0]) > POSITION_TOLERANCE || Math.abs(agent.y - original[1]) > POSITION_TOLERANCE)
@@ -256,7 +282,8 @@ export function adaptBackendSimulation(
       sourceId: occupant.id,
       points: samples.map((sample) => sample.point),
       samples,
-      assignedExitId: assignmentsById.get(occupant.id)!.exitId,
+      assignedExitId: assignmentsById.get(occupant.id)!.exitId ?? undefined,
+      outcome: event ? "evacuated" : trappedIds.has(occupant.id) ? "trapped" : "moving",
       exitId: event?.exitId ?? null,
       duration: event?.time ?? totalTime,
       delay: 0,
@@ -272,6 +299,14 @@ export function adaptBackendSimulation(
     peakDensity,
     exited: evacuated,
     remaining,
+    trapped,
+    movingRemaining,
+    startingOccupants: array(backendScenario.occupants, "occupants").map(value => {
+      const person = record(value, "occupant");
+      const position = occupantsById.get(identifier(person.id, "occupant ID"))!.position;
+      return {id: person.id as string, position, desired_speed: person.desired_speed == null ? null : finite(person.desired_speed, "walking speed", 0)};
+    }),
+    reusedStarts: result.editor_metadata !== undefined && record(result.editor_metadata, "editor metadata").reused_starting_population === true,
     hotspot,
     createdAt,
     engine: "jupedsim",
@@ -291,7 +326,7 @@ export function adaptBackendSimulation(
 export async function runBackendSimulation(
   inputPlan: FloorPlan,
   inputScenario: Scenario,
-  { signal }: { signal?: AbortSignal } = {},
+  { signal, baseline }: { signal?: AbortSignal; baseline?: SimulationResult } = {},
 ): Promise<SimulationResult> {
   const plan = structuredClone(inputPlan);
   const scenario = structuredClone(inputScenario);
@@ -301,7 +336,9 @@ export async function runBackendSimulation(
     response = await fetch("/api/simulations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plan, scenario }),
+      body: JSON.stringify({ plan, scenario: {...scenario, blocked_exit_ids: scenario.blockedExitIds ?? []},
+        ...(baseline ? {starting_population: {occupants: baseline.startingOccupants, radius: baseline.agentRadius,
+          mobility: baseline.scenario.mobility, distribution: baseline.scenario.distribution, seed: baseline.scenario.seed ?? 42}} : {}) }),
       signal,
       cache: "no-store",
     });
@@ -324,5 +361,14 @@ export async function runBackendSimulation(
       ? message
       : `Simulation failed (HTTP ${response.status}). Please try again.`);
   }
-  return adaptBackendSimulation(payload, plan, scenario, createdAt);
+  const result = adaptBackendSimulation(payload, plan, scenario, createdAt);
+  if (baseline && (!result.reusedStarts || !sameStartingPopulation(baseline, result)))
+    throw new Error("The comparison did not preserve the baseline starting people. Clear the baseline and retry.");
+  return result;
+}
+
+export function sameStartingPopulation(a: SimulationResult, b: SimulationResult): boolean {
+  if (!a.startingOccupants || !b.startingOccupants || a.agentRadius !== b.agentRadius) return false;
+  const sorted = (run: SimulationResult) => [...run.startingOccupants!].sort((x,y) => x.id.localeCompare(y.id));
+  return JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
 }

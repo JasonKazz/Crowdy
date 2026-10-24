@@ -95,7 +95,19 @@ try {
   const transform=nativePlan.native.transform;
   assert.deepEqual(positionAt(nativeResult.agents[0],0),nativeResult.agents[0].samples[0].point);
   assert.ok(Math.abs(nativeResult.agents[0].samples[0].point.x-(start[0]*transform.pixels_per_metre+transform.offset_x))<.0001);
-  passed+=2;
+  const closedIds = nativePlan.exits.map(exit=>exit.id);
+  const reference={occupants:nativePayload.scenario.occupants,radius:nativePayload.scenario.agent_defaults.radius,
+    mobility:seededScenario.mobility,distribution:seededScenario.distribution,seed:seededScenario.seed};
+  const closedResponse=await post({plan:nativePlan,scenario:{...seededScenario,blocked_exit_ids:closedIds},starting_population:reference});
+  assert.equal(closedResponse.status,200);
+  const closedPayload=await closedResponse.json();
+  const closedResult=adaptBackendSimulation(closedPayload,nativePlan,{...seededScenario,blockedExitIds:closedIds});
+  assert.equal(closedResult.trapped,20);
+  assert.equal(closedResult.status,"trapped");
+  assert.deepEqual(closedPayload.scenario.occupants,nativePayload.scenario.occupants);
+  assert.ok(closedPayload.editor_metadata.reused_starting_population);
+  await rejected({plan:nativePlan,scenario:{...seededScenario,blocked_exit_ids:["unknown"]}},400);
+  passed+=3;
   console.log(`Backend integration checks passed: ${passed} HTTP checks, real JuPedSim playback, two exit summaries, validation, and blocked-geometry recovery.`);
 } catch (error) {
   console.error(`Backend integration checks failed: ${error instanceof Error ? error.message : "unknown failure"}`);

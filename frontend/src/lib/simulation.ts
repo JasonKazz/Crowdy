@@ -40,6 +40,7 @@ export type Scenario = {
   mobility: "standard" | "mixed";
   distribution: "uniform" | "workstations";
   seed?: number;
+  blockedExitIds?: string[];
 };
 export type AgentPath = {
   id: number;
@@ -49,6 +50,7 @@ export type AgentPath = {
   exitId: string | null;
   /** Intended exit; unlike exitId, this does not imply an evacuation. */
   assignedExitId?: string;
+  outcome?: "evacuated" | "trapped" | "moving";
   /** Final simulation time at which this person passes the exit. */
   duration: number;
   /** Initial reaction time, before walking begins. */
@@ -74,13 +76,17 @@ export type SimulationResult = {
   /** Physical collision-body radius in metres from the native engine. */
   agentRadius?: number;
   placementExcludedArea?: number;
+  trapped?: number;
+  movingRemaining?: number;
+  startingOccupants?: {id: string; position: [number, number]; desired_speed?: number | null}[];
+  reusedStarts?: boolean;
   modelSettings?: {
     dt: number;
     sampleInterval: number;
     maxTime: number;
     seed?: number;
   };
-  status?: "completed" | "timed_out";
+  status?: "completed" | "timed_out" | "trapped";
   /** Null when the recorded run ended with people still inside. */
   clearanceTime?: number | null;
   perExitCounts?: Record<string, number>;

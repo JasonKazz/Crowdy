@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
-from app.schemas.scenario import InputModel
+from app.schemas.scenario import InputModel, Occupant
 from app.schemas.layout import Layout
 from app.schemas.extraction import ImageUpload, ExtractionRequest, ScaleReference
 from app.services.floorplans.images import save_image, extract_image, finish_calibration, image_path
@@ -179,11 +179,21 @@ class EditorSettings(InputModel):
     mobility: Literal["standard", "mixed"]
     distribution: Literal["uniform", "workstations"]
     seed: int = Field(default=42, ge=0, le=2**32 - 1)
+    blocked_exit_ids: list[str] = Field(default_factory=list, max_length=30)
+
+
+class StartingPopulation(InputModel):
+    occupants: list[Occupant] = Field(min_length=1, max_length=200)
+    radius: float = Field(gt=0)
+    mobility: Literal["standard", "mixed"]
+    distribution: Literal["uniform", "workstations"]
+    seed: int = Field(ge=0, le=2**32 - 1)
 
 
 class SimulationRequest(InputModel):
     plan: EditorPlan
     scenario: EditorSettings
+    starting_population: StartingPopulation | None = None
 
 
 app = FastAPI(title="Crowdy JuPedSim service", version="1.0.0")
@@ -212,7 +222,7 @@ def health(response: Response):
 def run_editor_simulation(payload: SimulationRequest):
     plan = payload.plan.model_dump()
     settings = payload.scenario.model_dump()
-    scenario = editor_to_scenario(plan, settings)
+    scenario = editor_to_scenario(plan, settings, payload.starting_population)
     result = run_simulation(scenario)
     from app.simulation.geometry import build_geometry
     _, excluded_area = placement_access(build_geometry(scenario), scenario.exits, scenario.agent_defaults.radius)
@@ -225,7 +235,8 @@ def run_editor_simulation(payload: SimulationRequest):
     result["engine"] = "jupedsim"
     result["engine_version"] = ENGINE_VERSION
     result["editor_metadata"] = {"seed": settings.get("seed", POPULATION_SEED), "walking_profile": settings["mobility"],
-        "excluded_spawn_area_m2": round(excluded_area, 4),
+        "excluded_spawn_area_m2": 0 if payload.starting_population is not None else round(excluded_area, 4),
+        "reused_starting_population": payload.starting_population is not None,
         "distribution": settings["distribution"], "pixels_per_metre": plan["native"]["transform"]["pixels_per_metre"] if plan.get("native") else 32}
     return result
 

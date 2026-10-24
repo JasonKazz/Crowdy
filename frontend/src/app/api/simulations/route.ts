@@ -30,7 +30,13 @@ export async function POST(request: Request) {
       (scenario.seed !== undefined && (!Number.isInteger(scenario.seed) || scenario.seed < 0 || scenario.seed > 4294967295))
     )
       throw new Error("Choose 1–200 people and valid scenario settings.");
+    const blocked = scenario.blocked_exit_ids ?? [];
+    if (!Array.isArray(blocked) || blocked.length > 30 || new Set(blocked).size !== blocked.length ||
+        blocked.some(id => typeof id !== "string" || !plan.exits.some(exit => exit.id === id)))
+      throw new Error("Choose valid, unique exits to block.");
+    const startingPopulation = input.starting_population;
     input = {
+      ...(startingPopulation === undefined ? {} : {starting_population: startingPopulation}),
       // Imports may carry extra metadata; send only the editor geometry contract.
       plan: {
         id: plan.id,
@@ -50,6 +56,7 @@ export async function POST(request: Request) {
         mobility: scenario.mobility,
         distribution: scenario.distribution,
         seed: scenario.seed ?? 42,
+        blocked_exit_ids: blocked,
       },
     };
   } catch (error) {

@@ -215,13 +215,16 @@ def _positions(plan: dict, settings: dict, walkable, base_floor, exits, convert=
     )
 
 
-def editor_to_scenario(plan: dict, settings: dict) -> Scenario:
+def editor_to_scenario(plan: dict, settings: dict, starting_population=None) -> Scenario:
     if plan.get("native"):
         from app.services.floorplans.layout import compile_layout
         from app.simulation.workspace_layout import editor_native_layout, world_point
         layout, transform = editor_native_layout(plan)
         scenario = compile_layout(layout)
+        scenario.settings.blocked_exit_ids = settings.get("blocked_exit_ids", [])
         base_floor = unary_union([Polygon(r.polygon) for r in layout.walkable_areas])
+        if starting_population is not None:
+            return _reuse_people(scenario, starting_population, settings)
         starts = _positions(plan, settings, build_geometry(scenario), base_floor, scenario.exits,
                             convert=lambda x, y: world_point(x, y, transform))
         return _with_people(scenario, starts, settings)
@@ -240,7 +243,8 @@ def editor_to_scenario(plan: dict, settings: dict) -> Scenario:
             outward=exit.normal, outside_space="open").model_dump() for exit in boundary_exits],
         "population": {"count": settings["occupancy"], "seed": POPULATION_SEED, "spawn_area_ids": ["editor-floor"]},
         "agent_defaults": {"radius": AGENT_RADIUS, "desired_speed": 1.2},
-        "settings": {"dt": 0.01, "sample_interval": 0.2, "max_time": 60.0},
+        "settings": {"dt": 0.01, "sample_interval": 0.2, "max_time": 60.0,
+                     "blocked_exit_ids": settings.get("blocked_exit_ids", [])},
     })
     try:
         walkable = build_geometry(scenario)
@@ -257,8 +261,27 @@ def editor_to_scenario(plan: dict, settings: dict) -> Scenario:
     body_space = walkable.buffer(-AGENT_RADIUS)
     if body_space.is_empty or body_space.geom_type != "Polygon":
         raise ValueError("Walls or furniture leave disconnected areas or passages too narrow for people")
+    if starting_population is not None:
+        return _reuse_people(scenario, starting_population, settings)
     starts = _positions(plan, settings, walkable, base_floor, exits)
     return _with_people(scenario, starts, settings)
+
+
+def _reuse_people(scenario, reference, settings):
+    if (len(reference.occupants) != settings["occupancy"]
+            or reference.mobility != settings["mobility"]
+            or reference.distribution != settings["distribution"]
+            or reference.seed != settings.get("seed", POPULATION_SEED)
+            or not math.isclose(reference.radius, scenario.agent_defaults.radius, abs_tol=1e-9)):
+        raise ValueError("Baseline population settings differ. Keep occupancy, seed, distribution and walking profile unchanged, or clear the baseline.")
+    data = scenario.model_dump()
+    data.update(occupants=[person.model_dump() for person in reference.occupants], population=None)
+    resolved = Scenario.model_validate(data)
+    try:
+        build_geometry(resolved)
+    except ValueError as exc:
+        raise ValueError(f"Baseline starting positions do not fit the edited layout: {exc} No people were relocated; adjust the layout or clear the baseline.") from exc
+    return resolved
 
 
 def _with_people(scenario, starts, settings):

@@ -2752,3 +2752,11 @@ input::-webkit-inner-spin-button {
   .setup-panel > * { flex-shrink: 0; }
   .spatial-workspace { align-self: start; width: 100%; }
 }
+
+.exit-availability { margin-top: 20px; border: 0; padding: 0; }
+.exit-availability legend { font-size: 12px; font-weight: 600; }
+.exit-toggle { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 12px; }
+.exit-toggle input { accent-color: #a43f32; }
+.comparison-outcomes { font-size: 11px; margin: 14px 0; }
+.comparison-outcomes div { padding: 7px 0; border-bottom: 1px solid #e0e4db; }
+.comparison-outcomes dd { margin: 4px 0 0; font-weight: 600; }
