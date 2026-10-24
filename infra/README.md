@@ -169,6 +169,13 @@ and pushes the image. It does not build or replace the backend image. Terraform
 still reviews the full configuration, so retain the existing backend deployment
 and secrets files.
 
+The staged context stays private on the host (`0700`), while its application
+directories use `0755` and source/dependency files use `0644`. Docker preserves
+these modes when copying files, so the image's non-root user can import source
+even when deployment runs with a restrictive `umask`. Before ACR login or push,
+the script runs an offline import and baked-weight readability smoke check as
+the image's configured user; a packaging failure stops publication.
+
 The service reuses the Container Apps environment and registry. Its separate
 managed identity receives only `AcrPull`; it receives no workspace-storage role,
 volume, or Azure Blob configuration. It exposes HTTPS ingress to container port
@@ -190,10 +197,13 @@ crowd_estimation_max_replicas = 2
 
 A warm minimum adds compute cost beyond the backend estimates above. The HTTP
 scaler targets one concurrent request per replica, with an explicit maximum of
-one or two replicas. The polling interval is 30 seconds and scale-down cooldown
-is 300 seconds. Terraform manages these scaling settings; only Azure's normalized
-Single-mode ingress traffic weights are ignored. Replica scaling is independent
-of the backend.
+one or two replicas. Azure documents a default 300-second scale-down cooldown
+and 30-second KEDA polling interval; polling does not apply to HTTP/TCP rules.
+Live Azure reads omit these defaults, so Terraform narrowly ignores their
+normalization along with Single-mode ingress traffic weights. CPU, memory,
+replica limits, the HTTP scaling rule, image, and security remain managed.
+See [Azure scaling behavior](https://learn.microsoft.com/en-us/azure/container-apps/scale-app#scale-behavior).
+Replica scaling is independent of the backend.
 
 Terraform sets the following service environment:
 

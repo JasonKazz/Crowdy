@@ -95,38 +95,30 @@ cleanup_build_context() {
 trap cleanup_build_context EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-python3 - "$repo_dir/services/crowd-estimation" "$build_context" <<'PY'
-import shutil
-import sys
-from pathlib import Path
-
-source, destination = map(Path, sys.argv[1:])
-for name in ('Dockerfile', 'pyproject.toml', 'uv.lock'):
-    original = source / name
-    if original.is_symlink() or not original.is_file():
-        raise SystemExit('A required crowd-estimation build source is missing or is a symlink.')
-    shutil.copyfile(original, destination / name)
-
-app = source / 'app'
-if app.is_symlink() or not app.is_dir():
-    raise SystemExit('The crowd-estimation app source must be an ordinary directory.')
-for original in app.rglob('*'):
-    relative = original.relative_to(app)
-    if any(part.startswith('.') or part == '__pycache__' for part in relative.parts):
-        continue
-    if original.is_symlink():
-        raise SystemExit('The crowd-estimation build context cannot contain symlinks.')
-    if original.is_dir() or original.suffix != '.py':
-        continue
-    target = destination / 'app' / relative
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(original, target)
-PY
+python3 "$infra_dir/scripts/stage-crowd-estimation.py" \
+  "$repo_dir/services/crowd-estimation" "$build_context"
 
 # The student subscription does not support ACR Tasks. Build locally for the
 # Azure runtime's architecture and push using the signed-in user's ACR rights.
 docker build --platform linux/amd64 --file "$build_context/Dockerfile" \
   --tag "$registry_server/$image_name" "$build_context"
+# Exercise the image's configured non-root USER before publishing. This catches
+# COPY permissions that root-owned build steps cannot detect. No network or
+# deployed credentials are available to this packaging smoke check.
+docker run --rm --platform linux/amd64 --network none \
+  --env CROWDY_CROWD_ESTIMATION_TOKEN=crowdy-build-smoke-check \
+  --entrypoint python "$registry_server/$image_name" -c '
+import os
+from app.config import Settings
+from app.main import create_app
+if os.geteuid() == 0:
+    raise SystemExit("The crowd-estimation image must run as a non-root user.")
+settings = Settings.from_env()
+with settings.model_path.open("rb") as weights:
+    if not weights.read(1):
+        raise SystemExit("The baked model weights are empty.")
+create_app(settings=settings)
+'
 az acr login --subscription "$student_subscription" --name "$registry_name"
 docker push "$registry_server/$image_name"
 

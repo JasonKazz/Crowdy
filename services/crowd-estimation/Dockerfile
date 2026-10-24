@@ -22,7 +22,8 @@ RUN --mount=type=cache,id=crowdy-estimation-uv,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 COPY app ./app
 # Bake weights into the image. Startup and inference need no model downloads.
-RUN python -m app.download_model --output models \
+RUN chmod -R u=rwX,go=rX app \
+    && python -m app.download_model --output models \
     && useradd --create-home --uid 10001 crowdy \
     && rm -rf /tmp/ultralytics /tmp/matplotlib
 USER crowdy

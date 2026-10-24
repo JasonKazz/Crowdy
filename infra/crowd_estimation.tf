@@ -158,9 +158,14 @@ resource "azurerm_container_app" "crowd_estimation" {
   depends_on = [azurerm_role_assignment.crowd_estimation_image_pull]
 
   lifecycle {
-    # Azure normalizes traffic weights in Single revision mode. Keep inference
-    # scaling settings and all other service configuration under management.
-    ignore_changes = [ingress[0].traffic_weight]
+    # Live Azure reads omit these documented defaults, producing 0 in provider
+    # state even after a successful deployment. Ignore only that normalization;
+    # image, security, resource limits, replicas, and HTTP rules remain managed.
+    ignore_changes = [
+      ingress[0].traffic_weight,
+      template[0].cooldown_period_in_seconds,
+      template[0].polling_interval_in_seconds,
+    ]
 
     precondition {
       condition     = startswith(var.crowd_estimation_image, "${azurerm_container_registry.images.login_server}/crowdy-crowd-estimation:") || startswith(var.crowd_estimation_image, "${azurerm_container_registry.images.login_server}/crowdy-crowd-estimation@sha256:")
