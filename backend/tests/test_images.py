@@ -1,3 +1,6 @@
+import asyncio
+import time
+import httpx
 import base64
 import copy
 import io
@@ -6,8 +9,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-from urllib.error import HTTPError
+from unittest.mock import AsyncMock, patch
 
 from PIL import Image
 from shapely.geometry import Point
@@ -244,73 +246,104 @@ class ProviderTests(unittest.TestCase):
                     with self.assertRaises(ProviderError):
                         extract_drawing("claude", b"image", 1000, 500)
 
+    def transport(self, responses):
+        calls = []
+        def handle(request):
+            calls.append(request)
+            item = responses[min(len(calls) - 1, len(responses) - 1)]
+            if isinstance(item, Exception):
+                raise item
+            return item
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+        return patch("app.services.floorplans.providers._provider_client", return_value=client), calls
+
     def test_http_errors_never_forward_upstream_bodies_or_keys(self):
-        error = HTTPError("https://api.example", 401, "secret-token", {}, io.BytesIO(b"secret-token"))
-        with patch("app.services.floorplans.providers.urlopen", side_effect=error):
-            with self.assertRaises(ProviderError) as caught:
-                request_json("https://api.example", {"x-api-key": "secret-token"}, {})
+        transport, _ = self.transport([httpx.Response(401, text="secret-token")])
+        with transport, self.assertRaises(ProviderError) as caught:
+            request_json("https://api.example", {"x-api-key": "secret-token"}, {})
         self.assertNotIn("secret-token", str(caught.exception))
 
     def test_transient_503_retries_then_returns_success(self):
-        response = MagicMock()
-        response.__enter__.return_value.read.return_value = b'{"ok": true}'
-        errors = [HTTPError("https://api.example", 503, "private", {}, io.BytesIO(b"private"))
-                  for _ in range(2)]
-        with patch("app.services.floorplans.providers.urlopen", side_effect=[*errors, response]) as transport, \
-                patch("app.services.floorplans.providers.time.sleep") as sleep, \
+        responses = [httpx.Response(503, text="private"), httpx.Response(503), httpx.Response(200, json={"ok": True})]
+        transport, calls = self.transport(responses)
+        with transport, patch("app.services.floorplans.providers.asyncio.sleep", new_callable=AsyncMock) as sleep, \
                 patch("app.services.floorplans.providers.random.uniform", return_value=0):
             self.assertEqual(request_json("https://api.example", {}, {}), {"ok": True})
-        self.assertEqual(transport.call_count, 3)
+        self.assertEqual(len(calls), 3)
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
-        self.assertTrue(all(error.fp.closed for error in errors))
+        self.assertTrue(all(response.is_closed for response in responses))
 
     def test_persistent_503_stops_and_sanitizes_the_error(self):
-        errors = [HTTPError("https://api.example", 503, "secret-token", {}, io.BytesIO(b"secret-token"))
-                  for _ in range(3)]
-        with patch("app.services.floorplans.providers.urlopen", side_effect=errors) as transport, \
-                patch("app.services.floorplans.providers.time.sleep") as sleep:
+        transport, calls = self.transport([httpx.Response(503, text="secret-token") for _ in range(3)])
+        with transport, patch("app.services.floorplans.providers.asyncio.sleep", new_callable=AsyncMock) as sleep:
             with self.assertRaisesRegex(ProviderError, "HTTP 503.*3 attempts") as caught:
                 request_json("https://api.example", {"x-api-key": "secret-token"}, {})
-        self.assertEqual(transport.call_count, 3)
+        self.assertEqual(len(calls), 3)
         self.assertEqual(sleep.call_count, 2)
         self.assertNotIn("secret-token", str(caught.exception))
 
     def test_client_errors_are_not_retried(self):
         for code in (400, 401, 402, 403, 404):
             with self.subTest(code=code):
-                error = HTTPError("https://api.example", code, "private", {}, io.BytesIO())
-                with patch("app.services.floorplans.providers.urlopen", side_effect=error) as transport, \
-                        patch("app.services.floorplans.providers.time.sleep") as sleep:
+                transport, calls = self.transport([httpx.Response(code)])
+                with transport, patch("app.services.floorplans.providers.asyncio.sleep", new_callable=AsyncMock) as sleep:
                     with self.assertRaises(ProviderError):
                         request_json("https://api.example", {}, {})
-                self.assertEqual(transport.call_count, 1)
+                self.assertEqual(len(calls), 1)
                 sleep.assert_not_called()
 
-    def test_retry_after_respected_and_retry_time_budget_not_reset(self):
-        response = MagicMock()
-        response.__enter__.return_value.read.return_value = b'{}'
-        error = HTTPError("https://api.example", 429, "private", {"Retry-After": "5"}, io.BytesIO())
-        with patch("app.services.floorplans.providers.urlopen", side_effect=[error, response]) as transport, \
-                patch("app.services.floorplans.providers.time.sleep") as sleep, \
-                patch("app.services.floorplans.providers.time.monotonic", side_effect=[100, 100, 101, 106]):
+    def test_retry_after_is_respected(self):
+        transport, calls = self.transport([httpx.Response(429, headers={"Retry-After": "5"}), httpx.Response(200, json={})])
+        with transport, patch("app.services.floorplans.providers.asyncio.sleep", new_callable=AsyncMock) as sleep:
             self.assertEqual(request_json("https://api.example", {}, {}), {})
-        sleep.assert_called_once_with(5)
-        self.assertEqual([call.kwargs["timeout"] for call in transport.call_args_list], [175, 169])
+        sleep.assert_awaited_once_with(5)
+        self.assertEqual(len(calls), 2)
 
     def test_retry_after_beyond_budget_stops_without_waiting(self):
-        error = HTTPError("https://api.example", 503, "private", {"Retry-After": "600"}, io.BytesIO())
-        with patch("app.services.floorplans.providers.urlopen", side_effect=error) as transport, \
-                patch("app.services.floorplans.providers.time.sleep") as sleep:
+        transport, calls = self.transport([httpx.Response(503, headers={"Retry-After": "600"})])
+        with transport, patch("app.services.floorplans.providers.asyncio.sleep", new_callable=AsyncMock) as sleep:
             with self.assertRaisesRegex(ProviderError, "HTTP 503.*1 attempt"):
                 request_json("https://api.example", {}, {})
-        self.assertEqual(transport.call_count, 1)
+        self.assertEqual(len(calls), 1)
         sleep.assert_not_called()
 
     def test_network_timeouts_do_not_duplicate_possibly_processed_requests(self):
-        with patch("app.services.floorplans.providers.urlopen", side_effect=TimeoutError) as transport:
+        transport, calls = self.transport([httpx.ReadTimeout("private")])
+        with transport, self.assertRaisesRegex(ProviderError, "time limit"):
+            request_json("https://api.example", {}, {})
+        self.assertEqual(len(calls), 1)
+
+    def test_slow_continuous_response_hits_wall_clock_deadline_and_closes(self):
+        class SlowBody(httpx.AsyncByteStream):
+            closed = False
+            async def __aiter__(self):
+                while True:
+                    await asyncio.sleep(.01)
+                    yield b" "
+            async def aclose(self):
+                self.closed = True
+        body = SlowBody()
+        transport, calls = self.transport([httpx.Response(200, stream=body)])
+        started = time.monotonic()
+        with transport, patch("app.services.floorplans.providers.PROVIDER_TIME_BUDGET", .08):
             with self.assertRaisesRegex(ProviderError, "time limit"):
                 request_json("https://api.example", {}, {})
-        self.assertEqual(transport.call_count, 1)
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertTrue(body.closed)
+        self.assertEqual(len(calls), 1)
+
+    def test_retry_wait_and_response_share_one_deadline(self):
+        transport, calls = self.transport([httpx.Response(503), httpx.Response(200, json={})])
+        # A real retry wait consumes the total budget; the next response never starts.
+        sleep = asyncio.sleep
+        async def stalled_sleep(_):
+            await sleep(1.2)
+        with transport, patch("app.services.floorplans.providers.PROVIDER_TIME_BUDGET", 1.05), \
+                patch("app.services.floorplans.providers.random.uniform", return_value=0), \
+                patch("app.services.floorplans.providers.asyncio.sleep", new=stalled_sleep):
+            with self.assertRaisesRegex(ProviderError, "time limit"):
+                request_json("https://api.example", {}, {})
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":

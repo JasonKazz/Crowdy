@@ -109,7 +109,9 @@ export async function forwardBackend(request: Request, path: string, body?: unkn
     if (request.signal.aborted)
       return failure("Run cancelled. Your current setup is unchanged.", 499);
     if (error instanceof Error && error.name === "TimeoutError")
-      return failure("The run took too long. Reduce occupancy and try again.", 504);
+      return failure(path === "/api/floorplans"
+        ? "Image extraction took too long. Check the provider status, then retry or choose the other provider."
+        : "The run took too long. Reduce occupancy and try again.", 504);
     return failure(
       "The simulation service is unavailable. Your current setup is unchanged; try again shortly.",
       503,

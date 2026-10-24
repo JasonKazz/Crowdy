@@ -23,6 +23,7 @@ import {
 } from "@/lib/simulation";
 
 type Mode = "layout" | "simulation" | "compare";
+type ProviderStatus = Record<string, {configured: boolean; busy: boolean; elapsed_seconds: number}>;
 const signature = (plan: FloorPlan, scenario: Scenario) =>
   JSON.stringify({ plan, scenario });
 const formatTime = (n: number) => `${n.toFixed(1)} s`;
@@ -91,6 +92,8 @@ export default function Workspace({
   const [modal, setModal] = useState<"upload" | "help" | "reset" | null>(null);
   const [error, setError] = useState("");
   const [imageProvider, setImageProvider] = useState("gemini");
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus>({});
+  const [providerStatusError, setProviderStatusError] = useState("");
   const [pendingCalibration,setPendingCalibration]=useState<PendingCalibration|null>(null);
   const [calibratingExisting,setCalibratingExisting]=useState(false);
   const [geometrySelection,setGeometrySelection]=useState<GeometrySelection>(null);
@@ -200,6 +203,32 @@ export default function Workspace({
   useEffect(() => {
     if (modal) dialogRef.current?.showModal();
     else dialogRef.current?.close();
+  }, [modal]);
+
+  useEffect(() => {
+    if (modal !== "upload") return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    async function refresh() {
+      try {
+        const response = await fetch("/api/floorplans", {cache: "no-store", signal: controller.signal});
+        if (!response.ok) throw new Error("Provider status unavailable.");
+        const status: ProviderStatus = await response.json();
+        if (!controller.signal.aborted) {
+          setProviderStatus(status);
+          setProviderStatusError("");
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          setProviderStatus({});
+          setProviderStatusError("Could not check provider status. An upload will check again.");
+        }
+      } finally {
+        if (!controller.signal.aborted) timer = setTimeout(refresh, 3000);
+      }
+    }
+    void refresh();
+    return () => {controller.abort(); clearTimeout(timer);};
   }, [modal]);
 
   useEffect(() => {
@@ -1455,6 +1484,13 @@ export default function Workspace({
             <select id="image-provider" value={imageProvider} disabled={busy} onChange={e=>setImageProvider(e.target.value)}>
               <option value="gemini">Gemini</option><option value="claude">Claude</option>
             </select>
+            <p className="muted" role="status">
+              {providerStatusError || (providerStatus[imageProvider]?.busy
+                ? `${imageProvider === "gemini" ? "Gemini" : "Claude"} is processing an image (${providerStatus[imageProvider].elapsed_seconds}s elapsed). Image requests stop after about 3 minutes. ${busy ? "Wait for this request to finish." : "Choose the other provider or import JSON while this image is processing."}`
+                : providerStatus[imageProvider]?.configured === false
+                  ? "This provider needs an API key in the server’s .env file."
+                  : providerStatus[imageProvider] ? "This provider is ready for an image." : "Checking provider status…")}
+            </p>
             <p className="muted">Scale is detected from printed dimensions or a scale bar. If none is readable, you can mark one known distance afterward. Extraction sends the image to your selected provider.</p>
             {pendingCalibration&&<ScaleCalibrator key={pendingCalibration.extraction_id} pending={pendingCalibration} busy={busy} onApply={finishScale}/>}
             <button
