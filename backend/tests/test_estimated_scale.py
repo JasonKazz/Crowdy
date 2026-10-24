@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app import api
 from app.schemas.extraction import CalibrationInfo, ExtractedDrawing
-from app.services.floorplans.calibration import calibrate_drawing
+from app.services.floorplans.calibration import calibrate_drawing, estimate_scale
 from app.services.floorplans.providers import ProviderError, extract_drawing, output_schema
 from test_calibration import reference
 from test_images import drawing_fixture, region, source, upload_fixture
@@ -45,6 +45,51 @@ def estimate(drawing, provider="claude"):
 
 
 class EstimatedScaleTests(unittest.TestCase):
+    def test_missing_door_classification_is_recovered_from_existing_geometry(self):
+        drawing = estimated_drawing()
+        drawing["furniture"] = [region(f"desk_{i}", 100+i*100, 150, 138+i*100, 170) for i in range(3)]
+        for item in drawing["furniture"]:
+            item["label"] = "Desk"
+        drawing["scale_objects"] = [{"object_id": item["id"], "kind": "office_desk"} for item in drawing["furniture"]]
+        door = drawing["doors"][0]
+        door["end"]["y"] = 225  # 25px single opening, omitted by model classifier
+        for i, width in enumerate((53, 60)):
+            wide = copy.deepcopy(door)
+            wide["id"] = f"double_{i}"
+            wide["end"]["y"] = 200+width
+            drawing["doors"].append(wide)
+        result, reason = estimate(drawing)
+        self.assertIsNotNone(result, reason)
+        objects = {item.object_id:item for item in result.calibration.estimated_objects}
+        self.assertEqual(objects["door"].origin, "geometry")
+        self.assertNotIn("double_0", objects)
+        self.assertNotIn("double_1", objects)
+        self.assertEqual(result.calibration.method, "estimated")
+        self.assertFalse(result.scale_confirmed)
+
+    def test_empty_classifier_can_use_clear_furniture_labels(self):
+        drawing = estimated_drawing()
+        drawing["scale_objects"] = []
+        result, reason = estimate(drawing)
+        self.assertIsNotNone(result, reason)
+        self.assertTrue(all(obj.origin == "geometry" for obj in result.calibration.estimated_objects))
+        self.assertAlmostEqual(result.meters_per_pixel, .02)
+
+    def test_geometry_inference_does_not_relabel_tables_or_mismatched_doorways(self):
+        drawing = estimated_drawing()
+        drawing["scale_objects"] = []
+        drawing["furniture"][0]["label"] = "Desk bank"
+        self.assertIsNone(estimate(drawing)[0])
+        drawing["furniture"][0]["label"] = "Office desk"
+        drawing["doors"][0]["end"]["y"] = 290  # wide double opening disagrees with furniture
+        self.assertIsNone(estimate(drawing)[0])
+
+    def test_inference_keeps_existing_conflicting_classifications_for_review(self):
+        drawing = estimated_drawing()
+        drawing["furniture"][1] = region("chair", 300, 150, 360, 210)
+        drawing["furniture"][1]["label"] = "Chair"
+        self.assertIsNone(estimate(drawing)[0])
+
     def test_compact_provider_classifications_restore_typed_objects_and_reject_invalid_types(self):
         self.assertEqual(output_schema()["properties"]["scale_objects"]["items"], {"type": "string"})
         for provider in ("claude", "gemini"):
@@ -114,7 +159,7 @@ class EstimatedScaleTests(unittest.TestCase):
                     drawing["furniture"][1]["polygon"] = [{"x": 0, "y": 0}] * 3
                 elif modification == "ambiguous_id":
                     drawing["furniture"][1]["id"] = "door"
-                self.assertIsNone(estimate(drawing)[0])
+                self.assertIsNone(estimate_scale(source(), ExtractedDrawing.model_validate(drawing), "claude")[0])
 
     def test_conflicting_object_sizes_need_measurement(self):
         drawing = estimated_drawing()

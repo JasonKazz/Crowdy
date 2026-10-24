@@ -50,6 +50,7 @@ class ScaleObject(InputModel):
 class EstimatedObject(ScaleObject):
     observed_pixels: float = Field(gt=0)
     assumed_metres: float = Field(gt=0)
+    origin: Literal["model", "geometry"] = "model"
 
 
 class CalibrationInfo(InputModel):

@@ -1,10 +1,11 @@
 """Prefer measured scale; otherwise estimate from several classified objects."""
 import math
+import re
 import statistics
 
 from shapely.geometry import Polygon
 
-from app.schemas.extraction import CalibrationInfo, EstimatedObject, ExtractedDrawing, ScaleReference, SourceImage
+from app.schemas.extraction import CalibrationInfo, EstimatedObject, ExtractedDrawing, ScaleObject, ScaleReference, SourceImage
 
 UNIT_METRES = {"m": 1, "cm": .01, "mm": .001, "ft": .3048, "in": .0254}
 # Prototype assumptions, not standards or statistically calibrated confidence bounds.
@@ -22,10 +23,14 @@ def calibrate_drawing(source: SourceImage, drawing: ExtractedDrawing, provider: 
     if drawing.scale_references:
         return None, reason
     estimated, estimate_reason = estimate_scale(source, drawing, provider)
+    if estimated is None:
+        supplemented, inferred_ids = supplement_scale_objects(source, drawing, provider)
+        if inferred_ids:
+            estimated, estimate_reason = estimate_scale(source, supplemented, provider, inferred_ids)
     return (estimated, "") if estimated is not None else (None, f"{reason} {estimate_reason}")
 
 
-def estimate_scale(source: SourceImage, drawing: ExtractedDrawing, provider: str):
+def _object_evidence(source, drawing, provider, inferred_ids=()):
     def pixel(point):
         return (point.x * source.width_px / 1000, point.y * source.height_px / 1000) if provider == "gemini" else (point.x, point.y)
 
@@ -36,7 +41,7 @@ def estimate_scale(source: SourceImage, drawing: ExtractedDrawing, provider: str
             if item.id in objects:
                 ambiguous_ids.add(item.id)
             objects[item.id] = (collection, item)
-    evidence, groups, intervals = [], {}, []
+    evidence = []
     seen_ids, seen_shapes = set(), set()
     for reference in drawing.scale_objects:
         if reference.object_id in seen_ids or reference.object_id in ambiguous_ids:
@@ -70,11 +75,60 @@ def estimate_scale(source: SourceImage, drawing: ExtractedDrawing, provider: str
                 continue
         if pixels < max(6, min(source.width_px, source.height_px) * .01):
             continue
-        nominal, low, high = OBJECT_SIZES[reference.kind]
-        scale = nominal / pixels
-        evidence.append(EstimatedObject(**reference.model_dump(), observed_pixels=pixels, assumed_metres=nominal))
-        groups.setdefault(reference.kind, []).append(scale)
-        intervals.append((low / pixels, high / pixels))
+        nominal = OBJECT_SIZES[reference.kind][0]
+        evidence.append(EstimatedObject(**reference.model_dump(), observed_pixels=pixels, assumed_metres=nominal,
+            origin="geometry" if reference.object_id in inferred_ids else "model"))
+    return evidence
+
+
+def supplement_scale_objects(source, drawing, provider):
+    """Recover omitted classifier entries using labeled, already extracted geometry.
+
+    Furniture anchors must agree before inferring any single-width door. Wide
+    double openings fail that check; this is still an assumption, not proof of
+    a door's leaf count or an independently measured scale.
+    """
+    references = list(drawing.scale_objects)
+    known = {item.object_id for item in references}
+    inferred_ids = set()
+    for item in drawing.furniture:
+        label = item.label.lower().strip()
+        if item.id in known or re.search(r"\b(bank|group|row|conference|reception|welcome|counter|bench|lounge|sofa)\b", label):
+            continue
+        if re.search(r"\bdesk\b", label):
+            kind = "office_desk"
+        elif re.search(r"\b(office|task|swivel|desk) chair\b", label) or (label == "chair" and "office" in drawing.name.lower()):
+            kind = "office_chair"
+        else:
+            continue
+        references.append(ScaleObject(object_id=item.id, kind=kind))
+        known.add(item.id)
+        inferred_ids.add(item.id)
+    supplemented = drawing.model_copy(update={"scale_objects": references})
+    anchors = [item for item in _object_evidence(source, supplemented, provider) if item.kind != "single_door"]
+    if len(anchors) >= 2:
+        anchor_scales = [item.assumed_metres / item.observed_pixels for item in anchors]
+        anchor = statistics.median(anchor_scales)
+        if all(abs(value / anchor - 1) <= .20 for value in anchor_scales):
+            for door in drawing.doors:
+                if door.id in known:
+                    continue
+                x = (door.end.x - door.start.x) * (source.width_px / 1000 if provider == "gemini" else 1)
+                y = (door.end.y - door.start.y) * (source.height_px / 1000 if provider == "gemini" else 1)
+                pixels = math.hypot(x, y)
+                if pixels > 0 and abs(.90 / pixels / anchor - 1) <= .25:
+                    references.append(ScaleObject(object_id=door.id, kind="single_door"))
+                    inferred_ids.add(door.id)
+    return drawing.model_copy(update={"scale_objects": references}), inferred_ids
+
+
+def estimate_scale(source: SourceImage, drawing: ExtractedDrawing, provider: str, inferred_ids=()):
+    evidence = _object_evidence(source, drawing, provider, inferred_ids)
+    groups, intervals = {}, []
+    for item in evidence:
+        nominal, low, high = OBJECT_SIZES[item.kind]
+        groups.setdefault(item.kind, []).append(nominal / item.observed_pixels)
+        intervals.append((low / item.observed_pixels, high / item.observed_pixels))
     if len(evidence) < 3 or len(groups) < 2:
         return None, "An estimate needs at least three clear objects across two types (doors, office chairs, desks)."
     # Give each category equal weight so repeated chairs cannot drown out doors.
