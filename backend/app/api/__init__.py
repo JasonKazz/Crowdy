@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import threading
+import time
 from importlib.metadata import version
 from pathlib import Path
 from typing import Literal
@@ -32,7 +33,24 @@ ENGINE_VERSION = version("jupedsim")
 _simulation_lock = threading.Lock()
 logger = logging.getLogger(__name__)
 load_environment()
-_extraction_lock = threading.Lock()
+_import_guard = threading.Lock()
+_active_imports: dict[str, float] = {}
+
+
+def import_status():
+    with _import_guard:
+        return {provider: {"busy": provider in _active_imports,
+                "elapsed_seconds": int(time.monotonic() - _active_imports[provider])
+                if provider in _active_imports else 0} for provider in ("gemini", "claude")}
+
+
+def import_with_slot(payload):
+    # The worker owns the slot until it actually stops, even if the browser disconnects.
+    try:
+        return import_floorplan(payload)
+    finally:
+        with _import_guard:
+            _active_imports.pop(payload.provider, None)
 
 
 class BodyLimitMiddleware:
@@ -249,7 +267,8 @@ class FloorPlanImport(InputModel):
 @app.get("/api/floorplans")
 def floorplan_providers(response: Response):
     response.headers["Cache-Control"] = "private, no-store"
-    return provider_status()
+    status = import_status()
+    return {provider: {**info, **status[provider]} for provider, info in provider_status().items()}
 
 
 def import_floorplan(payload):
@@ -297,15 +316,24 @@ def floorplan_image(image_id: str, authorization: str | None = Header(default=No
 @app.post("/api/floorplans")
 async def floorplan_import(payload: FloorPlanImport, response: Response, authorization: str | None = Header(default=None)):
     require_backend_token(authorization)
-    if not _extraction_lock.acquire(blocking=False):
-        raise HTTPException(status_code=429, detail="A floor plan is already being imported. Please wait.")
+    extraction = (payload.layout is None and payload.editor_plan is None and payload.extraction_id is None
+                  and bool(payload.filename and payload.image_base64))
+    if extraction:
+        with _import_guard:
+            if payload.provider in _active_imports:
+                elapsed = int(time.monotonic() - _active_imports[payload.provider])
+                name = "Gemini" if payload.provider == "gemini" else "Claude"
+                other = "Claude" if payload.provider == "gemini" else "Gemini"
+                raise HTTPException(status_code=429, detail=(
+                    f"{name} is still processing an earlier image ({elapsed}s elapsed). "
+                    f"Wait for it to finish or choose {other}. JSON imports and layout edits remain available."),
+                    headers={"Retry-After": "3"})
+            _active_imports[payload.provider] = time.monotonic()
     try:
-        result = await run_in_threadpool(import_floorplan, payload)
+        result = await run_in_threadpool(import_with_slot if extraction else import_floorplan, payload)
         response.headers["Cache-Control"] = "private, no-store"
         return result
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)[:600]) from exc
     except OSError as exc:
         raise HTTPException(status_code=500, detail="Floor plan storage is unavailable. Check the backend data directory.") from exc
-    finally:
-        _extraction_lock.release()
