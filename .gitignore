@@ -1,0 +1,54 @@
+# Local configuration and credentials; keep shareable templates.
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+credentials.json
+service-account*.json
+
+# Python environments, caches, and packages.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# JavaScript / TypeScript dependencies and generated files.
+node_modules/
+.next/
+.nuxt/
+.vite/
+*.tsbuildinfo
+coverage/
+dist/
+build/
+.vercel/
+
+# Local uploads, databases, and generated simulation artifacts.
+/data/
+/backend/data/
+uploads/
+outputs/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Local machine and editor files.
+.DS_Store
+.idea/
+.vscode/
+*.log
