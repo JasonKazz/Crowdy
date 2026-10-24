@@ -10,7 +10,7 @@ from app.services.floorplans import import_jobs
 
 class ImportJobTests(unittest.TestCase):
     def setUp(self):
-        self.env=patch.dict('os.environ',{'CROWDY_BACKEND_TOKEN':''})
+        self.env=patch.dict('os.environ',{'CROWDY_BACKEND_TOKEN':'','VERCEL':''})
         self.env.start();self.addCleanup(self.env.stop)
         self.client=TestClient(api.app);self.addCleanup(self.client.close)
 
@@ -51,6 +51,33 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual(status['status'],'failed')
         self.assertIn('No complete layout',status['error'])
         self.assertFalse(api.import_status()['gemini']['busy'])
+
+    def test_vercel_async_upload_returns_the_synchronous_result_without_creating_a_job(self):
+        image={'filename':'plan.png','image_base64':'fake','provider':'claude','async_import':True}
+        results=({'plan':{'test-fixture':True},'warnings':['Review exit']},
+                 {'needs_scale':True,'extraction_id':'a'*32,'reason':'Mark a known distance'})
+        with patch.dict('os.environ',{'VERCEL':'1'}), patch('app.api.create_job') as job:
+            for result in results:
+                with self.subTest(result=result), patch('app.api.import_floorplan',return_value=result) as importer:
+                    response=self.client.post('/api/floorplans',json=image)
+                    self.assertEqual(response.status_code,200,response.text)
+                    self.assertEqual(response.json(),result)
+                    self.assertNotIn('job_id',response.json())
+                    self.assertIn('no-store',response.headers['cache-control'])
+                    importer.assert_called_once()
+                    self.assertFalse(api.import_status()['claude']['busy'])
+            job.assert_not_called()
+
+    def test_vercel_async_failure_is_reported_directly_and_releases_provider(self):
+        image={'filename':'plan.png','image_base64':'fake','async_import':True}
+        with patch.dict('os.environ',{'VERCEL':'1'}), patch('app.api.create_job') as job, \
+                patch('app.api.import_floorplan',side_effect=ValueError('No complete layout was imported')):
+            response=self.client.post('/api/floorplans',json=image)
+        self.assertEqual(response.status_code,422,response.text)
+        self.assertIn('No complete layout',response.json()['detail'])
+        self.assertNotIn('job_id',response.json())
+        self.assertFalse(api.import_status()['gemini']['busy'])
+        job.assert_not_called()
 
     def test_unknown_and_malformed_jobs_are_not_successful(self):
         self.assertEqual(self.client.get('/api/floorplans/jobs/'+'a'*32).status_code,404)

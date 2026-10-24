@@ -25,16 +25,6 @@
   margin-top: 10px;
   line-height: 1.7;
 }
-.heading > :global(.button) {
-  min-height: 37px;
-}
-.libraryNote {
-  margin-bottom: 18px;
-  color: #627455;
-  font-size: 11px;
-  line-height: 1.7;
-}
-
 .loading + .workspaceGrid,
 .storageError + .workspaceGrid {
   margin-top: 20px;
@@ -449,10 +439,6 @@
     font-size: 11px;
     max-width: 290px;
     margin-top: 8px;
-  }
-  .heading > :global(.button) {
-    min-height: 37px;
-    font-size: 11px;
   }
   .workspaceGrid {
     grid-template-columns: 1fr;

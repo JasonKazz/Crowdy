@@ -12,7 +12,10 @@ import FloorPlanView from "./floor-plan";
 import Icon, { type IconName } from "./icon";
 import ScaleCalibrator, {type PendingCalibration} from "./scale-calibrator";
 import GeometryPanel from "./geometry-panel";
+import WorkspaceSidebar from "./workspace-sidebar";
+import WorkspaceSources from "./workspace-sources";
 import {nativeLayout, type GeometrySelection, type GeometryTool} from "@/lib/native-editor";
+import { IMAGE_UPLOAD_SIZE_ERROR, prepareImageUpload } from "@/lib/image-upload";
 import {
   SAMPLE_PLAN,
   runSimulation,
@@ -71,6 +74,7 @@ export default function Workspace({
     ...initialScenario,
   }));
   const [mode, setMode] = useState<Mode>("layout");
+  const [sidebarTab, setSidebarTab] = useState<"sources" | "editing">("sources");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [history, setHistory] = useState<FloorPlan[]>([]);
   const [result, setResult] = useState<SimulationResult | null>(null);
@@ -81,6 +85,7 @@ export default function Workspace({
   const [baseline, setBaseline] = useState<SimulationResult | null>(null);
   const [runCount, setRunCount] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [running, setRunning] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [speed, setSpeed] = useState(1);
@@ -115,6 +120,7 @@ export default function Workspace({
     scenario: { ...initialScenario },
   });
   const runController = useRef<AbortController | null>(null);
+  const importController = useRef<AbortController | null>(null);
   const currentTime = useRef(0);
   const uploadRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -179,6 +185,8 @@ export default function Workspace({
     () => () => {
       runController.current?.abort();
       runController.current = null;
+      importController.current?.abort();
+      importController.current = null;
     },
     [],
   );
@@ -403,10 +411,12 @@ export default function Workspace({
     finally{setBusy(false);}
   }
   async function run() {
+    if (busy && !running) return;
     if (runController.current) {
       runController.current.abort();
       runController.current = null;
       setBusy(false);
+      setRunning(false);
       setRunError("");
       setNotice("Run cancelled. Your setup is unchanged.");
       return;
@@ -416,6 +426,7 @@ export default function Workspace({
     const submittedPlan = clonePlan(plan);
     const submittedScenario = { ...scenario };
     setBusy(true);
+    setRunning(true);
     setRunError("");
     setPlaying(false);
     try {
@@ -447,6 +458,7 @@ export default function Workspace({
       if (runController.current === controller) {
         runController.current = null;
         setBusy(false);
+        setRunning(false);
       }
     }
   }
@@ -459,6 +471,8 @@ export default function Workspace({
       );
       return;
     }
+    const controller = new AbortController();
+    importController.current = controller;
     setBusy(true);
     setError("");
     setPendingCalibration(null);
@@ -467,25 +481,26 @@ export default function Workspace({
     try {
       let data;
       if (image) {
-        const encoded = await new Promise<string>((resolve,reject)=>{
-          const reader = new FileReader(); reader.onload=()=>resolve(String(reader.result).split(",")[1]);
-          reader.onerror=()=>reject(new Error("Could not read this image.")); reader.readAsDataURL(file);
-        });
-        data = {filename:file.name,image_base64:encoded,provider:imageProvider,async_import:true};
+        data = {...await prepareImageUpload(file),provider:imageProvider,async_import:true};
       } else data = JSON.parse(await file.text());
+      controller.signal.throwIfAborted();
       const raw = data.plan ?? data;
       let warnings: string[] = [];
       if (image || raw.walkable_areas) {
         const response = await fetch("/api/floorplans",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify(image ? data : {layout:raw})});
-        let imported = await response.json();
-        if (response.ok && imported.job_id) imported = await awaitFloorPlanImport(imported.job_id, setNotice);
+          body:JSON.stringify(image ? data : {layout:raw}), signal:controller.signal});
+        if (response.status === 413) throw new Error(IMAGE_UPLOAD_SIZE_ERROR);
+        let imported = await response.json().catch(() => null);
+        if (!imported || typeof imported !== "object") throw new Error("The floor plan service returned an unreadable response. Try again shortly.");
         if(!response.ok) throw new Error(imported.error || "The floor plan could not be imported.");
+        if (imported.job_id) imported = await awaitFloorPlanImport(imported.job_id, setNotice, controller.signal);
+        controller.signal.throwIfAborted();
         if(imported.needs_scale){setPendingCalibration(imported);setNotice("");return;}
         data = imported; warnings=imported.warnings ?? [];
       }
       acceptImport({plan:data.plan??data,warnings});
     } catch (cause) {
+      if (controller.signal.aborted) return;
       setError(
         cause instanceof SyntaxError
           ? "This file is not valid JSON. Choose a Crowdy floor plan or download the sample below."
@@ -493,7 +508,15 @@ export default function Workspace({
             ? cause.message
             : "This floor plan could not be opened. Try the sample JSON.",
       );
-    } finally {setBusy(false);if (uploadRef.current) uploadRef.current.value = "";}
+    } finally {
+      if (importController.current === controller) {
+        importController.current = null;
+        if (!controller.signal.aborted) {
+          setBusy(false);
+          if (uploadRef.current) uploadRef.current.value = "";
+        }
+      }
+    }
   }
   function reset() {
     if (busy) return;
@@ -553,7 +576,11 @@ export default function Workspace({
   }
   const planProps = {
     selectedId: mode === "layout" ? selectedId : null,
-    onSelect: (id:string|null)=>{setSelectedId(id);setGeometrySelection(null);},
+    onSelect: (id:string|null)=>{
+      setSelectedId(id);
+      setGeometrySelection(null);
+      if (id) setSidebarTab("editing");
+    },
     onMove: moveItem,
     mode,
     time: mode === "layout" ? 0 : time,
@@ -566,7 +593,11 @@ export default function Workspace({
     geometrySelection,
     blockedExitIds: scenario.blockedExitIds,
     geometryTool,
-    onGeometrySelect:(selection:GeometrySelection)=>{setGeometrySelection(selection);setSelectedId(null);},
+    onGeometrySelect:(selection:GeometrySelection)=>{
+      setGeometrySelection(selection);
+      setSelectedId(null);
+      if (selection) setSidebarTab("editing");
+    },
     onGeometryChange:busy?undefined:editPlan,
     onGeometryToolDone:()=>setGeometryTool("select"),
   };
@@ -599,11 +630,12 @@ export default function Workspace({
             <span>Export workspace</span>
           </button>
           <button
-            className={`button primary ${busy ? "is-loading" : ""}`}
+            className={`button primary ${running ? "is-loading" : ""}`}
+            disabled={busy && !running}
             onClick={run}
           >
-            <Icon name={busy ? "close" : "play"} size={15} />
-            {busy ? "Cancel run" : "Run simulation"}
+            <Icon name={running ? "close" : "play"} size={15} />
+            {running ? "Cancel run" : busy ? "Working…" : "Run simulation"}
           </button>
         </div>
       </div>
@@ -646,79 +678,96 @@ export default function Workspace({
         </div>
       )}
       <main className="workspace-grid">
-        <aside className="setup-panel" aria-label="Plan and scenario settings">
-          <div className="panel-title">
-            <span>SETUP</span>
-            <span className="small-tag">01—03</span>
-          </div>
-          <section className="setup-section">
-            <div className="section-heading">
-              <span className="step-number">01</span>
-              <h2>Floor plan</h2>
-              <Icon name="check" size={15} />
-            </div>
-            <button
-              className="plan-card"
-              disabled={busy}
-              onClick={() => {
-                setCalibratingExisting(false);setPendingCalibration(null);
+        <WorkspaceSidebar
+          activeTab={sidebarTab}
+          onTabChange={(tab) => {
+            setSidebarTab(tab);
+            if (tab === "editing") {
+              setMode("layout");
+              setPlaying(false);
+            }
+          }}
+          sources={
+            <WorkspaceSources
+              key={`${ownerId ?? "guest"}:${workspaceId}`}
+              plan={plan}
+              workspaceId={workspaceId}
+              ownerId={ownerId}
+              isSample={isSample}
+              busy={busy}
+              onUploadFloorPlan={() => {
+                setCalibratingExisting(false);
+                setPendingCalibration(null);
                 setModal("upload");
                 setError("");
               }}
+              onUseCrowdEstimate={(occupancy) => {
+                const clearingBaseline = Boolean(baseline && scenario.occupancy !== occupancy);
+                if (clearingBaseline) {
+                  setBaseline(null);
+                }
+                if (scenario.occupancy !== occupancy) setMode("layout");
+                setPlaying(false);
+                setScenario((current) => ({ ...current, occupancy }));
+                setNotice(`Venue crowd estimate applied: ${occupancy} people.${clearingBaseline ? " Baseline cleared because the starting crowd changed." : ""}`);
+              }}
             >
-              <span className="mini-plan">
-                <span />
-                <span />
-                <span />
-                <span />
-              </span>
-              <span className="plan-card-copy">
-                <strong>{plan.name}</strong>
-                <span>
-                  {Number(plan.area.toFixed(1))} m² <b>·</b> {plan.exits.length} exits
+              <div className="scale-row">
+                <span>Plan scale</span>
+                <span className="mono">
+                  {(plan.native?.transform.pixels_per_metre ?? 32).toFixed(1)} px / m
+                  {!(plan.native && nativeLayout(plan).source_image?.calibration?.method === "estimated") && (
+                    <Icon name="check" size={12} />
+                  )}
                 </span>
-              </span>
-              <Icon name="chevron" size={14} />
-            </button>
-            <button
-              className="text-button upload-link"
-              disabled={busy}
-              onClick={() => {
-                setCalibratingExisting(false);setPendingCalibration(null);
-                setModal("upload");
-                setError("");
-              }}
-            >
-              <Icon name="upload" size={14} />
-              Upload floor plan
-            </button>
-            <div className="scale-row">
-              <span>Plan scale</span>
-              <span className="mono">
-                {(plan.native?.transform.pixels_per_metre ?? 32).toFixed(1)} px / m
-                {!(plan.native&&nativeLayout(plan).source_image?.calibration?.method==="estimated")&&<Icon name="check" size={12} />}
-              </span>
-            </div>
-            {plan.native&&nativeLayout(plan).source_image?.calibration?.method==="estimated"&&
-              <span className="estimated-scale-badge">Estimated scale</span>}
-            {plan.native&&nativeLayout(plan).source_image?.calibration&&<p className="helper scale-evidence">
-              {nativeLayout(plan).source_image!.calibration!.method==="estimated"?"Estimated from: ":
-                nativeLayout(plan).source_image!.calibration!.method==="automatic"?"Detected from: ":"Calibrated from: "}
-              {nativeLayout(plan).source_image!.calibration!.label}
-            </p>}
-            {plan.native&&nativeLayout(plan).source_image?.calibration?.method==="estimated"&&
-              <p className="helper scale-estimate-note">Object sizes are assumptions. Distances, area, and evacuation results use this estimate. Use Edit scale to enter a known measurement.</p>}
-            {plan.native?.image&&<button className="text-button" disabled={busy} onClick={()=>{
-              const source=nativeLayout(plan).source_image!;
-              setCalibratingExisting(true);setError("");setPendingCalibration({needs_scale:true,
-                extraction_id:"recalibrate",image_id:source.id,width_px:source.width_px,height_px:source.height_px,
-                current_width_m:source.width_px*source.meters_per_pixel,
-                reason:"Mark a known distance or enter the full image width to correct the current scale. Your wall, door, and furniture edits will be preserved."});setModal("upload");
-            }}>Edit scale</button>}
-          </section>
+              </div>
+              {plan.native && nativeLayout(plan).source_image?.calibration?.method === "estimated" && (
+                <span className="estimated-scale-badge">Estimated scale</span>
+              )}
+              {plan.native && nativeLayout(plan).source_image?.calibration && (
+                <p className="helper scale-evidence">
+                  {nativeLayout(plan).source_image!.calibration!.method === "estimated"
+                    ? "Estimated from: "
+                    : nativeLayout(plan).source_image!.calibration!.method === "automatic"
+                      ? "Detected from: "
+                      : "Calibrated from: "}
+                  {nativeLayout(plan).source_image!.calibration!.label}
+                </p>
+              )}
+              {plan.native && nativeLayout(plan).source_image?.calibration?.method === "estimated" && (
+                <p className="helper scale-estimate-note">
+                  Distances, area, and results use assumed object sizes. Use Edit scale to enter a known measurement.
+                </p>
+              )}
+              {plan.native?.image && (
+                <button
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() => {
+                    const source = nativeLayout(plan).source_image!;
+                    setCalibratingExisting(true);
+                    setError("");
+                    setPendingCalibration({
+                      needs_scale: true,
+                      extraction_id: "recalibrate",
+                      image_id: source.id,
+                      width_px: source.width_px,
+                      height_px: source.height_px,
+                      current_width_m: source.width_px * source.meters_per_pixel,
+                      reason: "Mark a known distance or enter the full image width to correct the current scale. Your wall, door, and furniture edits will be preserved.",
+                    });
+                    setModal("upload");
+                  }}
+                >
+                  Edit scale
+                </button>
+              )}
+            </WorkspaceSources>
+          }
+        >
           <section className="setup-section layout-section">
             <div className="section-heading">
-              <span className="step-number">02</span>
+              <Icon name="layout" size={17} />
               <h2>Layout</h2>
               <span className="section-count">{plan.items.length} objects</span>
             </div>
@@ -813,7 +862,7 @@ export default function Workspace({
           </section>
           <section className="setup-section scenario-section">
             <div className="section-heading">
-              <span className="step-number">03</span>
+              <Icon name="people" size={17} />
               <h2>Scenario</h2>
             </div>
             <fieldset disabled={busy || Boolean(baseline)}>
@@ -890,7 +939,7 @@ export default function Workspace({
                 onChange={event => {const width=Number(event.target.value);if(Number.isInteger(width)&&width>=40&&width<=70)
                   setScenario({...scenario,bodyWidth:width/100});}} />
               <p className="field-note">Shoulder width and collision diameter use the same size. Default: 46 cm.
-                {isSample ? " Sample exits are 1.75 m wide, so two abreast can fit in these wide openings." : " Check the drawing’s scale if doors look too wide."}</p>
+                {plan.id === SAMPLE_PLAN.id && !plan.native ? " Sample exits are 1.75 m wide, so two abreast can fit in these wide openings." : " Check the drawing’s scale if doors look too wide."}</p>
               <label className="field-label" htmlFor="mobility">
                 Walking profile
               </label>
@@ -958,7 +1007,7 @@ export default function Workspace({
               Reset layout
             </button>
           </div>
-        </aside>
+        </WorkspaceSidebar>
         <section
           className="spatial-workspace"
           aria-label="Floor plan workspace"
@@ -1067,6 +1116,7 @@ export default function Workspace({
                   className={`icon-button ${mode === "layout" ? "tool-selected" : ""}`}
                   aria-label="Edit layout"
                   onClick={() => {
+                    setSidebarTab("editing");
                     setMode("layout");
                     setPlaying(false);
                   }}
@@ -1252,11 +1302,11 @@ export default function Workspace({
             <p className="scale-estimate-note">Estimated scale: these results use assumed object sizes. Calibrate with a known measurement for more reliable distances and density.</p>}
           {result && (result.placementExcludedArea ?? 0) > .01 &&
             <p className="scale-estimate-note">Automatic placement excluded {result.placementExcludedArea!.toFixed(1)} m² with no body-clear route to an exit. These areas had no starting occupants; review narrow gaps and enclosed rooms before interpreting the results.</p>}
-          <p className="results-subtitle">
-            {result
-              ? `${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.behaviorMode === "behavioral" ? "Behavioral" : "Idealized"} · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`
-              : "Your scenario, at a glance."}
-          </p>
+          {result && (
+            <p className="results-subtitle">
+              {`${result.scenario.occupancy} people · ${result.plan.exits.length} exits · ${result.scenario.behaviorMode === "behavioral" ? "Behavioral" : "Idealized"} · ${result.scenario.mobility === "standard" ? "Standard" : "Mixed"} walking`}
+            </p>
+          )}
           {stale && (
             <div className="result-stale">Inputs changed since this run</div>
           )}
@@ -1509,11 +1559,6 @@ export default function Workspace({
             )}
           </div>
           <div className="model-note">
-            <span>JUPEDSIM</span>
-            <p>
-              Collision-free movement with obstacle-aware exit routes.
-              Results are simulated, not a safety assessment.
-            </p>
             <button
               className="text-button muted"
               onClick={() => setModal("help")}
@@ -1581,7 +1626,7 @@ export default function Workspace({
                   ? "This provider needs an API key in the server’s .env file."
                   : providerStatus[imageProvider] ? "This provider is ready for an image." : "Checking provider status…")}
             </p>
-            <p className="muted">Scale uses printed dimensions first, then an estimate from doors and furniture when several objects agree. You can adjust estimates with Edit scale. If neither is usable, mark a known distance. Extraction sends the image to your selected provider.</p>
+            <p className="muted">Scale uses printed dimensions first, then an estimate from doors and furniture when several objects agree. You can adjust estimates with Edit scale. If neither is usable, mark a known distance. Images are resized to at most 3072 pixels per side before being sent to your selected provider.</p>
             </>}
             {pendingCalibration&&<ScaleCalibrator key={pendingCalibration.extraction_id} pending={pendingCalibration} busy={busy} onApply={finishScale}/>}
             {!calibratingExisting&&<>

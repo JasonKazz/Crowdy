@@ -1,0 +1,308 @@
+.sidebar.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: #fdfefa;
+}
+
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex-shrink: 0;
+  padding: 20px 16px 14px;
+  border-bottom: 1px solid #e0e7d8;
+  background: #fbfcf8;
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 17px;
+}
+
+.heading h2 {
+  margin: 0;
+  color: #41533a;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+
+.headingIcon {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  color: #6e885b;
+  border: 1px solid #dce5d2;
+  border-radius: 9px;
+  background: #f0f4e9;
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #e0e7d7;
+  border-radius: 11px;
+  background: #edf2e7;
+}
+
+.tabs .tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #718265;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.tabs .tab:hover {
+  color: #3e6032;
+  background: #f5f8f0;
+}
+
+.tabs .tab[aria-selected="true"] {
+  border-color: #d6e0cb;
+  color: #3f6333;
+  background: #fff;
+  box-shadow: 0 2px 4px #41573008;
+}
+
+.tabs .tab:focus-visible {
+  position: relative;
+  outline: 2px solid #6b8c4b;
+  outline-offset: 1px;
+}
+
+.sidebar .panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd7bf transparent;
+}
+
+.sidebar .panel[hidden] {
+  display: none;
+}
+
+.panel:focus-visible {
+  outline: 2px solid #6b8c4b;
+  outline-offset: -3px;
+}
+
+.editingPanel :global(.setup-section) {
+  padding: 16px;
+  margin: 14px;
+  border: 1px solid #e0e7d7;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.editingPanel :global(.section-heading) {
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.editingPanel :global(.section-heading) h2 {
+  color: #43563b;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.editingPanel :global(.section-heading) > svg:first-child {
+  margin-left: 0;
+  color: #7e9768;
+}
+
+.editingPanel :global(.section-count) {
+  color: #819071;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.editingPanel :global(.helper),
+.editingPanel :global(.field-note) {
+  color: #7b896e;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.editingPanel :global(.helper) + :global(.helper) {
+  margin-top: 7px;
+}
+
+.editingPanel :global(.text-button) {
+  min-height: 32px;
+  font-size: 11px;
+}
+
+.editingPanel :global(.button),
+.editingPanel :global(.icon-button.bordered) {
+  min-height: 38px;
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+.editingPanel :global(.icon-button.bordered) {
+  width: 38px;
+}
+
+.editingPanel :global(.geometry-panel) {
+  margin: 14px 0;
+  padding: 14px 0 0;
+  border-color: #e4e9de;
+}
+
+.editingPanel :global(.geometry-tools) {
+  gap: 6px;
+}
+
+.editingPanel :global(.geometry-picker),
+.editingPanel :global(.geometry-properties) label {
+  font-size: 11px;
+}
+
+.editingPanel :global(.geometry-picker) select,
+.editingPanel :global(.geometry-properties) input,
+.editingPanel :global(.geometry-properties) select {
+  min-height: 36px;
+  border-color: #dce4d3;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.editingPanel :global(.source-image-controls) label {
+  align-items: center;
+  min-height: 28px;
+  color: #718265;
+  font-size: 11px;
+}
+
+.editingPanel :global(.scenario-section) fieldset {
+  display: block;
+}
+
+.editingPanel :global(.occupancy-label),
+.editingPanel :global(.field-label) {
+  color: #65785a;
+  font-size: 12px;
+}
+
+.editingPanel :global(.occupancy-label) > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-color: #dce4d3;
+  border-radius: 6px;
+  font-size: 10px;
+}
+
+.editingPanel :global(.occupancy-label) input {
+  width: 36px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 13px;
+}
+
+.editingPanel :global(.field-label) {
+  margin: 19px 0 8px;
+}
+
+.editingPanel :global(.scenario-section) fieldset > input[type="number"],
+.editingPanel :global(.select-wrap) select {
+  width: 100%;
+  min-height: 38px;
+  padding: 9px;
+  border: 1px solid #dce4d3;
+  border-radius: 7px;
+  color: #536a46;
+  background: #fff;
+  font-size: 12px;
+}
+
+.editingPanel :global(.select-wrap) select {
+  padding-right: 29px;
+}
+
+.editingPanel :global(.select-wrap) svg {
+  top: 13px;
+}
+
+.editingPanel :global(.range-labels) {
+  color: #8c9a7f;
+  font-size: 10px;
+}
+
+.editingPanel :global(.setup-bottom) {
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  margin: 2px 16px 16px;
+  padding: 9px 3px 0;
+  border-top: 0;
+  color: #7a8b6b;
+  font-size: 11px;
+}
+
+.editingPanel :global(.setup-bottom) :global(.text-button) {
+  font-size: 11px;
+}
+
+@media (min-width: 701px) {
+  .sidebar.sidebar {
+    align-self: stretch;
+    min-height: 0;
+    max-height: none;
+    contain: size;
+    overflow: hidden;
+  }
+
+  .sidebar.sidebar > .panel {
+    flex-shrink: 1;
+  }
+}
+
+@media (max-width: 700px) {
+  .sidebar.sidebar {
+    order: 0;
+    display: flex;
+    max-height: none;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 1px solid #e0e7d8;
+    border-radius: 0;
+  }
+
+  .header {
+    padding: 16px;
+  }
+
+  .heading {
+    margin-bottom: 12px;
+  }
+
+  .sidebar .panel {
+    max-height: 560px;
+  }
+
+  .editingPanel :global(.setup-section:first-of-type) {
+    border-right: 1px solid #e0e7d7;
+  }
+}

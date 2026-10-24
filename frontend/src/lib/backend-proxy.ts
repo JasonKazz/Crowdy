@@ -21,10 +21,13 @@ export async function forwardBackendImage(request: Request, imageId: string) {
       headers: token ? {Authorization: `Bearer ${token}`} : {},
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(15_000)])});
     if (!response.ok) return failure("Source image unavailable on this server. Upload it again to restore the overlay.", response.status);
-    if (!response.headers.get("content-type")?.startsWith("image/png")) return failure("Invalid source image.", 502);
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+    if (contentType !== "image/png" && contentType !== "image/jpeg") return failure("Invalid source image.", 502);
+    const limit = 4 * 1024 * 1024;
+    if (Number(response.headers.get("content-length")) > limit) return failure("Source image is too large.", 502);
     const image = await response.arrayBuffer();
-    if (image.byteLength > 32 * 1024 * 1024) return failure("Source image is too large.", 502);
-    return new Response(image, {headers: {...headers, "Content-Type": "image/png", "X-Content-Type-Options": "nosniff"}});
+    if (image.byteLength > limit) return failure("Source image is too large.", 502);
+    return new Response(image, {headers: {...headers, "Content-Type": contentType, "X-Content-Type-Options": "nosniff"}});
   } catch {
     return failure("Source image unavailable on this server.", 503);
   }
@@ -86,12 +89,16 @@ export async function forwardBackend(request: Request, path: string, body?: unkn
       redirect: "error",
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]),
     });
-    const data = await response.json();
+    if (response.status === 413)
+      return failure(path === "/api/floorplans"
+        ? "This image is too large to upload. Crop to one floor plan or export a smaller PNG or JPEG, then try again."
+        : "The workspace is too large to simulate. Reduce the layout size and try again.", 413);
+    const data = await response.json().catch(() => null);
     if (!response.ok) {
       const message =
-        typeof data.error === "string"
+        typeof data?.error === "string"
           ? data.error.slice(0, 600)
-          : typeof data.detail === "string"
+          : typeof data?.detail === "string"
             ? data.detail.slice(0, 600)
           : "The simulation could not run. Check the layout and try again.";
       return failure(message, response.status >= 500 ? 502 : response.status);

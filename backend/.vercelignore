@@ -1,0 +1,10 @@
+.venv/
+venv/
+data/
+tests/
+**/__pycache__/
+**/*.pyc
+.env
+.env.*
+# The uv manifest defines the API-only dependencies for Vercel.
+requirements.txt

@@ -5,6 +5,7 @@ import binascii
 import io
 import json
 import math
+import tempfile
 import time
 import uuid
 import warnings
@@ -22,10 +23,12 @@ from app.schemas.scenario import AgentDefaults, Population, Region, SimulationSe
 from app.services.floorplans.layout import compile_layout
 from app.services.floorplans.providers import ProviderError, extract_drawing
 from app.services.floorplans.calibration import calibrate, calibrate_drawing
+from app.services.floorplans.storage import read_artifact, write_artifact
 
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 30_000_000
+MAX_PREVIEW_BYTES = 3 * 1024 * 1024
 
 
 def image_path(root: Path, image_id: str) -> Path:
@@ -68,17 +71,43 @@ def save_image(upload: ImageUpload, root: Path) -> SourceImage:
     source = SourceImage(id=uuid.uuid4().hex, width_px=image.width, height_px=image.height,
                          meters_per_pixel=0.02, scale_confirmed=False)
     path = image_path(root, source.id)
-    path.parent.mkdir(parents=True)
-    image.save(path, "PNG")
-    (path.parent / "metadata.json").write_text(source.model_dump_json(indent=2))
+    encoded = io.BytesIO()
+    image.save(encoded, "PNG")
+    write_artifact(root, path, encoded.getvalue())
+    write_artifact(root, path.parent / "metadata.json", source.model_dump_json(indent=2).encode())
     return source
 
 
 def load_image(root: Path, image_id: str) -> tuple[SourceImage, bytes]:
     path = image_path(root, image_id)
-    if not path.is_file():
-        raise ValueError("Image not found. Upload it again in this editor.")
-    return SourceImage.model_validate_json((path.parent / "metadata.json").read_text()), path.read_bytes()
+    try:
+        metadata = read_artifact(root, path.parent / "metadata.json")
+        image = read_artifact(root, path)
+    except FileNotFoundError:
+        raise ValueError("Image not found. Upload it again in this editor.") from None
+    return SourceImage.model_validate_json(metadata), image
+
+
+def load_image_bytes(root: Path, image_id: str) -> bytes:
+    return read_artifact(root, image_path(root, image_id))
+
+
+def image_preview(image: bytes) -> tuple[bytes, str]:
+    """Bound the HTTP overlay without altering extraction pixels or coordinates."""
+    if len(image) <= MAX_PREVIEW_BYTES:
+        return image, "image/png"
+    with Image.open(io.BytesIO(image)) as original:
+        preview = original.convert("RGB")
+    while True:
+        # Prefer the original dimensions: the SVG overlay and measurement tool
+        # retain the canonical source extent regardless of its preview encoding.
+        for quality in (92, 82, 72, 60, 45, 30):
+            encoded = io.BytesIO()
+            preview.save(encoded, "JPEG", quality=quality, optimize=True)
+            if encoded.tell() <= MAX_PREVIEW_BYTES:
+                return encoded.getvalue(), "image/jpeg"
+        preview = preview.resize((max(1, round(preview.width * .75)),
+                                  max(1, round(preview.height * .75))), Image.Resampling.LANCZOS)
 
 
 def draft_layout(source: SourceImage) -> Layout:
@@ -248,12 +277,22 @@ def extract_image(request: ExtractionRequest, root: Path, progress=None) -> dict
         started = time.perf_counter()
         extraction_id = uuid.uuid4().hex
         directory = root / "extractions" / extraction_id
-        directory.mkdir(parents=True)
         try:
             if max(original.width_px, original.height_px) > 1092:
                 from app.services.floorplans.staged import extract_staged
-                drawing, model = extract_staged(provider, image, original.width_px, original.height_px,
-                                                directory / "stages", progress)
+                # Stages need scratch files while extracting. Persist them via
+                # the configured store, including failed-stage diagnostics, so
+                # neither Blob imports nor later calibration depend on this worker.
+                with tempfile.TemporaryDirectory(prefix="crowdy-stages-") as scratch:
+                    stage_directory = Path(scratch)
+                    try:
+                        drawing, model = extract_staged(provider, image, original.width_px, original.height_px,
+                                                        stage_directory, progress)
+                    finally:
+                        for artifact in sorted(stage_directory.rglob("*")):
+                            if artifact.is_file():
+                                write_artifact(root, directory / "stages" / artifact.relative_to(stage_directory),
+                                               artifact.read_bytes())
             else:
                 if progress:
                     progress("Reading compact floor plan")
@@ -261,9 +300,9 @@ def extract_image(request: ExtractionRequest, root: Path, progress=None) -> dict
             info = ExtractionInfo(id=extraction_id, provider=provider, model=model,
                                   elapsed_seconds=round(time.perf_counter() - started, 3),
                                   warnings=drawing.warnings)
-            (directory / "observations.json").write_text(drawing.model_dump_json(indent=2))
-            (directory / "context.json").write_text(json.dumps({"source": original.model_dump(mode="json"),
-                "info": info.model_dump(mode="json"), "people_count": request.people_count}))
+            write_artifact(root, directory / "observations.json", drawing.model_dump_json(indent=2).encode())
+            write_artifact(root, directory / "context.json", json.dumps({"source": original.model_dump(mode="json"),
+                "info": info.model_dump(mode="json"), "people_count": request.people_count}).encode())
             if request.meters_per_pixel is None:
                 source, reason = calibrate_drawing(original, drawing, provider)
                 if source is None:
@@ -275,19 +314,23 @@ def extract_image(request: ExtractionRequest, root: Path, progress=None) -> dict
                 source = original.model_copy(update={"meters_per_pixel": request.meters_per_pixel,
                     "scale_confirmed": request.scale_confirmed,
                     "calibration": CalibrationInfo(method="manual", label="Entered image scale")})
-            result = save_candidate(drawing, source, info, request.people_count, directory)
+            result = save_candidate(drawing, source, info, request.people_count, directory, root)
             results.append(result)
         except (ProviderError, ValueError) as exc:
             error = {"provider": provider, "error": str(exc), "extraction_id": extraction_id}
-            if directory is not None:
-                (directory / "error.json").write_text(json.dumps(error, indent=2))
+            write_artifact(root, directory / "error.json", json.dumps(error, indent=2).encode())
             results.append(error)
     return {"results": results}
 
 
-def save_candidate(drawing, source, info, people_count, directory):
+def save_candidate(drawing, source, info, people_count, directory, root):
+    try:
+        read_artifact(root, directory / "stages" / "report.json")
+        staged = True
+    except FileNotFoundError:
+        staged = False
     layout = drawing_to_layout(drawing, source, info.provider, info, people_count,
-                               allow_review=(directory / "stages" / "report.json").is_file())
+                               allow_review=staged)
     notes = list(layout.extraction.warnings)
     if source.calibration and source.calibration.method == "estimated":
         notes.append("Scale estimated from assumed object sizes. Use Edit scale to replace it with a known measurement.")
@@ -300,7 +343,7 @@ def save_candidate(drawing, source, info, people_count, directory):
               "warnings": notes, "issues": issues,
               "elapsed_seconds": info.elapsed_seconds,
               "counts": {name: len(getattr(layout, name)) for name in ("rooms", "walls", "doors", "furniture", "exits")}}
-    (directory / "candidate.json").write_text(json.dumps(result, indent=2, allow_nan=False))
+    write_artifact(root, directory / "candidate.json", json.dumps(result, indent=2, allow_nan=False).encode())
     return result
 
 
@@ -308,11 +351,13 @@ def finish_calibration(extraction_id: str, reference: ScaleReference, root: Path
     if len(extraction_id) != 32 or any(c not in "0123456789abcdef" for c in extraction_id):
         raise ValueError("Invalid extraction ID")
     directory = root / "extractions" / extraction_id
-    if not (directory / "context.json").is_file():
-        raise ValueError("The saved extraction was not found. Upload the image again.")
-    context = json.loads((directory / "context.json").read_text())
+    try:
+        context = json.loads(read_artifact(root, directory / "context.json"))
+        observations = read_artifact(root, directory / "observations.json")
+    except FileNotFoundError:
+        raise ValueError("The saved extraction was not found. Upload the image again.") from None
     source, reason = calibrate(SourceImage.model_validate(context["source"]), [reference], "claude", manual=True)
     if source is None:
         raise ValueError(reason)
-    return save_candidate(ExtractedDrawing.model_validate_json((directory / "observations.json").read_text()),
-                          source, ExtractionInfo.model_validate(context["info"]), context["people_count"], directory)
+    return save_candidate(ExtractedDrawing.model_validate_json(observations),
+                          source, ExtractionInfo.model_validate(context["info"]), context["people_count"], directory, root)

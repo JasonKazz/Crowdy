@@ -1,17 +1,18 @@
 # Crowdy
 
+Interactive evacuation planning from furnished floor plans, with editable layouts, scenario-based occupancy, crowd simulation, and before-and-after comparisons. Built at Cal Hacks 13.0.
+
 ## Integrated app
 
-The Next.js workspace and the current JuPedSim backend run together. See [integration setup and checks](docs/integration.md) for the two-terminal startup, supported imports, and remaining UI limitations. The standalone layout editor below is also available for detailed wall and door corrections.
-Interactive evacuation planning from furnished floor plans, with editable layouts, scenario-based occupancy, crowd simulation, and before-and-after comparisons. Built at Cal Hacks 13.0.
+The Next.js workspace and JuPedSim backend run together. See [integration setup and checks](docs/integration.md) for local startup, supported imports, and remaining UI limitations. Both services deploy to Vercel as separate projects; see [deployment setup](docs/deployment.md). The standalone layout editor below is also available for detailed geometry corrections.
 
 ## Frontend
 
 Live demo: https://crowdy-calhacks13.vercel.app
 
-The Next.js app lives in `frontend/` and uses TypeScript, Tailwind CSS, ESLint, and the App Router. Use Node.js 20.9 or newer.
+The Next.js app lives in `frontend/` and uses TypeScript, Tailwind CSS, ESLint, and the App Router. Use Node.js 22 or newer for development and the regression scripts.
 
-The workspace includes furniture editing, scenario controls, playback, density overlays, and baseline comparisons. The simulation is an illustrative browser-local model; backend analysis and image/PDF interpretation are not connected yet.
+The workspace includes furniture and wall/door editing, scenario controls, playback, density overlays, and baseline comparisons. Runs use the Python JuPedSim service through a same-origin API. PNG/JPEG/WebP extraction uses a configured Gemini or Claude account, with automatic scale detection and a manual measurement fallback. PDF import is not implemented. Auth0 supplies sign-in; personal workspaces remain account-scoped browser storage.
 
 ```sh
 cd frontend
@@ -20,6 +21,19 @@ npm run dev
 ```
 
 Open http://localhost:3000. Run `npm run lint` to check the code and `npm run build` to create a production build.
+
+## Backend
+
+Use Python 3.12. From the repository root:
+
+```sh
+python3.12 -m venv backend/.venv
+backend/.venv/bin/python -m pip install -r backend/requirements.txt
+cd backend
+.venv/bin/python -m uvicorn app.api:app --host 127.0.0.1 --port 8000
+```
+
+Reuse an existing working environment. Run the frontend in a second terminal; it defaults to this backend address in development. `backend/pyproject.toml` and `uv.lock` define the smaller Vercel API environment, excluding the unused JuPedSim desktop visualizer dependencies. The existing requirements and Dockerfile remain available for local/standalone use.
 
 ## Backend structure
 
@@ -43,9 +57,15 @@ Unused backend directories retain `.gitkeep` placeholders.
 
 ## Local configuration
 
-Copy `.env.example` to `.env` in the repository root and update it locally. `.env` files, credentials, uploads, local databases, and generated results are ignored by Git. Commit only placeholder values in `.env.example`.
+Copy `.env.example` to `.env` in the repository root if no local file exists, and update it locally. Keep an existing `frontend/.env.local`; Next.js reads its Auth0 and backend settings there. `.env` files, credentials, uploads, local databases, and generated results are ignored by Git. Commit only placeholder values in `.env.example`.
 
-The local editor loads image-provider keys and model names from the repository root `.env` with existing process variables taking precedence. Other `CROWDY_*` variables remain proposed configuration. Data paths are relative to `backend/`.
+The API and local editor load backend settings from the repository root `.env`, with process variables taking precedence. `CROWDY_BACKEND_TOKEN` must match the Next.js server when configured. Artifacts use `backend/data/editor/` locally; setting `BLOB_READ_WRITE_TOKEN` uses private Vercel Blob for source images and extraction/calibration records. The Vercel fallback filesystem path is `/tmp/crowdy`, which is not durable storage.
+
+## Deployment
+
+The frontend is `crowdy-calhacks13` and the Python API is `crowdy-backend` in the `808-atoms` Vercel scope. The frontend calls the backend using server-only `CROWDY_BACKEND_URL` and a matching `CROWDY_BACKEND_TOKEN`. Private Blob keeps image overlays and pending manual calibration available across backend instances. Provider credentials still need to be configured before production image extraction; sample and JSON simulations do not require them.
+
+See [the deployment guide](docs/deployment.md) for environment variables, backend-first deployment commands, and production checks.
 
 ## Local simulation
 
