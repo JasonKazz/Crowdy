@@ -122,6 +122,7 @@ def output_schema() -> dict:
         result = {key: simplify(item) for key, item in value.items() if key not in unsupported}
         if result.get("type") == "object":
             result["additionalProperties"] = False
+            result["required"] = list(result.get("properties", {}))
         return result
 
     return simplify(schema)

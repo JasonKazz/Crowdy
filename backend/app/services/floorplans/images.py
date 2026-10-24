@@ -13,12 +13,13 @@ from pathlib import Path
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.schemas.extraction import (
-    ExtractedDrawing, ExtractionInfo, ExtractionRequest, ImageUpload, SourceImage,
+    CalibrationInfo, ExtractedDrawing, ExtractionInfo, ExtractionRequest, ImageUpload, ScaleReference, SourceImage,
 )
 from app.schemas.layout import Layout
 from app.schemas.scenario import AgentDefaults, Population, Region, SimulationSettings
 from app.services.floorplans.layout import compile_layout
 from app.services.floorplans.providers import ProviderError, extract_drawing
+from app.services.floorplans.calibration import calibrate
 
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -159,32 +160,33 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
 
 def extract_image(request: ExtractionRequest, root: Path) -> dict:
     original, image = load_image(root, request.image_id)
-    source = original.model_copy(update={"meters_per_pixel": request.meters_per_pixel,
-                                        "scale_confirmed": request.scale_confirmed})
     results = []
     providers = ("gemini", "claude") if request.provider == "both" else (request.provider,)
     for provider in providers:
         started = time.perf_counter()
         directory = None
         try:
-            drawing, model = extract_drawing(provider, image, source.width_px, source.height_px)
+            drawing, model = extract_drawing(provider, image, original.width_px, original.height_px)
             info = ExtractionInfo(id=uuid.uuid4().hex, provider=provider, model=model,
                                   elapsed_seconds=round(time.perf_counter() - started, 3),
                                   warnings=drawing.warnings)
             directory = root / "extractions" / info.id
             directory.mkdir(parents=True)
             (directory / "observations.json").write_text(drawing.model_dump_json(indent=2))
-            layout = drawing_to_layout(drawing, source, provider, info, request.people_count)
-            issues = []
-            try:
-                compile_layout(layout)
-            except ValueError as exc:
-                issues.append(str(exc))
-            result = {"provider": provider, "model": model, "layout": layout.model_dump(mode="json"),
-                      "warnings": layout.extraction.warnings, "issues": issues,
-                      "elapsed_seconds": info.elapsed_seconds,
-                      "counts": {name: len(getattr(layout, name)) for name in ("rooms", "walls", "doors", "furniture", "exits")}}
-            (directory / "candidate.json").write_text(json.dumps(result, indent=2, allow_nan=False))
+            (directory / "context.json").write_text(json.dumps({"source": original.model_dump(mode="json"),
+                "info": info.model_dump(mode="json"), "people_count": request.people_count}))
+            if request.meters_per_pixel is None:
+                source, reason = calibrate(original, drawing.scale_references, provider)
+                if source is None:
+                    results.append({"provider": provider, "needs_scale": True, "extraction_id": info.id,
+                        "image_id": original.id, "width_px": original.width_px, "height_px": original.height_px,
+                        "reason": reason, "warnings": drawing.warnings})
+                    continue
+            else:
+                source = original.model_copy(update={"meters_per_pixel": request.meters_per_pixel,
+                    "scale_confirmed": request.scale_confirmed,
+                    "calibration": CalibrationInfo(method="manual", label="Entered image scale")})
+            result = save_candidate(drawing, source, info, request.people_count, directory)
             results.append(result)
         except (ProviderError, ValueError) as exc:
             error = {"provider": provider, "error": str(exc)}
@@ -192,3 +194,32 @@ def extract_image(request: ExtractionRequest, root: Path) -> dict:
                 (directory / "error.json").write_text(json.dumps(error, indent=2))
             results.append(error)
     return {"results": results}
+
+
+def save_candidate(drawing, source, info, people_count, directory):
+    layout = drawing_to_layout(drawing, source, info.provider, info, people_count)
+    issues = []
+    try:
+        compile_layout(layout)
+    except ValueError as exc:
+        issues.append(str(exc))
+    result = {"provider": info.provider, "model": info.model, "layout": layout.model_dump(mode="json"),
+              "warnings": layout.extraction.warnings, "issues": issues,
+              "elapsed_seconds": info.elapsed_seconds,
+              "counts": {name: len(getattr(layout, name)) for name in ("rooms", "walls", "doors", "furniture", "exits")}}
+    (directory / "candidate.json").write_text(json.dumps(result, indent=2, allow_nan=False))
+    return result
+
+
+def finish_calibration(extraction_id: str, reference: ScaleReference, root: Path):
+    if len(extraction_id) != 32 or any(c not in "0123456789abcdef" for c in extraction_id):
+        raise ValueError("Invalid extraction ID")
+    directory = root / "extractions" / extraction_id
+    if not (directory / "context.json").is_file():
+        raise ValueError("The saved extraction was not found. Upload the image again.")
+    context = json.loads((directory / "context.json").read_text())
+    source, reason = calibrate(SourceImage.model_validate(context["source"]), [reference], "claude", manual=True)
+    if source is None:
+        raise ValueError(reason)
+    return save_candidate(ExtractedDrawing.model_validate_json((directory / "observations.json").read_text()),
+                          source, ExtractionInfo.model_validate(context["info"]), context["people_count"], directory)

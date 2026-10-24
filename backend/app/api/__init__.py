@@ -13,16 +13,17 @@ from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from app.schemas.scenario import InputModel
 from app.schemas.layout import Layout
-from app.schemas.extraction import ImageUpload, ExtractionRequest
-from app.services.floorplans.images import save_image, extract_image
+from app.schemas.extraction import ImageUpload, ExtractionRequest, ScaleReference
+from app.services.floorplans.images import save_image, extract_image, finish_calibration, image_path
 from app.services.floorplans.providers import load_environment, provider_status
-from app.simulation.workspace_layout import native_to_editor
+from app.services.floorplans.calibration import recalibrate_layout
+from app.simulation.workspace_layout import editor_native_layout, native_to_editor
 from app.simulation.editor_adapter import POPULATION_SEED, editor_to_scenario
 from app.simulation.engine import run_simulation
 
@@ -143,7 +144,7 @@ class EditorPlan(InputModel):
     area: float = Field(gt=0, le=10000)
     items: list[EditorItem] = Field(max_length=200)
     walls: list[EditorWall] = Field(max_length=300)
-    exits: list[EditorExit] = Field(min_length=1, max_length=20)
+    exits: list[EditorExit] = Field(max_length=20)
     native: NativeView | None = None
 
     @model_validator(mode="after")
@@ -236,10 +237,13 @@ async def simulate(payload: SimulationRequest, response: Response, authorization
 
 class FloorPlanImport(InputModel):
     layout: dict | None = None
+    editor_plan: EditorPlan | None = None
     filename: str | None = None
     image_base64: str | None = None
     provider: Literal["gemini", "claude"] = "gemini"
-    image_width_m: float = Field(default=20, gt=0, le=1000)
+    image_width_m: float | None = Field(default=None, gt=0, le=1000)
+    extraction_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    manual_scale: ScaleReference | None = None
 
 
 @app.get("/api/floorplans")
@@ -249,17 +253,45 @@ def floorplan_providers(response: Response):
 
 
 def import_floorplan(payload):
+    if payload.editor_plan is not None:
+        if payload.editor_plan.native is None:
+            raise ValueError("Import an image or native layout JSON to edit walls and doors")
+        layout, _ = editor_native_layout(payload.editor_plan.model_dump())
+        if payload.manual_scale:
+            layout = recalibrate_layout(layout, payload.manual_scale)
+        return {"plan": native_to_editor(layout.model_dump(), strict=False), "warnings": []}
     if payload.layout is not None:
-        return {"plan": native_to_editor(payload.layout), "warnings": []}
-    if not payload.filename or not payload.image_base64:
-        raise ValueError("Choose a backend layout JSON or a floor plan image")
+        return {"plan": native_to_editor(payload.layout, strict=False), "warnings": []}
     root = Path(os.environ.get("CROWDY_STORAGE_DIR", "data")) / "editor"
-    source = save_image(ImageUpload(filename=payload.filename, image_base64=payload.image_base64), root)
-    result = extract_image(ExtractionRequest(image_id=source.id, provider=payload.provider,
-        meters_per_pixel=payload.image_width_m / source.width_px, scale_confirmed=True), root)["results"][0]
+    if payload.extraction_id:
+        if payload.manual_scale is None:
+            raise ValueError("Mark a known distance to finish calibration")
+        result = finish_calibration(payload.extraction_id, payload.manual_scale, root)
+    else:
+        if not payload.filename or not payload.image_base64:
+            raise ValueError("Choose a backend layout JSON or a floor plan image")
+        source = save_image(ImageUpload(filename=payload.filename, image_base64=payload.image_base64), root)
+        result = extract_image(ExtractionRequest(image_id=source.id, provider=payload.provider,
+            meters_per_pixel=payload.image_width_m / source.width_px if payload.image_width_m else None,
+            scale_confirmed=bool(payload.image_width_m)), root)["results"][0]
+    if result.get("needs_scale"):
+        return result
     if "error" in result:
         raise ValueError(result["error"])
-    return {"plan": native_to_editor(result["layout"]), "warnings": result.get("warnings", [])}
+    return {"plan": native_to_editor(result["layout"], strict=False), "warnings": result.get("warnings", [])}
+
+
+@app.get("/api/floorplans/images/{image_id}")
+def floorplan_image(image_id: str, authorization: str | None = Header(default=None)):
+    require_backend_token(authorization)
+    root = Path(os.environ.get("CROWDY_STORAGE_DIR", "data")) / "editor"
+    try:
+        path = image_path(root, image_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid image ID") from None
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Source image unavailable on this server")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, no-store"})
 
 
 @app.post("/api/floorplans")

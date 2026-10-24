@@ -11,6 +11,25 @@ function backendUrl(path: string) {
   return url;
 }
 
+export async function forwardBackendImage(request: Request, imageId: string) {
+  if (!/^[a-f0-9]{32}$/.test(imageId)) return failure("Invalid image reference.", 400);
+  try {
+    const url = backendUrl(`/api/floorplans/images/${imageId}`);
+    if (!url) return failure("Image storage is unavailable.", 503);
+    const token = process.env.CROWDY_BACKEND_TOKEN;
+    const response = await fetch(url, {cache: "no-store", redirect: "error",
+      headers: token ? {Authorization: `Bearer ${token}`} : {},
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(15_000)])});
+    if (!response.ok) return failure("Source image unavailable on this server. Upload it again to restore the overlay.", response.status);
+    if (!response.headers.get("content-type")?.startsWith("image/png")) return failure("Invalid source image.", 502);
+    const image = await response.arrayBuffer();
+    if (image.byteLength > 4 * 1024 * 1024) return failure("Source image is too large.", 502);
+    return new Response(image, {headers: {...headers, "Content-Type": "image/png", "X-Content-Type-Options": "nosniff"}});
+  } catch {
+    return failure("Source image unavailable on this server.", 503);
+  }
+}
+
 export function failure(error: string, status: number) {
   return Response.json({ error }, { status, headers });
 }

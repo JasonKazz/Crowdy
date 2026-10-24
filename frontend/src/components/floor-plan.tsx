@@ -4,6 +4,8 @@ import { useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
 import { positionAt } from "@/lib/simulation";
 import type { FloorPlan, PlanItem, SimulationResult } from "@/lib/simulation";
+import GeometryEditorLayer from "./geometry-editor-layer";
+import type {GeometrySelection, GeometryTool} from "@/lib/native-editor";
 
 type Props = {
   plan: FloorPlan;
@@ -18,6 +20,13 @@ type Props = {
   showDensity: boolean;
   zoom: number;
   reference?: string | null;
+  showReference?: boolean;
+  referenceOpacity?: number;
+  geometrySelection?: GeometrySelection;
+  geometryTool?: GeometryTool;
+  onGeometrySelect?: (selection: GeometrySelection)=>void;
+  onGeometryChange?: (plan: FloorPlan)=>void;
+  onGeometryToolDone?: ()=>void;
 };
 
 type Drag = {
@@ -300,7 +309,7 @@ function Furniture({ item }: { item: PlanItem }) {
 }
 
 export default function FloorPlanView({
-  plan,
+  plan: inputPlan,
   selectedId,
   onSelect,
   onMove,
@@ -312,9 +321,19 @@ export default function FloorPlanView({
   showDensity,
   zoom,
   reference,
+  showReference=false,
+  referenceOpacity=.35,
+  geometrySelection=null,
+  geometryTool="select",
+  onGeometrySelect,
+  onGeometryChange,
+  onGeometryToolDone,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [geometryPreview,setGeometryPreview]=useState<FloorPlan|null>(null);
+  const [imageError,setImageError]=useState<string|null>(null);
+  const plan=geometryPreview??inputPlan;
   const isSample = plan.id === "berkeley-studio";
   const viewWidth = plan.width || 900;
   const viewHeight = plan.height || 600;
@@ -445,15 +464,6 @@ export default function FloorPlanView({
       <g
         transform={`translate(${viewWidth / 2} ${viewHeight / 2}) scale(${zoom}) translate(${-viewWidth / 2} ${-viewHeight / 2})`}
       >
-        {reference ? (
-          <image
-            href={reference}
-            width={viewWidth}
-            height={viewHeight}
-            preserveAspectRatio="xMidYMid meet"
-            opacity="0.45"
-          />
-        ) : null}
         {isSample ? (
           <>
             <rect x="80" y="90" width="740" height="420" fill="#fbfcfa" />
@@ -516,6 +526,13 @@ export default function FloorPlanView({
             strokeWidth="1"
           />
         )}
+
+        {reference&&<image href={reference} width={viewWidth} height={viewHeight} opacity=".45" pointerEvents="none"/>}
+        {showReference&&plan.native?.image&&(()=>{const image=plan.native.image;return imageError===image.id?
+          <text x="30" y="30" fill="#9b4c32" fontSize="13">Source image unavailable on this server. Upload it again to restore the overlay.</text>:
+          <image href={`/api/floorplans?image_id=${image.id}`} x={image.x} y={image.y} width={image.width} height={image.height}
+            preserveAspectRatio="none" opacity={referenceOpacity} pointerEvents="none" aria-label="Original floor plan image"
+            onError={()=>setImageError(image.id)}/>;})()}
 
         {showDensity && result ? (
           <g
@@ -743,6 +760,10 @@ export default function FloorPlanView({
             );
           })}
         </g>
+
+        {mode==="layout"&&plan.native&&onGeometrySelect&&onGeometryChange&&onGeometryToolDone&&<GeometryEditorLayer
+          key={geometryTool} plan={plan} selection={geometrySelection} tool={geometryTool}
+          onSelect={onGeometrySelect} onChange={onGeometryChange} onPreview={setGeometryPreview} onToolDone={onGeometryToolDone}/>}
 
         {showPeople && result ? (
           <g

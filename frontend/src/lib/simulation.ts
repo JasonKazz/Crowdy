@@ -31,6 +31,8 @@ export type FloorPlan = {
     floors: Point[][];
     walls: Point[][];
     exit_zones: {id: string; polygon: Point[]}[];
+    issues?: string[];
+    image?: {id: string; x: number; y: number; width: number; height: number} | null;
   };
 };
 export type Scenario = {

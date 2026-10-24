@@ -32,6 +32,21 @@ class DrawingDoor(InputModel):
     end: DrawingPoint = Field(description="The other jamb, on the same centerline and within the parent endpoints.")
 
 
+class ScaleReference(InputModel):
+    kind: Literal["dimension", "scale_bar"]
+    label: str = Field(min_length=1, max_length=200)
+    start: DrawingPoint
+    end: DrawingPoint
+    distance: float = Field(gt=0)
+    unit: Literal["m", "cm", "mm", "ft", "in"]
+
+
+class CalibrationInfo(InputModel):
+    method: Literal["automatic", "manual"]
+    label: str
+    references: list[ScaleReference] = Field(default_factory=list)
+
+
 class ExtractedDrawing(InputModel):
     name: str
     floor_outline: list[DrawingPoint] = Field(min_length=3, max_length=300,
@@ -44,6 +59,8 @@ class ExtractedDrawing(InputModel):
         description="Thin full-opening-width markers at visible exterior doorways; never interior room doors.")
     warnings: list[str] = Field(max_length=30,
         description="Ambiguous or unreadable features, identifying their object ID or location; do not invent geometry.")
+    scale_references: list[ScaleReference] = Field(default_factory=list, max_length=20,
+        description="Explicit dimension lines or graphical scale bars with readable lengths and units. Empty if absent; never estimate from objects or a paper-scale ratio alone.")
 
 
 class SourceImage(InputModel):
@@ -52,6 +69,7 @@ class SourceImage(InputModel):
     height_px: int = Field(ge=1, le=1092)
     meters_per_pixel: float = Field(gt=0, le=100)
     scale_confirmed: bool = False
+    calibration: CalibrationInfo | None = None
 
 
 class ExtractionInfo(InputModel):
@@ -70,6 +88,6 @@ class ImageUpload(InputModel):
 class ExtractionRequest(InputModel):
     image_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     provider: Literal["gemini", "claude", "both"]
-    meters_per_pixel: float = Field(gt=0, le=100)
-    scale_confirmed: bool
+    meters_per_pixel: float | None = Field(default=None, gt=0, le=100)
+    scale_confirmed: bool = False
     people_count: int = Field(default=40, ge=1, le=5000)
