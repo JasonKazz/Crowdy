@@ -1,4 +1,5 @@
 import json
+import math
 import unittest
 from pathlib import Path
 
@@ -130,6 +131,16 @@ class RoutingTests(unittest.TestCase):
         boundary = next(b for b in scenario.exit_boundaries if b.id == 'exit_east')
         self.assertTrue(all(.2 <= sum((p[i] - boundary.start[i]) * boundary.outward[i] for i in range(2)) <= .4
                             for p in targets))
+
+    def test_fitted_target_vertex_order_does_not_change_door_lanes(self):
+        scenario=compile_layout(regression_layout())
+        expected=plan_routes(scenario)
+        for region in scenario.exits:
+            region.polygon=list(reversed(region.polygon))
+        actual=plan_routes(scenario)
+        self.assertEqual([r['exit_id'] for r in actual],[r['exit_id'] for r in expected])
+        for a,b in zip(actual,expected):
+            self.assertLess(math.dist(a['path'][-1],b['path'][-1]),1e-8)
 
     def test_invalid_open_width_is_reported(self):
         layout = room()

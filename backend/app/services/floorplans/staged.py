@@ -5,6 +5,7 @@ in non-overlapping cores, while a halo supplies context across tile boundaries.
 Raw stage observations and a merge report are saved alongside the candidate.
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import copy
 import io
 import json
 import math
@@ -20,6 +21,10 @@ from app.schemas.scenario import InputModel
 from app.schemas.extraction import (DrawingPoint, DrawingRegion, DrawingWall, DrawingDoor,
     ScaleReference, ScaleObject, ExtractedDrawing)
 from app.services.floorplans.providers import ProviderError, extract_structured
+from app.services.floorplans.wall_pixels import verify_wall_pixels
+from app.services.floorplans.structure_pass import StructuralDrawing, STRUCTURAL_PROMPT, expand_structure, DoorReview, DOOR_PROMPT
+from app.services.floorplans.entrance_review import (EntranceSurvey, ENTRANCE_PROMPT, apply_survey,
+    replace_boundary_section, install_openings)
 
 CORE = 768
 HALO = 128
@@ -84,13 +89,6 @@ Details.model_rebuild()
 class ScaleReadings(InputModel):
     scale_references: list[VerifiedScaleReference] = Field(max_length=10)
     warnings: list[str] = Field(max_length=10)
-
-
-class ExitThreshold(InputModel):
-    found: bool
-    start: DrawingPoint
-    end: DrawingPoint
-    warning: str
 
 
 def png(image):
@@ -163,7 +161,7 @@ are NOT measurements. Prefer long unambiguous spans. If unreadable, return no re
 
 def to_pixels(observation, provider, size, offset=(0, 0), factor=1):
     """Local pixels/normalized -> canonical pixels, including thickness and crop origin."""
-    data = observation.model_dump()
+    data = observation.model_dump() if hasattr(observation, "model_dump") else copy.deepcopy(observation)
     if "furniture" in data:
         physical = []
         for item in data["furniture"]:
@@ -305,7 +303,7 @@ def merge(structure, details, references, size):
     data = {key: structure[key] for key in ("name", "floor_outline", "rooms", "walls", "doors", "exits")}
     data.update(furniture=[], scale_references=references, scale_objects=[], warnings=[])
     # Namespace IDs; every detail door retains its actual parent through wall deduplication.
-    batches = [("overview", structure, None)] + [(f"tile_{i}", d, core) for i, (d, core) in enumerate(details)]
+    batches = [("overview", structure, None)] + [(d.get("_stage", f"tile_{i}"), d, core) for i, (d, core) in enumerate(details)]
     data["walls"], data["doors"], data["exits"] = [], [], []
     furniture_shapes, exit_shapes = [], []
     removed = {"duplicate_furniture": 0, "duplicate_walls": 0, "invalid_geometry": 0, "clipped_walls": 0}
@@ -403,46 +401,9 @@ def merge(structure, details, references, size):
         notes.insert(0, f"{removed['clipped_walls']} wall segments were trimmed to the extracted building boundary; review their endpoints.")
     if not data["exits"]:
         notes.insert(0, "No reliable exterior exit opening was recovered. Add or correct exits before running.")
+    notes.sort(key=lambda note: 0 if "Structural crop" in note or note.startswith("walls_") else 1)
     data["warnings"] = list(dict.fromkeys(notes))[:30]
     return ExtractedDrawing.model_validate(data), removed
-
-
-def anchor_exit(drawing, identifier, start, end):
-    """Refine a short boundary section using independently observed door jambs.
-
-    This moves the approximate outline to image evidence, rather than moving a
-    door to a guessed position on that outline. Reject large or invalid edits.
-    """
-    data = drawing.model_dump()
-    vertices = [_point(p) for p in data["floor_outline"]]
-    opening = LineString([start, end])
-    if opening.length < 2:
-        return False
-    middle = opening.interpolate(.5, normalized=True)
-    index = min(range(len(vertices)), key=lambda i: LineString([vertices[i],vertices[(i+1)%len(vertices)]]).distance(middle))
-    edge = LineString([vertices[index],vertices[(index+1)%len(vertices)]])
-    if opening.distance(edge) > max(12, opening.length * .5):
-        return False
-    spans = sorted((edge.project(Point(p)), p) for p in (start,end))
-    if spans[1][0]-spans[0][0] < opening.length * .8:
-        return False
-    margin = min(15, opening.length/2)
-    before = edge.interpolate(max(0,spans[0][0]-margin)).coords[0]
-    after = edge.interpolate(min(edge.length,spans[1][0]+margin)).coords[0]
-    replacement = [before,spans[0][1],spans[1][1],after]
-    candidate = vertices[:index+1]+replacement+vertices[index+1:]
-    candidate = [p for i,p in enumerate(candidate) if i==0 or math.dist(p,candidate[i-1])>1e-5]
-    if len(candidate)>300:
-        return False
-    shape, old = Polygon(candidate), Polygon(vertices)
-    if not shape.is_valid or abs(shape.area-old.area) > old.area*.02:
-        return False
-    drawing.floor_outline = [DrawingPoint(x=x,y=y) for x,y in candidate]
-    nx,ny = -(end[1]-start[1])/opening.length, (end[0]-start[0])/opening.length
-    marker = next(item for item in drawing.exits if item.id==identifier)
-    marker.polygon = [DrawingPoint(x=p[0]+sign*nx,y=p[1]+sign*ny)
-        for p,sign in ((start,1),(end,1),(end,-1),(start,-1))]
-    return True
 
 
 def extract_staged(provider, image_bytes, width, height, directory: Path, progress=None):
@@ -491,6 +452,10 @@ def extract_staged(provider, image_bytes, width, height, directory: Path, progre
     if not floor.is_valid:
         raise ProviderError("The structure pass produced a self-intersecting boundary. Try the other provider.")
     regions = tiles(source.size, floor, 384 if structure["dense_furniture"] else CORE)
+    try:
+        structural_regions = tiles(source.size, floor, 512)
+    except ProviderError:
+        structural_regions = tiles(source.size, floor, CORE)
     work = []
     for i, window in enumerate(structure["scale_windows"]):
         # Overview suggestions often locate the text rather than the entire
@@ -501,7 +466,10 @@ def extract_staged(provider, image_bytes, width, height, directory: Path, progre
         if bounds[2] <= bounds[0] or bounds[3] <= bounds[1]: continue
         work.append((f"scale_{i+1}", bounds, None, SCALE, ScaleReadings))
     if not work:
-        structure["warnings"].append("The overview found no readable printed dimension span; object-scale estimation will be attempted.")
+        # Independent scale reading can recover a dimension missed by the overview.
+        work.append(("scale_scan", (0,0,width,height), None, SCALE, ScaleReadings))
+    for i, (core, bounds) in enumerate(structural_regions):
+        work.append((f"walls_{i+1}", bounds, core, STRUCTURAL_PROMPT, StructuralDrawing))
     for i, (core, bounds) in enumerate(regions):
         work.append((f"detail_{i+1}", bounds, core, DETAILS, Details))
     details, references, failures = {}, [], []
@@ -515,7 +483,8 @@ def extract_staged(provider, image_bytes, width, height, directory: Path, progre
             magnification = 1000 / max(crop.size)
             crop = crop.resize(tuple(round(side*magnification) for side in crop.size), Image.Resampling.LANCZOS)
         obs, _ = call(name, crop, prompt, schema)
-        converted = to_pixels(obs, provider, crop.size)
+        converted = to_pixels(expand_structure(obs) if isinstance(obs, StructuralDrawing) else obs, provider, crop.size)
+        converted["_stage"] = name
         # Re-express local results in exact source pixels, then translate.
         sx, sy = original_size[0] / crop.width, original_size[1] / crop.height
         def convert(p):
@@ -528,8 +497,8 @@ def extract_staged(provider, image_bytes, width, height, directory: Path, progre
                 convert(item["start"]); convert(item["end"])
                 if key == "walls": item["thickness"] *= min(sx, sy)
         return name, converted, core
-    # Two requests at a time; total calls <= 1 + 2 scale + 16 detail.
-    report(f"Reading {len(regions)} detail regions and {len(work)-len(regions)} scale regions")
+    # Two requests at a time; wall and furniture regions each have a 16-tile cap.
+    report(f"Reading {len(structural_regions)} wall regions and {len(regions)} furniture regions")
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = {pool.submit(run, task): task[0] for task in work}
         for future in as_completed(futures):
@@ -537,26 +506,41 @@ def extract_staged(provider, image_bytes, width, height, directory: Path, progre
             try:
                 _, converted, core = future.result()
                 if core is None:
-                    references.extend(converted["scale_references"])
+                    references.extend(converted.get("scale_references", []))
                     structure["warnings"].extend(converted["warnings"])
                 else:
                     details[name] = (converted, core)
-                    references.extend(converted["scale_references"])
+                    references.extend(converted.get("scale_references", []))
             except (ProviderError, ValueError) as exc:
                 failures.append({"stage": name, "error": str(exc)})
             report(f"Read {len(details)+len([f for f in futures if f.done() and futures[f].startswith('scale')])}/{len(work)} regions")
     # Missing detail regions may conceal obstacles or exits: do not silently
     # return an apparently complete, runnable layout.
-    failed_detail = [failure for failure in failures if failure["stage"].startswith("detail")]
-    report_data = {"pipeline_version": 1, "size": source.size, "overview_size": overview.size,
+    failed_detail = [failure for failure in failures if failure["stage"].startswith(("detail", "walls"))]
+    report_data = {"pipeline_version": 2, "size": source.size, "overview_size": overview.size,
         "tile_count": len(regions), "calls": 1+len(work), "failures": failures,
+        "structural_tile_count": len(structural_regions),
+        "structural_tiles": [{"core":core,"crop":bounds} for core,bounds in structural_regions],
         "tiles": [{"core": core, "crop": bounds} for core, bounds in regions]}
     (directory / "report.json").write_text(json.dumps(report_data, indent=2))
     if failed_detail:
         raise ProviderError(f"{len(failed_detail)} detail regions could not be read. No complete layout was imported. " + failed_detail[0]["error"])
     structure["warnings"].extend(f"Scale pass unavailable: {f['error']}" for f in failures)
+    def assemble(current_structure):
+        # The dedicated structural observations own partitions. Do not layer
+        # coarse overview/furniture guesses over a more detailed wall pass.
+        current_structure = copy.deepcopy(current_structure)
+        current_structure["walls"], current_structure["doors"] = [], []
+        batches = []
+        for name in sorted(details):
+            batch, core = details[name]
+            batch = copy.deepcopy(batch)
+            if name.startswith("detail"):
+                batch["walls"], batch["doors"] = [], []
+            batches.append((batch, core))
+        return merge(current_structure, batches, references[:20], source.size)
     report("Merging geometry and checking overlaps")
-    drawing, removed = merge(structure, [details[name] for name in sorted(details)], references[:20], source.size)
+    drawing, removed = assemble(structure)
     # One independent structure review, bounded rather than recursive retries.
     # The reviewer sees the actual overview and localized consistency failures.
     boundary = Polygon([_point(p) for p in drawing.model_dump()["floor_outline"]]).boundary
@@ -574,54 +558,109 @@ def extract_staged(provider, image_bytes, width, height, directory: Path, progre
             review, _ = call("structure_review", overview, feedback, Structure)
             revised = to_pixels(review, provider, overview.size)
             resize_structure(revised)
-            drawing, removed = merge(revised, [details[name] for name in sorted(details)], references[:20], source.size)
+            drawing, removed = assemble(revised)
             report_data["structure_review"] = True
         except (ProviderError, ValueError) as exc:
             report_data["structure_review_error"] = str(exc)
             drawing.warnings = (["Structure review was unavailable; inspect boundary and door openings."] + drawing.warnings)[:30]
-    # A global outline can be a few pixels off a real entrance on a curved plan.
-    # Reinspect at native detail before changing that outline. Bounded to four
-    # uncertain exits; unresolved observations remain explicit review warnings.
+    # Survey complete entrance neighborhoods, including their perimeter and
+    # separate clear openings. Never create small zigzags at individual jambs.
     exit_reviews = []
-    for marker in drawing.exits:
+    rough_markers = sorted(list(drawing.exits), key=lambda m: _region(m.model_dump()).length, reverse=True)
+    for marker in rough_markers:
+        if not any(item.id == marker.id for item in drawing.exits):
+            continue
         boundary = Polygon([(p.x,p.y) for p in drawing.floor_outline]).boundary
         shape = _region(marker.model_dump())
-        if shape.centroid.distance(boundary) <= 4 or len(exit_reviews) >= 4:
-            continue
         minx,miny,maxx,maxy = shape.bounds
-        margin = max(60, max(maxx-minx,maxy-miny))
-        bounds = (max(0,math.floor(minx-margin)),max(0,math.floor(miny-margin)),
-            min(width,math.ceil(maxx+margin)),min(height,math.ceil(maxy+margin)))
-        crop = source.crop(bounds)
-        native_size = crop.size
-        magnification = 1000 / max(crop.size)
-        crop = crop.resize(tuple(round(side*magnification) for side in crop.size),Image.Resampling.LANCZOS)
-        task = ("STAGE: verify ONE exterior doorway in this crop. The tentative opening is near the center. "
-            "Find the two jambs on its actual exterior-wall threshold, excluding door swing arcs. "
-            "Return found=false if there is no clearly visible exterior opening; never invent a gap from text. "
-            "For a contiguous exterior bank of doors, return the full clear bank's jambs. "
-            "Do not use crop edges or interior passages as exterior doors.")
-        record = {"id":marker.id}
+        broad = max(maxx-minx,maxy-miny) > min(source.size)*.03
+        if (shape.centroid.distance(boundary)<=4 and not broad) or len(exit_reviews)>=4:
+            continue
+        margin=max(70,max(maxx-minx,maxy-miny)*.8)
+        bounds=(max(0,math.floor(minx-margin)),max(0,math.floor(miny-margin)),
+                min(width,math.ceil(maxx+margin)),min(height,math.ceil(maxy+margin)))
+        crop=source.crop(bounds);native_size=crop.size
+        magnification=1000/max(crop.size)
+        crop=crop.resize(tuple(round(side*magnification) for side in crop.size),Image.Resampling.LANCZOS)
+        record={"id":marker.id}
+        snapshot=drawing.model_copy(deep=True)
         try:
-            reviewed,_ = call(f"exit_review_{len(exit_reviews)+1}",crop,task,ExitThreshold)
-            if reviewed.found:
-                sx,sy = ((native_size[0]/1000,native_size[1]/1000) if provider=="gemini"
-                         else (native_size[0]/crop.width,native_size[1]/crop.height))
-                start=(reviewed.start.x*sx+bounds[0],reviewed.start.y*sy+bounds[1])
-                end=(reviewed.end.x*sx+bounds[0],reviewed.end.y*sy+bounds[1])
-                in_frame = all(0<=p[0]<=width and 0<=p[1]<=height for p in (start,end))
-                record["anchored"] = in_frame and anchor_exit(drawing,marker.id,start,end)
+            survey,_=call(f"exit_review_{len(exit_reviews)+1}",crop,ENTRANCE_PROMPT,EntranceSurvey)
+            path,openings=apply_survey(drawing,marker.id,survey,crop.size,bounds[:2],native_size,provider)
+            revised=bool(openings) and replace_boundary_section(drawing,path,source.size)
+            already_aligned=bool(openings) and boundary.buffer(2).covers(LineString(path))
+            if revised or already_aligned:
+                install_openings(drawing,marker.id,path,openings)
+                record.update(anchored=bool(revised),openings=len(openings))
             else:
-                record["anchored"] = False
-            if not record["anchored"]:
-                drawing.warnings.insert(0,f"Review exterior exit {marker.id}: local image evidence could not safely refine its threshold.")
-            if reviewed.warning:
-                drawing.warnings.append(f"{marker.id}: {reviewed.warning}")
-        except (ProviderError, ValueError) as exc:
-            record["error"] = str(exc)
-            drawing.warnings.insert(0,f"Local verification unavailable for exterior exit {marker.id}.")
+                record.update(anchored=False,openings=0)
+                drawing.warnings.insert(0,f"Review exterior entrance {marker.id}: perimeter and clear door jambs remain uncertain.")
+            drawing.warnings.extend(f"{marker.id}: {note}" for note in survey.warnings)
+        except (ProviderError,ValueError) as exc:
+            drawing=snapshot
+            record["error"]=str(exc)
+            drawing.warnings.insert(0,f"Local verification unavailable for exterior entrance {marker.id}.")
         exit_reviews.append(record)
-    drawing.warnings = drawing.warnings[:30]
+    # A separate doorway-only pass avoids losing gaps when wall/furniture
+    # inventory dominates the model response. Use verified, image-aligned walls.
+    report_data["wall_image_checks"] = verify_wall_pixels(drawing, source)
+    door_reviews=[]
+    if drawing.walls and not drawing.doors:
+        report("Checking interior doorways on verified wall segments")
+        def review_doors(index, bounds):
+            crop=source.crop(bounds); native=crop.size
+            factor=1000/max(native)
+            crop=crop.resize(tuple(round(side*factor) for side in native),Image.Resampling.LANCZOS)
+            sx,sy=crop.width/native[0],crop.height/native[1]
+            local=[]
+            for wall in drawing.walls:
+                segment=LineString([(wall.start.x,wall.start.y),(wall.end.x,wall.end.y)])
+                if not box(*bounds).covers(segment):continue
+                item=wall.model_dump()
+                for key in ("start","end"):
+                    item[key]={"x":(item[key]["x"]-bounds[0])*sx,"y":(item[key]["y"]-bounds[1])*sy}
+                    if provider=="gemini":
+                        item[key]["x"]*=1000/crop.width;item[key]["y"]*=1000/crop.height
+                local.append(item)
+            if not local:return index,None
+            survey,_=call(f"door_review_{index}",crop,DOOR_PROMPT+json.dumps(local),DoorReview)
+            result=to_pixels(survey,provider,crop.size)
+            parents={w.id:w for w in drawing.walls}
+            verified=[]
+            for door in result["doors"]:
+                parent=parents.get(door["wall_id"])
+                if parent is None:continue
+                line=LineString([(parent.start.x,parent.start.y),(parent.end.x,parent.end.y)])
+                points=[Point(door[k]["x"]/sx+bounds[0],door[k]["y"]/sy+bounds[1]) for k in ("start","end")]
+                if any(p.distance(line)>3 for p in points):continue
+                points=[line.interpolate(line.project(p)) for p in points]
+                if points[0].distance(points[1])<2:continue
+                verified.append(DrawingDoor(id=f"door_review_{index}_{door['id']}",wall_id=parent.id,
+                    start=DrawingPoint(x=points[0].x,y=points[0].y),end=DrawingPoint(x=points[1].x,y=points[1].y)))
+            return index,(verified,result["warnings"])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            jobs={pool.submit(review_doors,i+1,bounds):i+1 for i,(_,bounds) in enumerate(structural_regions)}
+            for job in as_completed(jobs):
+                index=jobs[job]
+                try:
+                    _,result=job.result()
+                    if result:
+                        doors,notes=result
+                        for door in doors:
+                            line=LineString([(door.start.x,door.start.y),(door.end.x,door.end.y)])
+                            if any(other.wall_id==door.wall_id and line.hausdorff_distance(LineString(
+                                [(other.start.x,other.start.y),(other.end.x,other.end.y)]))<3 for other in drawing.doors):continue
+                            drawing.doors.append(door)
+                        drawing.warnings.extend(f"Door review {index}: {note}" for note in notes)
+                        door_reviews.append({"region":index,"doors":len(doors)})
+                except (ProviderError,ValueError) as exc:
+                    door_reviews.append({"region":index,"error":str(exc)})
+                    drawing.warnings.insert(0,"Interior doorway verification was incomplete; inspect door gaps before simulation.")
+        if not drawing.doors:
+            drawing.warnings.insert(0,"No interior door jambs could be verified; inspect partition gaps before interpreting the evacuation results.")
+    report_data["door_reviews"]=door_reviews
+    report("Verifying proposed walls against image linework")
+    drawing.warnings = list(dict.fromkeys(drawing.warnings))[:30]
     report_data["exit_reviews"] = exit_reviews
     report_data.update(merge=removed, counts={name: len(getattr(drawing, name)) for name in
         ("rooms", "walls", "doors", "exits", "furniture", "scale_references")},

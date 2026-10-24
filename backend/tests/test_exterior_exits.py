@@ -1,12 +1,15 @@
 import copy
+import json
+from pathlib import Path
 import unittest
 
 from shapely.geometry import Point, Polygon
 
 from app.schemas.extraction import ExtractedDrawing
-from app.schemas.layout import ExitDoor, Layout, load_layout
+from app.schemas.layout import ExitDoor, Layout, load_layout, exit_from_marker
 from app.schemas.scenario import Region
 from app.services.floorplans.images import drawing_to_layout
+from app.services.floorplans.exits import exit_geometry
 from app.services.floorplans.layout import compile_layout
 from app.services.population.generate import resolve_population
 from app.simulation.engine import run_simulation
@@ -83,6 +86,24 @@ class ExteriorExitTests(unittest.TestCase):
         observed = build_geometry(compile_layout(layout))
         self.assertAlmostEqual(expected.symmetric_difference(observed).area, 0)
 
+    def test_real_surveyed_door_bank_preserves_all_six_openings(self):
+        layout=Layout.model_validate_json((Path(__file__).parent/'fixtures/venue-surveyed-door-bank.json').read_text())
+        before=copy.deepcopy(layout.walkable_areas)
+        scenario=compile_layout(layout)
+        self.assertEqual(len(scenario.exits),6)
+        self.assertEqual(layout.walkable_areas,before)
+        floor=Polygon(before[0].polygon)
+        for region in scenario.exits:
+            self.assertGreaterEqual(Polygon(region.polygon).distance(floor),layout.agent_defaults.radius)
+
+    def test_surveyed_jamb_projection_accepts_roundoff_at_edge_ends(self):
+        layout=Layout.model_validate_json((Path(__file__).parent/'fixtures/venue-surveyed-door-bank.json').read_text())
+        for door in layout.exits:
+            _,_,marker=exit_geometry(door,layout.walkable_areas[0],layout.agent_defaults.radius)
+            observed=exit_from_marker(marker,layout.walkable_areas)
+            self.assertEqual(observed.edge_index,door.edge_index)
+            self.assertAlmostEqual(observed.width,door.width)
+
     def test_angled_boundary_uses_outward_normal(self):
         layout = room()
         layout.walkable_areas[0].polygon = [(0, 0), (10, 0), (12, 8), (2, 8)]
@@ -109,14 +130,42 @@ class ExteriorExitTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exterior floor edge"):
             compile_layout(layout)
 
-    def test_overlapping_landings_and_obstructed_openings_are_rejected(self):
+    def test_duplicate_openings_and_obstructed_openings_are_rejected(self):
         layout = room()
         layout.exits.append(layout.exits[0].model_copy(update={"id": "second"}))
-        with self.assertRaisesRegex(ValueError, "landings must not overlap"):
+        with self.assertRaisesRegex(ValueError, "openings must not overlap"):
             compile_layout(layout)
         layout = room()
         layout.furniture.append(Region(id="blocked-door", polygon=[(9, 3.5), (10, 3.5), (10, 4.5), (9, 4.5)]))
         with self.assertRaisesRegex(ValueError, "opening is obstructed"):
+            compile_layout(layout)
+
+    def test_adjacent_doors_can_share_outside_dispersal_space(self):
+        layout=room()
+        layout.exits[0].offset=3.5
+        layout.exits.append(layout.exits[0].model_copy(update={'id':'second','offset':5.0}))
+        scenario=compile_layout(layout)
+        self.assertEqual(len(scenario.exits),2)
+        first,second=[Polygon(area.polygon) for area in scenario.walkable_areas[1:]]
+        self.assertGreater(first.intersection(second).area,0)
+        self.assertTrue(build_geometry(scenario).is_valid)
+
+    def test_concave_venue_entrance_landing_stays_outside_and_preserves_floor(self):
+        layout=Layout.model_validate_json((Path(__file__).parent/'fixtures/venue-concave-entrance.json').read_text())
+        before=layout.model_dump()
+        floor=Polygon(layout.walkable_areas[0].polygon)
+        scenario=compile_layout(layout)
+        self.assertEqual(layout.model_dump(),before)
+        apron=Polygon(scenario.walkable_areas[-1].polygon)
+        _,target,threshold=exit_geometry(layout.exits[0],layout.walkable_areas[0],layout.agent_defaults.radius)
+        self.assertLess(apron.intersection(floor).difference(Polygon(threshold.polygon)).area,1e-8)
+        self.assertGreaterEqual(Polygon(target.polygon).distance(floor),layout.agent_defaults.radius)
+        self.assertTrue(build_geometry(scenario).is_valid)
+
+    def test_another_wing_blocking_all_body_clear_space_is_rejected(self):
+        layout=room()
+        layout.walkable_areas.append(Region(id='wing',polygon=[(10.1,0),(14,0),(14,8),(10.1,8)]))
+        with self.assertRaisesRegex(ValueError,'body-clear outside'):
             compile_layout(layout)
 
     def test_new_and_previously_saved_image_exits_become_boundary_doors(self):

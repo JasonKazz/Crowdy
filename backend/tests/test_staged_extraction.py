@@ -13,7 +13,7 @@ from app.schemas.extraction import ExtractedDrawing, ExtractionInfo, SourceImage
 from app.services.floorplans.images import drawing_to_layout
 from app.services.floorplans.providers import ProviderError, output_schema
 from app.services.floorplans.staged import (Structure, Details, ScaleReadings, to_pixels,
-    for_provider, merge, tiles, same_wall, extract_staged, anchor_exit)
+    for_provider, merge, tiles, same_wall, extract_staged)
 from test_images import point, region, drawing_fixture
 
 
@@ -131,15 +131,6 @@ class StagedExtractionTests(unittest.TestCase):
         self.assertEqual(len(layout.exits),2)
         self.assertEqual(len(layout.furniture),1)
         self.assertTrue(any('bad-interior-exit' in note and 'omitted' in note for note in layout.extraction.warnings))
-
-    def test_local_exit_evidence_refines_only_a_short_valid_boundary_section(self):
-        drawing=ExtractedDrawing.model_validate({**drawing_fixture(),'walls':[],'doors':[]})
-        original=Polygon([(p.x,p.y) for p in drawing.floor_outline])
-        self.assertTrue(anchor_exit(drawing,'exit-west',(48,70),(48,130)))
-        revised=Polygon([(p.x,p.y) for p in drawing.floor_outline])
-        self.assertTrue(revised.is_valid)
-        self.assertLess(abs(original.area-revised.area),original.area*.01)
-        self.assertFalse(anchor_exit(drawing,'exit-west',(0,0),(20,0)))
 
     def test_failed_detail_region_does_not_return_a_complete_candidate(self):
         image=Image.new('RGB',(1000,500),'white');stream=io.BytesIO();image.save(stream,'PNG')

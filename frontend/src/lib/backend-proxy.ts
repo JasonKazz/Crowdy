@@ -97,7 +97,10 @@ export async function forwardBackend(request: Request, path: string, body?: unkn
       return failure(message, response.status >= 500 ? 502 : response.status);
     }
     const payload = JSON.stringify(data);
-    if (Buffer.byteLength(payload) > 4 * 1024 * 1024)
+    // Long venue runs retain their full trajectory samples. Imports and
+    // health responses keep the smaller existing response budget.
+    const responseLimit = (path === "/api/simulations" ? 16 : 4) * 1024 * 1024;
+    if (Buffer.byteLength(payload) > responseLimit)
       return failure(
         "This run produced too much playback data. Reduce occupancy and try again.",
         502,

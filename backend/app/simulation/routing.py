@@ -171,8 +171,15 @@ def plan_routes(scenario, geometry=None, planner=None, allow_trapped=False):
             if boundary:
                 digest = hashlib.sha256(f"{person.id}:{region.id}".encode()).digest()
                 fraction = .12 + .76 * int.from_bytes(digest[:4], "big") / (2**32 - 1)
-                a, b = region.polygon[:2]
-                preferred = tuple(a[i] + (b[i] - a[i]) * fraction + boundary.outward[i] * .08 for i in range(2))
+                # Fitting an outside target around a concave footprint may
+                # reorder/add polygon vertices. Door lanes follow the actual
+                # threshold, never whichever polygon edge happens to come first.
+                a,b=boundary.start,boundary.end
+                width=math.dist(a,b)
+                along=.01+(width-.02)*fraction
+                depth=min(sum((p[i]-a[i])*boundary.outward[i] for i in range(2))
+                          for p in region.polygon)+.08
+                preferred=tuple(a[i]+(b[i]-a[i])*along/width+boundary.outward[i]*depth for i in range(2))
             planned = planner.route(person.position, polygon, preferred)
             if planned:
                 distance, points = planned

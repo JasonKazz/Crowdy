@@ -71,8 +71,9 @@ def exit_from_marker(marker: Region, floors: list[Region]) -> ExitDoor:
     if not choices:
         raise ValueError(f"Exit '{marker.id}' has no usable floor boundary")
     distance, floor_id, index, offset, width, length = min(choices)
-    if distance > 0.75 or width < 1e-6 or width > length:
+    if distance > 0.75 or width < 1e-6 or width > length + 1e-8:
         raise ValueError(f"Exit '{marker.id}' is not near a usable exterior edge. Add an exterior exit door manually.")
+    width = min(width, length)  # Floating-point projection at exact jamb vertices.
     return ExitDoor(id=marker.id, floor_id=floor_id, edge_index=index,
                     offset=min(length - width / 2, max(width / 2, offset)), width=width)
 
