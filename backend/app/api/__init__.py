@@ -9,19 +9,19 @@ import secrets
 import threading
 import time
 from importlib.metadata import version
-from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from pydantic import ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from app.schemas.scenario import InputModel
 from app.schemas.layout import Layout
 from app.schemas.extraction import ImageUpload, ExtractionRequest, ScaleReference
-from app.services.floorplans.images import save_image, extract_image, finish_calibration, image_path
+from app.services.floorplans.images import save_image, extract_image, finish_calibration, load_image_bytes
+from app.services.floorplans.storage import editor_storage_root
 from app.services.floorplans.providers import load_environment, provider_status
 from app.services.floorplans.calibration import recalibrate_layout
 from app.simulation.workspace_layout import editor_native_layout, native_to_editor
@@ -281,7 +281,7 @@ def import_floorplan(payload):
         return {"plan": native_to_editor(layout.model_dump(), strict=False), "warnings": []}
     if payload.layout is not None:
         return {"plan": native_to_editor(payload.layout, strict=False), "warnings": []}
-    root = Path(os.environ.get("CROWDY_STORAGE_DIR", "data")) / "editor"
+    root = editor_storage_root()
     if payload.extraction_id:
         if payload.manual_scale is None:
             raise ValueError("Mark a known distance to finish calibration")
@@ -303,14 +303,16 @@ def import_floorplan(payload):
 @app.get("/api/floorplans/images/{image_id}")
 def floorplan_image(image_id: str, authorization: str | None = Header(default=None)):
     require_backend_token(authorization)
-    root = Path(os.environ.get("CROWDY_STORAGE_DIR", "data")) / "editor"
+    root = editor_storage_root()
     try:
-        path = image_path(root, image_id)
+        image = load_image_bytes(root, image_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid image ID") from None
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Source image unavailable on this server")
-    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, no-store"})
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Source image unavailable on this server") from None
+    except OSError:
+        raise HTTPException(status_code=503, detail="Source image storage is unavailable") from None
+    return Response(image, media_type="image/png", headers={"Cache-Control": "private, no-store"})
 
 
 @app.post("/api/floorplans")

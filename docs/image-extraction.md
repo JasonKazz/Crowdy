@@ -4,18 +4,18 @@ This feature starts from a PNG, JPEG, or WebP floor-plan image and produces the 
 
 ## Setup
 
-From `backend/`, activate `.venv` and install `requirements.txt`. The additions are Pillow for decoding/resizing images and python-dotenv for local configuration. HTTP calls use Python's standard library.
+From `backend/`, activate `.venv` and install `requirements.txt`. Pillow decodes/resizes images, python-dotenv loads local configuration, and HTTPX handles provider requests. Vercel uses the locked API environment in `pyproject.toml` and `uv.lock`; see [deployment setup](deployment.md).
 
 Keep real credentials in the repository root `.env`, which Git ignores:
 
 ```dotenv
 GEMINI_API_KEY=replace_locally
 ANTHROPIC_API_KEY=replace_locally
-GEMINI_MODEL=gemini-3.8-flash
-ANTHROPIC_MODEL=claude-sonnet-5-5
+GEMINI_MODEL=your-available-gemini-model
+ANTHROPIC_MODEL=your-available-claude-model
 ```
 
-Model names are configurable because availability varies by account and changes over time. `CLAUDE_API_KEY` is accepted as an alias when `ANTHROPIC_API_KEY` is absent. One provider key is enough for its individual extraction button; comparison requires both. `.env.example` must contain placeholders only. Existing environment variables take precedence. Restart after changing keys or model names. Keys stay in request headers on the server and are not sent to the browser, saved in artifacts, or included in upstream error messages.
+Choose model IDs with image and structured-output support available to your account. `CLAUDE_API_KEY` is accepted as an alias when `ANTHROPIC_API_KEY` is absent. One provider key is enough for its individual extraction button; comparison requires both. `.env.example` must contain placeholders only. Existing environment variables take precedence. Restart locally after changing keys or model names; Vercel environment changes require a new backend deployment. Keys stay in request headers on the server and are not sent to the browser, saved in artifacts, or included in upstream error messages. Production provider credentials are not configured yet.
 
 Run `python -m app.simulation.editor` and open its printed `http://127.0.0.1:...` address. `--env-file /absolute/path/to/.env` selects another local configuration file. Opening `editor.html` directly cannot use these endpoints.
 
@@ -24,6 +24,8 @@ Run `python -m app.simulation.editor` and open its printed `http://127.0.0.1:...
 ### Main website
 
 Choose **Upload floor plan**, pick a provider, and upload the image. There is no up-front scale field. The model returns explicit dimension/scale-bar observations (endpoints, value, units, visible label); Python validates bounds, converts units, checks agreement, and uses the longest agreeing reference. No reference, short/unreadable evidence, or conflicting dimensions opens a source-image measurement tool. Mark two endpoints and enter the distance in metres, centimetres, millimetres, feet, or inches. The saved extraction is reused, without another model request.
+
+Source files may be PNG/JPEG/WebP up to 10 MiB and 30 million pixels. Before sending, the browser corrects orientation, adds a white background, and resizes to at most 1092 pixels per side. It uses PNG when possible, then JPEG if needed, within a 3 MiB encoded-image budget so the base64 JSON fits Vercel's 4.5 MB request limit. A file that cannot fit is rejected before upload. The backend stores the resulting processed image as PNG.
 
 The plan shows the calibration evidence beside its scale. **Edit scale** can correct a detected value without discarding furniture or structural edits. Agent size and walking speed remain physical simulation settings when the drawing scale changes.
 
@@ -66,17 +68,18 @@ Useful references: [Claude coordinates](https://platform.claude.com/docs/en/buil
 
 ## Stored artifacts
 
-All artifacts live in the ignored `backend/data/editor/` directory:
+Locally, image artifacts use the ignored `backend/data/editor/` directory by default. `CROWDY_STORAGE_DIR` can change that root. With `BLOB_READ_WRITE_TOKEN` configured, the image/extraction records below use private Vercel Blob under `crowdy/editor/` instead, so manual calibration and image overlays work across backend instances:
 
 - `images/<image_id>/source.png`: the processed image both providers see.
 - `images/<image_id>/metadata.json`: image ID, pixel dimensions, and initial unconfirmed scale.
 - `extractions/<extraction_id>/observations.json`: validated provider observations in that provider's coordinate units.
+- `extractions/<extraction_id>/context.json`: source image, extraction metadata, and population settings needed to finish manual calibration without another provider call.
 - `extractions/<extraction_id>/candidate.json`: converted editable layout, model/time metadata, warnings, and geometry issues.
 - `extractions/<extraction_id>/error.json`: conversion error, when valid observations could not be converted into an editable candidate.
-- `<run_id>/layout.json`: the chosen and manually corrected layout, including confirmed scale, source-image ID, room labels, and extraction provenance.
-- `<run_id>/scenario.json`, `result.json`, `playback.html`: the existing compiled input, simulation output, and animation.
 
-Images persist across server restarts in the same data directory. Exported layout JSON references that local image ID; moving JSON to another machine requires transferring its corresponding image storage too. No base64 image or API key is embedded in the editable JSON.
+Standalone simulation runs still write `<run_id>/layout.json`, `scenario.json`, `result.json`, and `playback.html` to the local run directory. The main website returns playback data directly and keeps runs/baselines in the editor session.
+
+Images persist in the configured Blob store or local data directory. Vercel's `/tmp/crowdy/editor/` fallback is temporary and instance-local; production needs the linked private Blob store. Exported layout JSON references the image ID; a different backend must share the store or receive the image again. No base64 image or API key is embedded in the editable JSON.
 
 ## Endpoints
 
@@ -96,7 +99,7 @@ The standalone editor endpoints remain:
 | --- | --- | --- |
 | GET | `/api/providers` | Configured/missing flags and model names, with no credentials. |
 | POST | `/api/images` | Base64 image plus filename; returns an editable image frame and source metadata. |
-| GET | `/images/<image_id>` | Read the processed PNG from local storage. |
+| GET | `/images/<image_id>` | Read the processed PNG from the configured artifact store. |
 | POST | `/api/extract` | Image ID, provider (`gemini`, `claude`, `both`), meters-per-pixel, scale-confirmed flag, and population count. |
 
-Image-upload JSON has a 14 MiB request limit to accommodate base64; individual source files are limited to 10 MiB. Other JSON endpoints retain their 2 MiB limit. A second extraction returns 409 while one is active. Individual provider failures are returned in the comparison results so the other provider's successful candidate remains usable. No comparison declares a winner without reference geometry or human review.
+The local standalone editor accepts image-upload JSON up to 14 MiB for source files up to 10 MiB; other standalone JSON endpoints retain their 2 MiB limit. A second standalone extraction returns 409 while one is active. The main API has a 1 MiB simulation limit and reserves one extraction slot per provider, returning 429 when that provider is busy. Vercel's 4.5 MB transport limit applies before these application limits, so the website preprocesses images as described above. Individual provider failures in a standalone comparison leave the other provider's successful candidate usable. No comparison declares a winner without reference geometry or human review.

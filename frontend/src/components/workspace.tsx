@@ -12,6 +12,7 @@ import Icon, { type IconName } from "./icon";
 import ScaleCalibrator, {type PendingCalibration} from "./scale-calibrator";
 import GeometryPanel from "./geometry-panel";
 import {nativeLayout, type GeometrySelection, type GeometryTool} from "@/lib/native-editor";
+import { IMAGE_UPLOAD_SIZE_ERROR, prepareImageUpload } from "@/lib/image-upload";
 import {
   SAMPLE_PLAN,
   runSimulation,
@@ -458,18 +459,16 @@ export default function Workspace({
     try {
       let data;
       if (image) {
-        const encoded = await new Promise<string>((resolve,reject)=>{
-          const reader = new FileReader(); reader.onload=()=>resolve(String(reader.result).split(",")[1]);
-          reader.onerror=()=>reject(new Error("Could not read this image.")); reader.readAsDataURL(file);
-        });
-        data = {filename:file.name,image_base64:encoded,provider:imageProvider};
+        data = {...await prepareImageUpload(file),provider:imageProvider};
       } else data = JSON.parse(await file.text());
       const raw = data.plan ?? data;
       let warnings: string[] = [];
       if (image || raw.walkable_areas) {
         const response = await fetch("/api/floorplans",{method:"POST",headers:{"Content-Type":"application/json"},
           body:JSON.stringify(image ? data : {layout:raw})});
-        const imported = await response.json();
+        if (response.status === 413) throw new Error(IMAGE_UPLOAD_SIZE_ERROR);
+        const imported = await response.json().catch(() => null);
+        if (!imported || typeof imported !== "object") throw new Error("The floor plan service returned an unreadable response. Try again shortly.");
         if(!response.ok) throw new Error(imported.error || "The floor plan could not be imported.");
         if(imported.needs_scale){setPendingCalibration(imported);setNotice("");return;}
         data = imported; warnings=imported.warnings ?? [];
@@ -1491,7 +1490,7 @@ export default function Workspace({
                   ? "This provider needs an API key in the server’s .env file."
                   : providerStatus[imageProvider] ? "This provider is ready for an image." : "Checking provider status…")}
             </p>
-            <p className="muted">Scale is detected from printed dimensions or a scale bar. If none is readable, you can mark one known distance afterward. Extraction sends the image to your selected provider.</p>
+            <p className="muted">Scale is detected from printed dimensions or a scale bar. If none is readable, you can mark one known distance afterward. Images are resized to 1092 pixels on the longest edge before being sent to your selected provider; crop dense plans for clearer detail.</p>
             {pendingCalibration&&<ScaleCalibrator key={pendingCalibration.extraction_id} pending={pendingCalibration} busy={busy} onApply={finishScale}/>}
             <button
               className="upload-dropzone"

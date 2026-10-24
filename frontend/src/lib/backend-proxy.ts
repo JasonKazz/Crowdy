@@ -86,12 +86,16 @@ export async function forwardBackend(request: Request, path: string, body?: unkn
       redirect: "error",
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]),
     });
-    const data = await response.json();
+    if (response.status === 413)
+      return failure(path === "/api/floorplans"
+        ? "This image is too large to upload. Crop to one floor plan or export a smaller PNG or JPEG, then try again."
+        : "The workspace is too large to simulate. Reduce the layout size and try again.", 413);
+    const data = await response.json().catch(() => null);
     if (!response.ok) {
       const message =
-        typeof data.error === "string"
+        typeof data?.error === "string"
           ? data.error.slice(0, 600)
-          : typeof data.detail === "string"
+          : typeof data?.detail === "string"
             ? data.detail.slice(0, 600)
           : "The simulation could not run. Check the layout and try again.";
       return failure(message, response.status >= 500 ? 502 : response.status);

@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from app.schemas.extraction import ExtractionRequest, ImageUpload
 from app.schemas.layout import Layout, load_layout
-from app.services.floorplans.images import draft_layout, extract_image, image_path, save_image
+from app.services.floorplans.images import draft_layout, extract_image, load_image_bytes, save_image
 from app.services.floorplans.layout import compile_layout
 from app.services.floorplans.providers import load_environment, provider_status
 from app.services.population.generate import resolve_population
@@ -106,11 +106,12 @@ class EditorHandler(BaseHTTPRequestHandler):
         parts = path.strip("/").split("/")
         if len(parts) == 2 and parts[0] == "images":
             try:
-                image = image_path(self.server.output_dir, parts[1])
-                if image.is_file():
-                    return self.send_content(200, image.read_bytes(), "image/png")
-            except ValueError:
+                image = load_image_bytes(self.server.output_dir, parts[1])
+                return self.send_content(200, image, "image/png")
+            except (ValueError, FileNotFoundError):
                 pass
+            except OSError:
+                return self.send_json(503, {"error": "Source image storage is unavailable"})
             return self.send_json(404, {"error": "Image not found"})
         if len(parts) == 3 and parts[0] == "runs" and parts[1] in self.server.runs:
             files = {"playback": ("playback.html", "text/html; charset=utf-8"),

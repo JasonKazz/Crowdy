@@ -20,6 +20,7 @@ from app.schemas.scenario import AgentDefaults, Population, Region, SimulationSe
 from app.services.floorplans.layout import compile_layout
 from app.services.floorplans.providers import ProviderError, extract_drawing
 from app.services.floorplans.calibration import calibrate
+from app.services.floorplans.storage import read_artifact, write_artifact
 
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -58,17 +59,25 @@ def save_image(upload: ImageUpload, root: Path) -> SourceImage:
     source = SourceImage(id=uuid.uuid4().hex, width_px=image.width, height_px=image.height,
                          meters_per_pixel=0.02, scale_confirmed=False)
     path = image_path(root, source.id)
-    path.parent.mkdir(parents=True)
-    image.save(path, "PNG")
-    (path.parent / "metadata.json").write_text(source.model_dump_json(indent=2))
+    encoded = io.BytesIO()
+    image.save(encoded, "PNG")
+    write_artifact(root, path, encoded.getvalue())
+    write_artifact(root, path.parent / "metadata.json", source.model_dump_json(indent=2).encode())
     return source
 
 
 def load_image(root: Path, image_id: str) -> tuple[SourceImage, bytes]:
     path = image_path(root, image_id)
-    if not path.is_file():
-        raise ValueError("Image not found. Upload it again in this editor.")
-    return SourceImage.model_validate_json((path.parent / "metadata.json").read_text()), path.read_bytes()
+    try:
+        metadata = read_artifact(root, path.parent / "metadata.json")
+        image = read_artifact(root, path)
+    except FileNotFoundError:
+        raise ValueError("Image not found. Upload it again in this editor.") from None
+    return SourceImage.model_validate_json(metadata), image
+
+
+def load_image_bytes(root: Path, image_id: str) -> bytes:
+    return read_artifact(root, image_path(root, image_id))
 
 
 def draft_layout(source: SourceImage) -> Layout:
@@ -171,10 +180,9 @@ def extract_image(request: ExtractionRequest, root: Path) -> dict:
                                   elapsed_seconds=round(time.perf_counter() - started, 3),
                                   warnings=drawing.warnings)
             directory = root / "extractions" / info.id
-            directory.mkdir(parents=True)
-            (directory / "observations.json").write_text(drawing.model_dump_json(indent=2))
-            (directory / "context.json").write_text(json.dumps({"source": original.model_dump(mode="json"),
-                "info": info.model_dump(mode="json"), "people_count": request.people_count}))
+            write_artifact(root, directory / "observations.json", drawing.model_dump_json(indent=2).encode())
+            write_artifact(root, directory / "context.json", json.dumps({"source": original.model_dump(mode="json"),
+                "info": info.model_dump(mode="json"), "people_count": request.people_count}).encode())
             if request.meters_per_pixel is None:
                 source, reason = calibrate(original, drawing.scale_references, provider)
                 if source is None:
@@ -186,17 +194,17 @@ def extract_image(request: ExtractionRequest, root: Path) -> dict:
                 source = original.model_copy(update={"meters_per_pixel": request.meters_per_pixel,
                     "scale_confirmed": request.scale_confirmed,
                     "calibration": CalibrationInfo(method="manual", label="Entered image scale")})
-            result = save_candidate(drawing, source, info, request.people_count, directory)
+            result = save_candidate(drawing, source, info, request.people_count, directory, root)
             results.append(result)
         except (ProviderError, ValueError) as exc:
             error = {"provider": provider, "error": str(exc)}
             if directory is not None:
-                (directory / "error.json").write_text(json.dumps(error, indent=2))
+                write_artifact(root, directory / "error.json", json.dumps(error, indent=2).encode())
             results.append(error)
     return {"results": results}
 
 
-def save_candidate(drawing, source, info, people_count, directory):
+def save_candidate(drawing, source, info, people_count, directory, root):
     layout = drawing_to_layout(drawing, source, info.provider, info, people_count)
     issues = []
     try:
@@ -207,7 +215,7 @@ def save_candidate(drawing, source, info, people_count, directory):
               "warnings": layout.extraction.warnings, "issues": issues,
               "elapsed_seconds": info.elapsed_seconds,
               "counts": {name: len(getattr(layout, name)) for name in ("rooms", "walls", "doors", "furniture", "exits")}}
-    (directory / "candidate.json").write_text(json.dumps(result, indent=2, allow_nan=False))
+    write_artifact(root, directory / "candidate.json", json.dumps(result, indent=2, allow_nan=False).encode())
     return result
 
 
@@ -215,11 +223,13 @@ def finish_calibration(extraction_id: str, reference: ScaleReference, root: Path
     if len(extraction_id) != 32 or any(c not in "0123456789abcdef" for c in extraction_id):
         raise ValueError("Invalid extraction ID")
     directory = root / "extractions" / extraction_id
-    if not (directory / "context.json").is_file():
-        raise ValueError("The saved extraction was not found. Upload the image again.")
-    context = json.loads((directory / "context.json").read_text())
+    try:
+        context = json.loads(read_artifact(root, directory / "context.json"))
+        observations = read_artifact(root, directory / "observations.json")
+    except FileNotFoundError:
+        raise ValueError("The saved extraction was not found. Upload the image again.") from None
     source, reason = calibrate(SourceImage.model_validate(context["source"]), [reference], "claude", manual=True)
     if source is None:
         raise ValueError(reason)
-    return save_candidate(ExtractedDrawing.model_validate_json((directory / "observations.json").read_text()),
-                          source, ExtractionInfo.model_validate(context["info"]), context["people_count"], directory)
+    return save_candidate(ExtractedDrawing.model_validate_json(observations),
+                          source, ExtractionInfo.model_validate(context["info"]), context["people_count"], directory, root)
