@@ -6,7 +6,7 @@ from app.schemas.layout import ExitDoor
 from app.schemas.scenario import ExitBoundary, Region
 
 
-def exit_geometry(door: ExitDoor, floor: Region) -> tuple[Region, Region, Region]:
+def exit_geometry(door: ExitDoor, floor: Region, radius: float = .2) -> tuple[Region, Region, Region]:
     points = floor.polygon
     if door.edge_index >= len(points):
         raise ValueError(f"Exit '{door.id}' references a missing floor edge")
@@ -30,18 +30,15 @@ def exit_geometry(door: ExitDoor, floor: Region) -> tuple[Region, Region, Region
     def position(along, depth):
         return (a[0] + ux * along + nx * depth, a[1] + uy * along + ny * depth)
 
-    def rectangle(inner, outer, inset=0):
-        return [position(along + side * spread * min(1, max(0, depth) / transition), depth)
-                for along, depth, side in ((start + inset, inner, -1), (end - inset, inner, 1),
-                                           (end - inset, outer, 1), (start + inset, outer, -1))]
-
     # A small overlap with the interior prevents a numerical seam at the door.
     apron = Region(id=f"exit-apron:{door.id}", polygon=[position(start, -0.05), position(end, -0.05),
         position(end, 0), position(end + spread, transition), position(end + spread, door.landing_depth),
         position(start - spread, door.landing_depth), position(start - spread, transition), position(start, 0)])
-    # Keep the removal stage just inside its apron, avoiding floating-point
-    # boundary disagreements when a diagonal apron is unioned with the floor.
-    target = Region(id=door.id, polygon=rectangle(door.landing_depth * 0.8, door.landing_depth - 0.01, 0.01))
+    # Evacuation ends at the door, not at the far end of an invented outside
+    # route. Offset by the body radius so the entire person has cleared the wall.
+    target = Region(id=door.id, polygon=[position(start + .01, radius + .02),
+        position(end - .01, radius + .02), position(end - .01, radius + .20),
+        position(start + .01, radius + .20)])
     threshold = Region(id=door.id, polygon=[position(start, -.05), position(end, -.05),
                                            position(end, .05), position(start, .05)])
     return apron, target, threshold

@@ -28,7 +28,7 @@ function polygon(points,fill,kind,id,stroke='#70829a'){
   return el;
 }
 function fit(){const points=layout.walkable_areas.flatMap(r=>r.polygon),source=layout.source_image;
-  for(const exit of layout.exits)if(exit.floor_id){const geo=G.exitGeometry(exit,layout.walkable_areas);if(geo)points.push(...geo.apron);}
+  for(const exit of layout.exits)if(exit.floor_id){const geo=G.exitGeometry(exit,layout.walkable_areas,layout.agent_defaults.radius);if(geo)points.push(...geo.target);}
   if(source)points.push([0,0],[source.width_px*source.meters_per_pixel,source.height_px*source.meters_per_pixel]);
   const b=G.bounds(points);
   const margin=Math.max(1,(b.maxX-b.minX)*0.08,(b.maxY-b.minY)*0.08);
@@ -63,10 +63,9 @@ function draw(){
   const blocked=new Set(layout.settings.blocked_exit_ids||[]);
   for(const exit of layout.exits.filter(()=>layers.exits.visible)){const color=blocked.has(exit.id)?'#fecaca':'#b4efcf';
     if(!exit.floor_id){polygon(exit.polygon,color,'exits',exit.id);continue;}
-    const geo=G.exitGeometry(exit,layout.walkable_areas);if(!geo)continue;
-    const apron=polygon(geo.apron,'#f0fdf4',null,null,'#86a99a');apron.setAttribute('pointer-events','none');
+    const geo=G.exitGeometry(exit,layout.walkable_areas,layout.agent_defaults.radius);if(!geo)continue;
     polygon(geo.target,color,'exits',exit.id);
-    polygon(geo.threshold,color,'exits',exit.id,blocked.has(exit.id)?'#dc2626':'#059669');
+    polygon(geo.threshold,blocked.has(exit.id)?'#fecaca':'#b9e4ff','exits',exit.id,blocked.has(exit.id)?'#dc2626':'#2563eb');
   }
   for(const person of preview)svgElement('circle',{cx:person.position[0],cy:-person.position[1],
     r:layout.agent_defaults.radius,fill:'#335cce','pointer-events':'none'});
@@ -126,17 +125,11 @@ function renderInspector(){
       const opt=option(JSON.stringify([floor.id,index]),`${floor.id} edge ${index}: (${start.map(n=>n.toFixed(1))}) → (${end.map(n=>n.toFixed(1))})`);
       opt.selected=obj.floor_id===floor.id&&obj.edge_index===index;edges.append(opt);}
     edges.addEventListener('change',()=>commit(()=>{[obj.floor_id,obj.edge_index]=JSON.parse(edges.value);
-      const geo=G.exitGeometry(obj,layout.walkable_areas);if(geo)obj.offset=G.wallLength(geo.wall)/2;fit();}));
+      const geo=G.exitGeometry(obj,layout.walkable_areas,layout.agent_defaults.radius);if(geo)obj.offset=G.wallLength(geo.wall)/2;fit();}));
     box.append(edges);panel.append(box);
     field(panel,'Center distance from edge start',obj.offset,value=>{obj.offset=value;fit();});
     field(panel,'Opening width',obj.width,value=>{obj.width=value;fit();});
-    const outside=document.createElement('label');outside.append(document.createTextNode('Space outside the door'));
-    const mode=document.createElement('select');mode.setAttribute('aria-label','Space outside the door');for(const [value,label]of [['open','Open area — people can disperse'],['corridor','Corridor — constrained width']]){
-      const opt=option(value,label);opt.selected=(obj.outside_space||'open')===value;mode.append(opt);}
-    mode.addEventListener('change',()=>commit(()=>{obj.outside_space=mode.value;fit();}));outside.append(mode);panel.append(outside);
-    field(panel,'Outside distance',obj.landing_depth,value=>{obj.landing_depth=value;fit();});
-    if((obj.outside_space||'open')==='open')field(panel,'Open area width at far edge',obj.outside_width||obj.width+2*obj.landing_depth,
-      value=>{obj.outside_width=value;fit();});
+    const note=document.createElement('p');note.className='muted';note.textContent='People leave the simulation once their full body clears this doorway. The green strip sits just outside the wall.';panel.append(note);
   }else{
     const b=G.bounds(obj.polygon),[cx,cy]=G.center(obj.polygon);
     field(panel,'Center x',cx,value=>obj.polygon=G.translate(obj.polygon,value-cx,0));
@@ -196,7 +189,7 @@ $('plan').addEventListener('pointermove',event=>{
     if(event.shiftKey)angle=Math.round(angle/15)*15;
     const rotated=G.rotate(points,angle);if(original.polygon)obj.polygon=rotated;else[obj.start,obj.end]=rotated;
   }else if(handle?.type==='door-size'){
-    const wall=drag.kind==='doors'?layout.walls.find(w=>w.id===obj.wall_id):G.exitGeometry(obj,layout.walkable_areas)?.wall;
+    const wall=drag.kind==='doors'?layout.walls.find(w=>w.id===obj.wall_id):G.exitGeometry(obj,layout.walkable_areas,layout.agent_defaults.radius)?.wall;
     if(wall){const length=G.wallLength(wall),offset=G.doorOffset(wall,{width:.1,offset:obj.offset},p);
       const fixed=original.offset+(handle.side==='start'?1:-1)*original.width/2;
       obj.width=Math.max(.1,Math.abs(fixed-offset));obj.offset=(fixed+offset)/2;}
@@ -205,7 +198,7 @@ $('plan').addEventListener('pointermove',event=>{
     const oldWall=layout.walls.find(w=>w.id===original.wall_id),point=G.center(G.wallPolygon(oldWall,original.offset-.01,original.offset+.01));
     const attached=nearestWall([point[0]+dx,point[1]+dy],obj.width);if(attached){obj.wall_id=attached.wall.id;obj.offset=attached.offset;}
   }else if(drag.kind==='exits'&&obj.floor_id){
-    const geo=G.exitGeometry(original,layout.walkable_areas),point=G.center(geo.threshold);
+    const geo=G.exitGeometry(original,layout.walkable_areas,layout.agent_defaults.radius),point=G.center(geo.threshold);
     const attached=G.nearestEdge(layout.walkable_areas,[point[0]+dx,point[1]+dy],obj.width);
     if(attached){obj.floor_id=attached.floor_id;obj.edge_index=attached.edge_index;obj.offset=attached.offset;}
   }else obj.polygon=G.translate(original.polygon,dx,dy);
@@ -256,7 +249,7 @@ $('validate').addEventListener('click',async()=>{setBusy(true);status('Checking 
 $('run').addEventListener('click',async()=>{setBusy(true);status('Running the backend simulation…');$('downloads').replaceChildren();
   try{const result=await post('/api/simulate',layout),s=result.summary;
     status(`${result.status==='completed'?'Completed':'Time limit reached'} · ${s.evacuated_count} exited · ${s.remaining_count} remaining · `+
-      (s.clearance_time===null?'Evacuation incomplete':`${s.clearance_time.toFixed(2)} s to clear exterior`)+
+      (s.clearance_time===null?'Evacuation incomplete':`${s.clearance_time.toFixed(2)} s to evacuate`)+
       (s.building_clearance_time==null?'':` · Building empty at ${s.building_clearance_time.toFixed(2)} s`));
     for(const [name,path]of [['Open animation',result.playback_url],['Layout JSON',`/runs/${result.run_id}/layout`],
       ['Scenario JSON',`/runs/${result.run_id}/scenario`],['Result JSON',`/runs/${result.run_id}/result`]]){
@@ -410,7 +403,7 @@ function drawHandles(){
   if(selected.kind==='walls'&&['resize','vertices'].includes(tool))
     for(const endpoint of ['start','end'])handle(obj[endpoint],{type:'endpoint',endpoint},true);
   if(['doors','exits'].includes(selected.kind)&&!obj.polygon&&tool==='resize'){
-    const wall=selected.kind==='doors'?layout.walls.find(w=>w.id===obj.wall_id):G.exitGeometry(obj,layout.walkable_areas)?.wall;
+    const wall=selected.kind==='doors'?layout.walls.find(w=>w.id===obj.wall_id):G.exitGeometry(obj,layout.walkable_areas,layout.agent_defaults.radius)?.wall;
     if(wall){const length=G.wallLength(wall);for(const side of ['start','end']){
       const along=obj.offset+(side==='start'?-1:1)*obj.width/2;
       handle([wall.start[0]+(wall.end[0]-wall.start[0])*along/length,wall.start[1]+(wall.end[1]-wall.start[1])*along/length],{type:'door-size',side},true);}}
@@ -480,7 +473,7 @@ document.addEventListener('keydown',event=>{
   event.preventDefault();const delta=event.shiftKey?1:.1,dx=key==='arrowleft'?-delta:key==='arrowright'?delta:0,dy=key==='arrowdown'?-delta:key==='arrowup'?delta:0;
   commit(()=>{const obj=item();if(obj.polygon)obj.polygon=G.translate(obj.polygon,dx,dy);
     else if(selected.kind==='walls'){obj.start=G.translate([obj.start],dx,dy)[0];obj.end=G.translate([obj.end],dx,dy)[0];}
-    else{const wall=selected.kind==='doors'?layout.walls.find(w=>w.id===obj.wall_id):G.exitGeometry(obj,layout.walkable_areas)?.wall;
+    else{const wall=selected.kind==='doors'?layout.walls.find(w=>w.id===obj.wall_id):G.exitGeometry(obj,layout.walkable_areas,layout.agent_defaults.radius)?.wall;
       if(wall){const point=G.center(G.wallPolygon(wall,obj.offset-.01,obj.offset+.01));obj.offset=G.doorOffset(wall,obj,[point[0]+dx,point[1]+dy]);}}});
 });
 document.addEventListener('keyup',event=>{if(event.key===' '){spacePan=false;renderTools();}});

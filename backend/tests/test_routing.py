@@ -91,14 +91,17 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(open_apron.contains(Point(11.5, 5.5)))
         self.assertFalse(corridor_apron.contains(Point(11.5, 5.5)))
 
-    def test_open_space_destinations_disperse_and_are_repeatable(self):
+    def test_doorway_targets_are_repeatable_and_remain_near_the_boundary(self):
         layout = regression_layout()
         scenario = compile_layout(layout)
         first, second = plan_routes(scenario), plan_routes(scenario)
         self.assertEqual(first, second)
         targets = [route['path'][-1] for route in first if route['exit_id'] == 'exit_east']
         self.assertGreater(len(set(targets)), 3)
-        self.assertGreater(max(p[1] for p in targets) - min(p[1] for p in targets), .8)
+        self.assertGreater(max(p[1] for p in targets) - min(p[1] for p in targets), .3)
+        boundary = next(b for b in scenario.exit_boundaries if b.id == 'exit_east')
+        self.assertTrue(all(.2 <= sum((p[i] - boundary.start[i]) * boundary.outward[i] for i in range(2)) <= .4
+                            for p in targets))
 
     def test_invalid_open_width_is_reported(self):
         layout = room()

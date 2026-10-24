@@ -4,8 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
+from shapely.geometry import Polygon
+from shapely.ops import unary_union
+
 from app.schemas.scenario import Scenario
-from app.simulation.geometry import build_geometry
+from app.simulation.geometry import build_geometry, region_to_polygon
 
 
 HTML = r'''<!doctype html>
@@ -134,7 +137,8 @@ function render() {
   ctx.fillRect(0, 0, width, height);
 
   const boundary = data.geometry.boundary;
-  const xs = boundary.map(p => p[0]), ys = boundary.map(p => p[1]);
+  const visiblePoints = boundary.concat(scenario.exits.flatMap(exit => exit.polygon));
+  const xs = visiblePoints.map(p => p[0]), ys = visiblePoints.map(p => p[1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const padding = 30;
@@ -165,6 +169,11 @@ function render() {
   ctx.fillStyle = '#fff'; ctx.fill('evenodd');
   ctx.strokeStyle = '#46556b'; ctx.lineWidth = 2; ctx.stroke();
   scenario.obstacles.forEach(o => polygon(o.polygon, '#b7c2d2', '#70829a'));
+  (scenario.exit_boundaries || []).forEach(door => {
+    ctx.beginPath(); ctx.moveTo(...screen(...door.start)); ctx.lineTo(...screen(...door.end));
+    ctx.strokeStyle = blockedExits.has(door.id) ? '#dc2626' : '#b9e4ff';
+    ctx.lineWidth = Math.max(3, .08 * scale); ctx.stroke();
+  });
   scenario.exits.forEach(e => polygon(e.polygon,
     blockedExits.has(e.id) ? '#fecaca' : '#b4efcf',
     blockedExits.has(e.id) ? '#b42318' : '#248258'));
@@ -232,6 +241,14 @@ def render_html(result: dict) -> str:
         raise ValueError("The result must contain at least one frame")
     scenario = Scenario.model_validate(result["scenario"])
     geometry = build_geometry(scenario)
+    # Outside clearance geometry supports the routing/body checks. It is not
+    # another hall to draw: people leave at the strip beside the actual door.
+    generated_aprons = {f"exit-apron:{boundary.id}" for boundary in scenario.exit_boundaries}
+    if generated_aprons:
+        interior = unary_union([region_to_polygon(region) for region in scenario.walkable_areas
+                                if region.id not in generated_aprons]).intersection(geometry)
+        if isinstance(interior, Polygon) and not interior.is_empty:
+            geometry = interior
     payload = dict(result)
     payload["geometry"] = {
         "boundary": list(geometry.exterior.coords),

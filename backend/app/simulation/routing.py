@@ -125,7 +125,7 @@ def plan_routes(scenario, geometry=None, planner=None):
         for region, polygon in exits:
             preferred = None
             boundary = boundaries.get(region.id)
-            if boundary and boundary.outside_space == "open":
+            if boundary:
                 digest = hashlib.sha256(f"{person.id}:{region.id}".encode()).digest()
                 fraction = .12 + .76 * int.from_bytes(digest[:4], "big") / (2**32 - 1)
                 a, b = region.polygon[:2]

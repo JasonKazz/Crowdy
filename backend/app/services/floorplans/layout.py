@@ -44,9 +44,9 @@ def compile_layout(layout: Layout) -> Scenario:
             raise ValueError(f"Exit '{door.id}' references unknown floor '{door.floor_id}'")
         if door.width <= 2 * layout.agent_defaults.radius:
             raise ValueError(f"Exit '{door.id}' is too narrow for the configured people")
-        if door.landing_depth * 0.8 <= layout.agent_defaults.radius + 0.05:
+        if door.landing_depth <= 2 * layout.agent_defaults.radius + .22:
             raise ValueError(f"Exit '{door.id}' needs a deeper outside landing")
-        apron, target, threshold = exit_geometry(door, floors[door.floor_id])
+        apron, target, threshold = exit_geometry(door, floors[door.floor_id], layout.agent_defaults.radius)
         # Check the entire edge: a seam between overlapping floor regions is
         # not an exterior wall. Also reject aprons that enter another wing.
         points = floors[door.floor_id].polygon

@@ -32,7 +32,8 @@ class ExteriorExitTests(unittest.TestCase):
         scenario = compile_layout(room())
         target = Polygon(scenario.exits[0].polygon)
         geometry = build_geometry(scenario)
-        self.assertGreaterEqual(target.bounds[0], 11.6)
+        self.assertAlmostEqual(target.bounds[0], 10.22)
+        self.assertAlmostEqual(target.bounds[2], 10.4)
         self.assertTrue(geometry.contains(Point(10.5, 4)))
         self.assertFalse(geometry.contains(Point(10.01, 2)))
         self.assertFalse(target.intersects(Polygon(room().walkable_areas[0].polygon)))
@@ -41,10 +42,28 @@ class ExteriorExitTests(unittest.TestCase):
         result = run_simulation(compile_layout(room()))
         self.assertEqual(result["summary"]["evacuated_count"], 1)
         positions = [a for f in result["frames"] for a in f["agents"]]
-        self.assertGreater(positions[-1]["x"], 11.5)
-        self.assertTrue(any(p["x"] > 10.2 for p in positions))
+        self.assertGreater(positions[-1]["x"], 10.19)
+        self.assertLess(positions[-1]["x"], 10.23)
+        self.assertTrue(any(p["x"] > 10.19 for p in positions))
         self.assertTrue(all(3.4 <= p["y"] <= 4.6 for p in positions if 9.95 <= p["x"] <= 10.05))
         self.assertLess(result["summary"]["building_clearance_time"], result["summary"]["clearance_time"])
+
+    def test_zone_distance_uses_body_radius_not_landing_depth(self):
+        short, deep = room(), room()
+        deep.exits[0].landing_depth = 6
+        self.assertEqual(compile_layout(short).exits, compile_layout(deep).exits)
+        short.agent_defaults.radius = .35
+        target = Polygon(compile_layout(short).exits[0].polygon)
+        self.assertAlmostEqual(target.bounds[0], 10.37)
+
+    def test_playback_draws_building_and_near_exit_without_fake_exterior_hall(self):
+        import json
+        from app.simulation.animate import render_html
+        scenario = compile_layout(room())
+        page = render_html({"scenario": scenario.model_dump(mode="json"), "frames": [{"time": 0, "agents": []}]})
+        data = json.loads(page.split('<script id="simulation-data" type="application/json">')[1].split('</script>')[0])
+        self.assertAlmostEqual(max(p[0] for p in data['geometry']['boundary']), 10)
+        self.assertGreater(min(p[0] for p in data['scenario']['exits'][0]['polygon']), 10)
 
     def test_sliding_exit_closes_old_opening_and_moves_outside_destination(self):
         layout = room()

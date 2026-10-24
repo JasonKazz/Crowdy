@@ -48,7 +48,7 @@
       (point[1]-wall.start[1])*(wall.end[1]-wall.start[1]))/length;
     return Math.max(door.width/2,Math.min(length-door.width/2,projected));
   }
-  function exitGeometry(door, floors) {
+  function exitGeometry(door, floors, radius=.2) {
     const floor=floors.find(f=>f.id===door.floor_id), points=floor?.polygon;
     if(!points||!Number.isInteger(door.edge_index)||!points[door.edge_index])return null;
     const start=points[door.edge_index],end=points[(door.edge_index+1)%points.length];
@@ -60,13 +60,10 @@
     const spread=door.outside_space==='corridor'?0:(width-door.width)/2;
     const transition=Math.min(.25,door.landing_depth*.2);
     const position=(along,depth)=>[start[0]+ux*along+nx*depth,start[1]+uy*along+ny*depth];
-    const rectangle=(inner,outer,inset=0)=>[[door.offset-door.width/2+inset,inner,-1],[door.offset+door.width/2-inset,inner,1],
-      [door.offset+door.width/2-inset,outer,1],[door.offset-door.width/2+inset,outer,-1]]
-      .map(([along,depth,side])=>position(along+side*spread*Math.min(1,Math.max(0,depth)/transition),depth));
     const a=door.offset-door.width/2,b=door.offset+door.width/2,d=door.landing_depth;
     return {wall,apron:[position(a,-.05),position(b,-.05),position(b,0),position(b+spread,transition),position(b+spread,d),
       position(a-spread,d),position(a-spread,transition),position(a,0)],
-      target:rectangle(d*.8,d-.01,.01),
+      target:[position(a+.01,radius+.02),position(b-.01,radius+.02),position(b-.01,radius+.20),position(a+.01,radius+.20)],
       threshold:[position(a,-.05),position(b,-.05),position(b,.05),position(a,.05)]};
   }
   function resizeCorner(points,index,point,keepAspect=false){
