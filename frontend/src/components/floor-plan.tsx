@@ -544,10 +544,10 @@ export default function FloorPlanView({
             strokeWidth="1.25"
             strokeDasharray="4 5"
             opacity="0.55"
-            aria-label="Routes to exits"
+            aria-label={result.engine === "jupedsim" ? "Recorded movement paths" : "Routes to exits"}
           >
             {result.agents
-              .filter((agent) => agent.exitId)
+              .filter((agent) => agent.samples?.length || agent.exitId)
               .filter(
                 (_, index) =>
                   index % Math.max(1, Math.floor(result.agents.length / 8)) ===
@@ -735,7 +735,7 @@ export default function FloorPlanView({
 
         {showPeople && result ? (
           <g
-            aria-label={`${visiblePeople.length} people visible in this scenario`}
+            aria-label={`${visiblePeople.length} ${visiblePeople.length === 1 ? "person" : "people"} visible in this scenario`}
           >
             {visiblePeople.map(({ agent, point }) => (
               <circle

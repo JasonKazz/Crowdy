@@ -16,6 +16,7 @@ class Region(InputModel):
 class Occupant(InputModel):
     id: str = Field(min_length=1)
     position: Point
+    desired_speed: float | None = Field(default=None, gt=0)
 
 class AgentDefaults(InputModel):
     radius: float = Field(gt=0)

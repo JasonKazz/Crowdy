@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import AppHeader from "./app-header";
 import AppFooter from "./app-footer";
 import { validatePlan } from "@/lib/plan-validation";
+import { runBackendSimulation } from "@/lib/backend-simulation";
 import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
 import FloorPlanView from "./floor-plan";
 import Icon, { type IconName } from "./icon";
@@ -24,6 +25,12 @@ const signature = (plan: FloorPlan, scenario: Scenario) =>
 const formatTime = (n: number) => `${n.toFixed(1)} s`;
 const clonePlan = (plan: FloorPlan) =>
   JSON.parse(JSON.stringify(plan)) as FloorPlan;
+const clearance = (run: SimulationResult) =>
+  run.remaining ? null : (run.clearanceTime ?? run.totalTime);
+const clearanceLabel = (run: SimulationResult) => {
+  const value = clearance(run);
+  return value === null ? "Incomplete" : formatTime(value);
+};
 
 function downloadJson(data: unknown, name: string) {
   const url = URL.createObjectURL(
@@ -81,6 +88,7 @@ export default function Workspace({
   const [modal, setModal] = useState<"upload" | "help" | "reset" | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [runError, setRunError] = useState("");
   const [saveError, setSaveError] = useState("");
   const [copyError, setCopyError] = useState("");
   const [savedSetup, setSavedSetup] = useState(() =>
@@ -92,7 +100,7 @@ export default function Workspace({
     plan: clonePlan(initialPlan),
     scenario: { ...initialScenario },
   });
-  const runTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runController = useRef<AbortController | null>(null);
   const currentTime = useRef(0);
   const uploadRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -155,7 +163,8 @@ export default function Workspace({
 
   useEffect(
     () => () => {
-      if (runTimer.current) clearTimeout(runTimer.current);
+      runController.current?.abort();
+      runController.current = null;
     },
     [],
   );
@@ -218,21 +227,29 @@ export default function Workspace({
     result &&
       signature(plan, scenario) !== signature(result.plan, result.scenario),
   );
-  const canCompare = Boolean(baseline && result && baseline.id !== result.id);
+  const sameEngine = Boolean(
+    baseline && result && baseline.engine === result.engine &&
+    baseline.engineVersion === result.engineVersion,
+  );
+  const canCompare = Boolean(
+    baseline && result && baseline.id !== result.id && sameEngine,
+  );
   const sameScenario = Boolean(
     baseline &&
       result &&
       JSON.stringify(baseline.scenario) === JSON.stringify(result.scenario),
   );
   const shownPlan = mode === "layout" ? plan : (result?.plan ?? plan);
-  const shownResult = mode === "layout" ? preview : result;
+  const shownResult = mode === "layout" ? (!stale && result ? result : preview) : result;
   const evacuated = result ? getEvacuatedCount(result, time) : 0;
   const duration = Math.max(
     result?.totalTime ?? 60,
     mode === "compare" ? (baseline?.totalTime ?? 0) : 0,
   );
   const resultDifference =
-    baseline && result ? result.totalTime - baseline.totalTime : 0;
+    baseline && result && clearance(baseline) !== null && clearance(result) !== null
+      ? clearance(result)! - clearance(baseline)!
+      : 0;
   const layoutChanges =
     baseline && result
       ? new Set(
@@ -301,38 +318,53 @@ export default function Workspace({
     setHistory(history.slice(0, -1));
     setSelectedId(null);
   }
-  function run() {
-    if (busy) {
-      if (runTimer.current) clearTimeout(runTimer.current);
+  async function run() {
+    if (runController.current) {
+      runController.current.abort();
+      runController.current = null;
       setBusy(false);
+      setRunError("");
       setNotice("Run cancelled. Your setup is unchanged.");
       return;
     }
+    const controller = new AbortController();
+    runController.current = controller;
+    const submittedPlan = clonePlan(plan);
+    const submittedScenario = { ...scenario };
     setBusy(true);
+    setRunError("");
     setPlaying(false);
-    runTimer.current = setTimeout(() => {
-      try {
-        const next = runSimulation(plan, scenario, Date.now());
-        setResult(next);
-        setTime(0);
-        setMode("simulation");
-        setRunCount((count) => count + 1);
-        setPlaying(next.totalTime > 0 && !reducedMotion());
-        setNotice(
-          next.remaining
-            ? `Run finished with ${next.remaining} people remaining. Review blocked routes and exits.`
-            : "Run complete. Inspect playback or pin this run as your baseline.",
-        );
-      } catch {
-        setNotice(
-          "The demo run could not finish. Check that an exit is reachable and try again.",
-        );
+    try {
+      const next = await runBackendSimulation(submittedPlan, submittedScenario, {
+        signal: controller.signal,
+      });
+      if (runController.current !== controller || controller.signal.aborted) return;
+      setResult(next);
+      setTime(0);
+      setMode("simulation");
+      setRunCount((count) => count + 1);
+      setPlaying(next.totalTime > 0 && !reducedMotion());
+      setNotice(
+        next.remaining
+          ? `Time limit reached with ${next.remaining} ${next.remaining === 1 ? "person" : "people"} remaining. Inspect the recorded movement and exits.`
+          : "Run complete. Inspect playback or pin this run as your baseline.",
+      );
+    } catch (error) {
+      if (runController.current !== controller || controller.signal.aborted) return;
+      setRunError(
+        error instanceof Error
+          ? error.message
+          : "The simulation could not finish. Your current setup is unchanged.",
+      );
+    } finally {
+      if (runController.current === controller) {
+        runController.current = null;
+        setBusy(false);
       }
-      setBusy(false);
-    }, 550);
+    }
   }
   async function upload(file: File | undefined) {
-    if (!file) return;
+    if (!file || busy) return;
     if (file.size > 1024 * 1024) {
       setError(
         "This file is too large. Choose a JSON floor plan smaller than 1 MB.",
@@ -362,6 +394,7 @@ export default function Workspace({
     if (uploadRef.current) uploadRef.current.value = "";
   }
   function reset() {
+    if (busy) return;
     editPlan(clonePlan(openingSetup.current.plan));
     setScenario({ ...openingSetup.current.scenario });
     setSelectedId(null);
@@ -379,13 +412,22 @@ export default function Workspace({
         scenario,
         result: result
           ? {
-              model: "Crowdy illustrative grid model",
+              model: result.engine === "jupedsim"
+                ? "JuPedSim CollisionFreeSpeedModel"
+                : "Crowdy illustrative grid model",
+              engine: result.engine,
+              engineVersion: result.engineVersion,
+              modelSettings: result.modelSettings,
+              status: result.status,
               plan: result.plan,
               scenario: result.scenario,
               totalTime: result.totalTime,
+              clearanceTime: clearance(result),
               averageTime: result.averageTime,
+              exited: result.exited,
               remaining: result.remaining,
               peakDensity: result.peakDensity,
+              perExitCounts: result.perExitCounts,
             }
           : null,
       },
@@ -471,6 +513,14 @@ export default function Workspace({
           </button>
         </div>
       )}
+      {runError && (
+        <div className="workspace-save-error" role="alert">
+          <span>{runError}</span>
+          <button className="text-button" onClick={run} disabled={busy}>
+            Retry run
+          </button>
+        </div>
+      )}
       <main className="workspace-grid">
         <aside className="setup-panel" aria-label="Plan and scenario settings">
           <div className="panel-title">
@@ -485,6 +535,7 @@ export default function Workspace({
             </div>
             <button
               className="plan-card"
+              disabled={busy}
               onClick={() => {
                 setModal("upload");
                 setError("");
@@ -506,6 +557,7 @@ export default function Workspace({
             </button>
             <button
               className="text-button upload-link"
+              disabled={busy}
               onClick={() => {
                 setModal("upload");
                 setError("");
@@ -718,6 +770,7 @@ export default function Workspace({
             </span>
             <button
               className="text-button muted"
+              disabled={busy}
               onClick={() => setModal("reset")}
             >
               Reset layout
@@ -775,7 +828,7 @@ export default function Workspace({
                 {busy
                   ? "Computing crowd movement"
                   : mode === "layout"
-                    ? "Editing layout"
+                    ? "Editing layout · placement preview"
                     : playing
                       ? "Playing simulation"
                       : "Simulation paused"}
@@ -797,7 +850,7 @@ export default function Workspace({
                 <div>
                   <div className="compare-label">
                     <span>BASELINE</span>
-                    <strong>{formatTime(baseline.totalTime)}</strong>
+                    <strong>{clearanceLabel(baseline)}</strong>
                   </div>
                   <FloorPlanView
                     {...planProps}
@@ -809,7 +862,7 @@ export default function Workspace({
                 <div>
                   <div className="compare-label">
                     <span>PROPOSED</span>
-                    <strong>{formatTime(result.totalTime)}</strong>
+                    <strong>{clearanceLabel(result)}</strong>
                   </div>
                   <FloorPlanView
                     {...planProps}
@@ -1021,22 +1074,22 @@ export default function Workspace({
               <button
                 className="inline-help"
                 aria-label="Evacuation time definition"
-                title="Time until all reachable people exit. People without a route are counted as remaining."
+                title="Time until everyone exits. Unavailable if anyone remains at the simulation time limit."
                 onClick={() => setModal("help")}
               >
                 <Icon name="help" size={12} />
               </button>
             </span>
             <div>
-              {result?.exited ? result.totalTime.toFixed(1) : "—"}
-              <span>{result ? "seconds" : "seconds"}</span>
+              {result && clearance(result) !== null ? clearance(result)!.toFixed(1) : "—"}
+              <span>seconds</span>
             </div>
             <p>
               {result
-                ? result.exited
-                  ? `${result.exited} people reached an exit${result.remaining ? ` · ${result.remaining} remaining` : ""}`
-                  : `No reachable exit · ${result.remaining} people remaining`
-                : "Time until the last reachable person exits"}
+                ? result.remaining
+                  ? `${result.exited} exited · ${result.remaining} remaining at ${formatTime(result.totalTime)}`
+                  : `${result.exited} people reached an exit`
+                : "Time until everyone reaches an exit"}
             </p>
           </div>
           <div className="secondary-metrics">
@@ -1065,6 +1118,12 @@ export default function Workspace({
                 </small>
               </strong>
             </div>
+            {result?.perExitCounts && Object.entries(result.perExitCounts).map(([id, count]) => (
+              <div key={id}>
+                <span>Via {result.plan.exits.find((exit) => exit.id === id)?.label ?? id}</span>
+                <strong>{count}<small> {count === 1 ? "person" : "people"}</small></strong>
+              </div>
+            ))}
           </div>
           <div className="evacuation-chart">
             <div className="chart-heading">
@@ -1170,15 +1229,17 @@ export default function Workspace({
                     Baseline pinned
                   </span>
                   <strong className="mono">
-                    {formatTime(baseline.totalTime)}
+                    {clearanceLabel(baseline)}
                   </strong>
                 </div>
                 <p className="helper">
-                  {canCompare
+                  {result && !sameEngine
+                    ? "These runs use different models. Clear the baseline and pin a run from the current model."
+                    : canCompare
                     ? baseline &&
                       result &&
                       (baseline.remaining || result.remaining)
-                      ? "Incomplete runs. Compare people remaining; total times exclude unreachable people."
+                      ? "Incomplete runs. Compare people remaining; evacuation times are unavailable until everyone exits."
                       : sameScenario
                         ? `${layoutChanges} layout object${layoutChanges === 1 ? "" : "s"} changed. Same occupancy and walking profile.`
                         : "Scenario settings differ between runs."
@@ -1230,7 +1291,7 @@ export default function Workspace({
                 </p>
                 <button
                   className="button subtle pin-button"
-                  disabled={!result || stale}
+                  disabled={!result || stale || busy}
                   onClick={() => {
                     setBaseline(result);
                     setNotice(
@@ -1245,10 +1306,10 @@ export default function Workspace({
             )}
           </div>
           <div className="model-note">
-            <span>DEMO MODEL</span>
+            <span>JUPEDSIM</span>
             <p>
-              Illustrative grid routing and exit queues. Results are simulated,
-              not a safety assessment.
+              Collision-free movement with obstacle-aware exit routes.
+              Results are simulated, not a safety assessment.
             </p>
             <button
               className="text-button muted"
@@ -1289,7 +1350,7 @@ export default function Workspace({
               ? "Upload floor plan"
               : modal === "reset"
                 ? "Restore the opening layout?"
-                : "About this demo"}
+                : "Simulation assumptions"}
           </h2>
           <button
             className="icon-button"
@@ -1373,30 +1434,34 @@ export default function Workspace({
               <div>
                 <dt>Geometry</dt>
                 <dd>
-                  32 canvas pixels represent 1 metre. The sample area is
-                  approximate. Review imported geometry before running.
+                  32 canvas pixels represent 1 metre. Walls define the floor
+                  bounds; wall segments and furniture block movement. Boundary
+                  exits include a short landing beyond the floor. Review
+                  imported geometry before running.
                 </dd>
               </div>
               <div>
                 <dt>Movement</dt>
                 <dd>
-                  People follow shortest available grid routes around furniture.
-                  Exit queues and reaction delays are simplified. Collisions and
-                  real crowd behavior are not fully modeled.
+                  JuPedSim uses a collision-free speed model. People choose an
+                  exit once using the shortest routed distance around obstacles;
+                  they do not switch destinations to avoid congestion.
                 </dd>
               </div>
               <div>
                 <dt>Reported time</dt>
                 <dd>
-                  Elapsed model time until the last reachable person exits.
-                  Unreachable people remain visible and are excluded from the
-                  average exit time.
+                  Evacuation time is available only when everyone exits.
+                  Otherwise the run stops at 60 simulated seconds and keeps
+                  remaining people visible. Average exit time counts only people
+                  who reached an exit.
                 </dd>
               </div>
               <div>
                 <dt>Playback</dt>
                 <dd>
-                  1× playback advances one simulated second per real second.
+                  Playback follows recorded positions and their simulation
+                  timestamps. 1× advances one simulated second per real second.
                   Reduced motion starts runs paused.
                 </dd>
               </div>
@@ -1410,8 +1475,8 @@ export default function Workspace({
               </div>
             </dl>
             <p className="dialog-note">
-              This frontend demo runs locally in your browser. No backend
-              analysis or floor-plan interpretation is connected.
+              Runs are computed by the simulation service. Layout people are
+              placement previews. Image and PDF interpretation is not connected.
             </p>
           </>
         )}

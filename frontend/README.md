@@ -18,7 +18,7 @@ Fill in the local Auth0 credentials before starting the server. If onboarding al
 
 Auth0 MCP onboarding created Crowdy as a Regular Web Application in `dev-zag8fvtpirhmkbag.us.auth0.com`. The app uses `@auth0/nextjs-auth0` 4.33 and the Next.js `src/proxy.ts` entry point. The SDK handles `/auth/login`, `/auth/callback`, `/auth/logout`, and `/auth/profile`; a separate auth route handler is not needed. The client profile hook supplies the account controls.
 
-The included `.env.example` lists the five server-side settings. A local configuration has this shape; replace the placeholders with the application's credentials:
+The included `.env.example` lists the Auth0 and simulation-service settings. A local Auth0 configuration has this shape; replace the placeholders with the application's credentials:
 
 ```dotenv
 APP_BASE_URL=http://localhost:3000
@@ -53,7 +53,17 @@ Each workspace uses a 900 × 600 canvas. Import a Crowdy JSON floor plan or use 
 
 Select furniture to drag it, move it with the arrow keys, or edit its coordinates. Adjust occupancy, walking profile, and distribution before running. Inspect playback, routes, and density; pin a run as a baseline to compare a subsequent change.
 
-The illustrative grid model runs in the browser. It uses simplified movement, reaction delays, and exit queues; no backend analysis or image/PDF floor-plan interpretation is connected. Results describe the shown model assumptions and are not a safety assessment.
+Runs use the Python backend's JuPedSim Collision Free Speed Model. The browser sends a snapshot of the layout and scenario to the same-origin `POST /api/simulations` route; Next.js validates it and forwards it to FastAPI. Playback follows the returned sampled trajectories and evacuation events. Clearance time is available only when everyone exits; a run that reaches its time limit retains its remaining count. Results describe the shown model assumptions and are not a safety assessment. Image/PDF floor-plan interpretation is not connected.
+
+Start the Python 3.12 service using the [root setup instructions](../README.md#backend). Development defaults to `http://127.0.0.1:8000`, so no backend URL is needed locally. To use another service, add these server-only settings to `frontend/.env.local` and restart Next.js:
+
+```dotenv
+CROWDY_BACKEND_URL=http://127.0.0.1:8000
+# Optional; must match the Python service when configured there.
+CROWDY_BACKEND_TOKEN=
+```
+
+`GET /api/simulations` checks the backend's `/health` endpoint through the same proxy. The browser never needs the backend token or a direct backend URL. A failed or cancelled request keeps the current setup available for another attempt.
 
 Personal layouts and scenarios autosave in account-scoped browser storage. If a save fails, the editor keeps the current changes visible, reports that they are unsaved, and offers export so the work can be kept separately. Runs and baselines remain for the current editor session. Clearing browser storage removes personal workspaces from that device, so export copies you need to retain.
 
@@ -66,19 +76,25 @@ npm run lint
 npm run build
 ```
 
-With Node.js 22 or newer, run the simulation, workspace-store, and auth checks. Keep `npm run dev` running in another terminal for `test:auth`:
+With Node.js 22 or newer, run the simulation, workspace-store, and auth checks. Keep `npm run dev` running in another terminal for `test:auth`; `test:backend-api` also needs the Python service running:
 
 ```sh
 npm run test:simulation
+npm run test:backend-simulation
+npm run test:backend-api
 npm run test:workspaces
 npm run test:auth
 ```
 
 The workspace-store checks use isolated in-memory storage fixtures to verify account isolation, shared-sample protection, saved-data cloning, and recoverable storage failures. The auth checks use local session fixtures and read-only requests against the running app, including public sample access and server authentication for personal workspace routes. They do not create Auth0 users or change tenant configuration.
 
+The backend adapter checks include recorded native completed and timed-out runs. HTTP checks exercise the full Next.js-to-Python connection, actual two-exit results, request limits, and invalid-layout recovery. Run `.venv/bin/python -m unittest discover -s tests -v` from `backend/` for the Python engine and API tests.
+
 ## Deploy to Vercel
 
-Configure the same five environment variables in the `crowdy-calhacks13` Vercel project. Set production `APP_BASE_URL` to `https://crowdy-calhacks13.vercel.app` and use the application's Auth0 credentials. Keep deployment secrets in Vercel environment settings, not tracked files.
+Configure the five Auth0 environment variables in the `crowdy-calhacks13` Vercel project. Set production `APP_BASE_URL` to `https://crowdy-calhacks13.vercel.app` and use the application's Auth0 credentials. Also set `CROWDY_BACKEND_URL` to the hosted Python service's HTTPS base URL and, if enabled there, the matching `CROWDY_BACKEND_TOKEN`. These are server-only variables. Keep deployment secrets in Vercel environment settings, not tracked files.
+
+A hosted Python service has not been configured by this change. Deploying Next.js alone does not host JuPedSim, and production does not fall back to localhost. See the root README for the backend Docker image and startup command.
 
 From `frontend/`, with the Vercel CLI authenticated:
 

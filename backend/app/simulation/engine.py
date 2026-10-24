@@ -68,7 +68,11 @@ def run_simulation(scenario: Scenario) -> dict:
             jps.CollisionFreeSpeedModelAgentParameters(
                 position=occupant.position,
                 radius=scenario.agent_defaults.radius,
-                desired_speed=scenario.agent_defaults.desired_speed,
+                desired_speed=(
+                    occupant.desired_speed
+                    if occupant.desired_speed is not None
+                    else scenario.agent_defaults.desired_speed
+                ),
                 journey_id=journey,
                 stage_id=stage,
             )

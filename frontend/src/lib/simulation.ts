@@ -32,13 +32,19 @@ export type Scenario = {
 };
 export type AgentPath = {
   id: number;
+  /** Stable identity supplied by the simulation service, when available. */
+  sourceId?: string;
   points: Point[];
   exitId: string | null;
+  /** Intended exit; unlike exitId, this does not imply an evacuation. */
+  assignedExitId?: string;
   /** Final simulation time at which this person passes the exit. */
   duration: number;
   /** Initial reaction time, before walking begins. */
   delay: number;
   travelTime?: number;
+  /** Measured positions at their original simulation timestamps. */
+  samples?: { time: number; point: Point }[];
 };
 export type SimulationResult = {
   id: string;
@@ -52,6 +58,18 @@ export type SimulationResult = {
   remaining: number;
   hotspot: Point;
   createdAt: number;
+  engine?: "jupedsim" | "browser";
+  engineVersion?: string;
+  modelSettings?: {
+    dt: number;
+    sampleInterval: number;
+    maxTime: number;
+    seed?: number;
+  };
+  status?: "completed" | "timed_out";
+  /** Null when the recorded run ended with people still inside. */
+  clearanceTime?: number | null;
+  perExitCounts?: Record<string, number>;
 };
 
 export const SAMPLE_PLAN: FloorPlan = {
@@ -248,6 +266,26 @@ function pathLength(points: Point[]) {
 }
 
 export function positionAt(agent: AgentPath, time: number): Point | null {
+  if (agent.samples?.length) {
+    if (agent.exitId && time >= agent.duration) return null;
+    const samples = agent.samples;
+    if (time <= samples[0].time) return samples[0].point;
+    let low = 0;
+    let high = samples.length - 1;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (samples[middle].time <= time) low = middle;
+      else high = middle - 1;
+    }
+    const start = samples[low];
+    const end = samples[low + 1];
+    if (!end) return start.point;
+    const fraction = (time - start.time) / (end.time - start.time);
+    return {
+      x: start.point.x + (end.point.x - start.point.x) * fraction,
+      y: start.point.y + (end.point.y - start.point.y) * fraction,
+    };
+  }
   if (!agent.points.length) return null;
   if (agent.exitId && time >= agent.duration) return null;
   if (!agent.exitId || time <= agent.delay) return agent.points[0];

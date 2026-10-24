@@ -1,0 +1,82 @@
+// Run with both the Next.js app and Python service running locally.
+import assert from "node:assert/strict";
+import { SAMPLE_PLAN, positionAt } from "../src/lib/simulation.ts";
+import { adaptBackendSimulation } from "../src/lib/backend-simulation.ts";
+
+const base = new URL(process.env.BACKEND_TEST_APP_URL || "http://localhost:3000");
+const endpoint = new URL("/api/simulations", base);
+const scenario = { occupancy: 20, mobility: "standard", distribution: "uniform" };
+const input = { plan: SAMPLE_PLAN, scenario };
+let passed = 0;
+
+async function post(body, extra = {}) {
+  return fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: base.origin, ...extra },
+    body: typeof body === "string" ? body : JSON.stringify(body),
+    redirect: "manual",
+  });
+}
+
+async function rejected(body, status, extra) {
+  const response = await post(body, extra);
+  assert.equal(response.status, status);
+  const data = await response.json();
+  assert.equal(typeof data.error, "string");
+  assert.ok(data.error.length > 0);
+  assert.match(response.headers.get("cache-control") || "", /no-store/);
+  passed++;
+}
+
+try {
+  const health = await fetch(endpoint);
+  assert.equal(health.status, 200, "Start the Python service before running these checks.");
+  assert.equal((await health.json()).engine, "jupedsim");
+  assert.match(health.headers.get("cache-control") || "", /no-store/);
+  passed++;
+
+  await rejected(input, 403, { Origin: "https://unrelated.example" });
+  await rejected(input, 415, { "Content-Type": "text/plain" });
+  await rejected("{", 400);
+  await rejected("null", 400);
+  await rejected({ ...input, scenario: { ...scenario, occupancy: 201 } }, 400);
+  await rejected({ ...input, plan: { ...SAMPLE_PLAN, exits: [] } }, 400);
+  await rejected(" ".repeat(1024 * 1024 + 1), 413);
+
+  const response = await post(input);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("cache-control") || "", /no-store/);
+  const native = await response.json();
+  const result = adaptBackendSimulation(native, SAMPLE_PLAN, scenario, 1);
+  assert.equal(result.engine, "jupedsim");
+  assert.equal(result.status, "completed");
+  assert.equal(result.exited, scenario.occupancy);
+  assert.equal(result.remaining, 0);
+  assert.ok(result.clearanceTime > 0);
+  assert.equal(Object.values(result.perExitCounts).reduce((a, b) => a + b, 0), scenario.occupancy);
+  assert.equal(Object.keys(result.perExitCounts).length, 2);
+  assert.ok(result.agents.every((agent) => agent.samples.length > 1));
+  assert.equal(positionAt(result.agents[0], result.agents[0].duration), null);
+  passed++;
+
+  const withMetadata = structuredClone(input);
+  withMetadata.scenario.occupancy = 2;
+  withMetadata.plan.importNotes = "Extra import metadata is not simulation geometry";
+  withMetadata.plan.items[0].importReference = "example-reference";
+  const metadataResponse = await post(withMetadata);
+  assert.equal(metadataResponse.status, 200);
+  const metadataRun = adaptBackendSimulation(await metadataResponse.json(), withMetadata.plan, withMetadata.scenario, 2);
+  assert.equal(metadataRun.exited, 2);
+  passed++;
+
+  const blocked = structuredClone(SAMPLE_PLAN);
+  blocked.items.push({
+    id: "blocking-wall", label: "Blocking wall", kind: "obstacle",
+    x: 80, y: 280, width: 740, height: 40,
+  });
+  await rejected({ plan: blocked, scenario }, 422);
+  console.log(`Backend integration checks passed: ${passed} HTTP checks, real JuPedSim playback, two exit summaries, validation, and blocked-geometry recovery.`);
+} catch (error) {
+  console.error(`Backend integration checks failed: ${error instanceof Error ? error.message : "unknown failure"}`);
+  process.exitCode = 1;
+}
