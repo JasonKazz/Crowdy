@@ -26,6 +26,7 @@ export type IconName =
   | "exit"
   | "clock"
   | "pin"
+  | "video"
   | "external";
 const paths: Record<IconName, ReactNode> = {
   arrow: <path d="M4 12h15m-6-6 6 6-6 6" />,
@@ -96,6 +97,7 @@ const paths: Record<IconName, ReactNode> = {
     </>
   ),
   pin: <path d="m15 3 6 6-4 1-4 6-3-3-6 7m1-15 4-1 6 6-1 4-9-9Z" />,
+  video: <><rect x="3" y="6" width="12" height="12" rx="2" /><path d="m15 10 6-4v12l-6-4Z" /></>,
   external: <path d="M14 3h7v7m0-7L10 14M9 3H3v18h18v-6" />,
 };
 export default function Icon({

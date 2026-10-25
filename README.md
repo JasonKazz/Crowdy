@@ -47,8 +47,10 @@ outside that range remain visible for manual review.
 The service has an independent Docker image, warmed-model readiness checks,
 bearer token, locked CPU dependencies, and opt-in Azure Container Apps
 deployment. See [service setup and API](services/crowd-estimation/README.md)
-and [Azure infrastructure](infra/README.md). Video ingestion is a future step;
-the inference engine already accepts individual decoded frames.
+and [Azure infrastructure](infra/README.md). **Connect live camera** in Venue
+images pairs an iPhone through a private QR link. Safari samples the rear camera,
+and live counts update the desktop starting crowd. See [iPhone live camera
+setup](docs/integration.md#iphone-live-camera) for HTTPS and deployment requirements.
 
 ## Backend structure
 

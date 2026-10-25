@@ -11,22 +11,22 @@ variable "crowd_estimation_image" {
 }
 
 variable "crowd_estimation_min_replicas" {
-  description = "Keep 0 replicas for scale-to-zero, or 1 for a warm demo with no model cold start."
+  description = "Keep one warm process so in-memory live camera sessions survive idle periods."
   type        = number
-  default     = 0
+  default     = 1
   validation {
-    condition     = contains([0, 1], var.crowd_estimation_min_replicas)
-    error_message = "Use 0 to scale to zero or 1 to keep the model warm."
+    condition     = var.crowd_estimation_min_replicas == 1
+    error_message = "Use one minimum crowd-estimation replica; scale-to-zero discards live sessions."
   }
 }
 
 variable "crowd_estimation_max_replicas" {
-  description = "Bound the CPU inference service to one or two independent replicas."
+  description = "Use exactly one replica because live camera sessions are held in process memory."
   type        = number
-  default     = 2
+  default     = 1
   validation {
-    condition     = contains([1, 2], var.crowd_estimation_max_replicas)
-    error_message = "Use one or two crowd-estimation replicas."
+    condition     = var.crowd_estimation_max_replicas == 1
+    error_message = "Use one maximum crowd-estimation replica; live sessions require a shared store before scaling."
   }
 }
 
@@ -175,7 +175,7 @@ resource "azurerm_container_app" "crowd_estimation" {
 }
 
 output "crowd_estimation_url" {
-  description = "HTTPS base URL for authenticated server-to-server image estimates."
+  description = "HTTPS base URL for authenticated server-to-server still and live-frame estimates."
   value       = var.deploy_crowd_estimation ? "https://${azurerm_container_app.crowd_estimation[0].ingress[0].fqdn}" : null
 }
 

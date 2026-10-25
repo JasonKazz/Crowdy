@@ -15,6 +15,7 @@ budget_contact_emails = []
 
 # Optional independent YOLO crowd-estimation service. The deployment script
 # enables it and records its image in crowd-estimation.auto.tfvars.json.
-# Keep 0 to scale to zero; set 1 for a warm demo (additional compute cost).
-crowd_estimation_min_replicas = 0
-crowd_estimation_max_replicas = 2
+# Keep exactly one warm replica: live camera sessions are process-local.
+# This adds compute cost; restarts/redeployments still discard active sessions.
+crowd_estimation_min_replicas = 1
+crowd_estimation_max_replicas = 1
