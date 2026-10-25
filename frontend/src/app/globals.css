@@ -2778,3 +2778,11 @@ input::-webkit-inner-spin-button {
 .placement-preview-error > .placement-preview-message { display: grid; gap: 3px; flex: 1 1 320px; overflow-wrap: anywhere; }
 .placement-preview-error button { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .room-placement-warning { color: #786239; }
+
+.manual-view-panel { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.workspace-grid.live-analytics-grid .spatial-workspace { grid-column: 2 / -1; }
+.view-tabs { overflow-x: auto; }
+.view-tabs > button { white-space: nowrap; flex-shrink: 0; }
+@media (max-width: 760px) {
+  .workspace-grid.live-analytics-grid .spatial-workspace { grid-column: auto; }
+}

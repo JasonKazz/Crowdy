@@ -52,6 +52,13 @@ images pairs an iPhone through a private QR link. Safari samples the rear camera
 and live counts update the desktop starting crowd. See [iPhone live camera
 setup](docs/integration.md#iphone-live-camera) for HTTPS and deployment requirements.
 
+The **Live analytics** workspace tab uses that same camera connection to run
+evacuation forecasts from the smoothed live headcount and current layout/settings.
+Changed inputs refresh automatically while the tab is visible, at most once every
+10 seconds; unchanged counts reuse the forecast. Camera data supplies occupancy,
+while the simulator generates starting positions. See [live evacuation
+analytics](docs/integration.md#live-evacuation-analytics) for controls and limits.
+
 ## Backend structure
 
 ```text

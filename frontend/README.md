@@ -77,7 +77,7 @@ CROWDY_CROWD_ESTIMATION_URL=http://127.0.0.1:8001
 CROWDY_CROWD_ESTIMATION_TOKEN=
 ```
 
-The token is required in every environment, including local development, and must match the estimator. Missing credentials return `503` without forwarding an image. Development defaults to port 8001 when the URL is omitted; production requires an explicit URL. The proxy bounds request and response streams, enforces a 55-second deadline, rejects cross-site uploads, and preserves a busy service's `503` and `Retry-After`. The browser never receives the service token. Live video is not connected yet.
+The token is required in every environment, including local development, and must match the estimator. Missing credentials return `503` without forwarding an image. Development defaults to port 8001 when the URL is omitted; production requires an explicit URL. The proxy bounds request and response streams, enforces a 55-second deadline, rejects cross-site uploads, and preserves a busy service's `503` and `Retry-After`. The browser never receives the service token. **Connect live camera** under Venue images or in **Live analytics** pairs an iPhone through a private QR link. The phone camera requires an HTTPS frontend address reachable by both devices; see [iPhone live camera setup](../docs/integration.md#iphone-live-camera).
 
 `GET /api/simulations` checks the backend's `/health` endpoint through the same proxy. The browser never needs the backend token or a direct backend URL. A failed or cancelled request keeps the current setup available for another attempt.
 
@@ -86,6 +86,12 @@ Personal layouts and scenarios autosave to the backend after 150 ms of inactivit
 Floor-plan source images, extraction/calibration records, workspace manifests, and venue images use private Azure Blob Storage so they survive backend instance changes. See [Azure infrastructure setup](../infra/README.md) to provision and connect the service. A missing backend configuration or failed request never silently falls back to browser persistence.
 
 On the first library load or personal workspace open, valid legacy account-scoped browser workspaces migrate with their original IDs. Existing cloud records win conflicts. Only server-acknowledged local snapshots are removed; failed or corrupt entries remain for recovery, and durable deletion tombstones prevent resurrection. Legacy account/workspace-scoped IndexedDB venue images transfer after the cloud workspace is available, at most eight images and twenty seconds per Sources load. Cloud acknowledgements or durable source tombstones permit deleting only the corresponding original; failed uploads or local cleanup leave originals intact and show a retry notice. Reopening Sources retries remaining images. The older unowned single-workspace key remains untouched for recovery. IndexedDB is not used for active persistence. Browser storage being blocked does not disable cloud workspaces.
+
+## Live analytics
+
+The **Live analytics** workspace tab shares the Venue images camera connection and automatically forecasts evacuation from the smoothed live headcount and current layout/settings while the tab and browser page are visible. It uses fresh raw and smoothed counts of 1–200, generates starting positions from the layout, and ignores manual occupancy, room-count overrides, and pinned-baseline starting people. Manual Simulation results and comparisons remain separate.
+
+Forecasts start at most once every 10 seconds; unchanged counts/settings reuse the forecast, and changes during a run keep only the latest pending inputs. Stale, paused, invalid, or failed camera data stops updates and marks retained forecasts as previous. **Pause analytics** suspends forecasts independently of phone capture; **End feed** closes the shared connection. See [analytics behavior and limits](../docs/integration.md#live-evacuation-analytics).
 
 ## Checks
 
@@ -103,6 +109,9 @@ npm run test:backend-api
 npm run test:workspaces
 npm run test:workspace-sources
 npm run test:crowd-estimates
+npm run test:live-crowd
+npm run test:live-camera
+npm run test:live-evacuation
 npm run test:native-editor
 npm run test:image-upload
 npm run test:auth
@@ -112,6 +121,8 @@ npm run test:cloud-workspaces
 The workspace-store checks use isolated HTTP fixtures to verify account isolation, shared-sample protection, native draft preservation, immutable snapshots, ordered writes, optimistic conflicts, cancellation, offline errors, and safe legacy migration. The auth checks use local session fixtures and read-only requests against the running app, including public sample access and server authentication for personal workspace routes. They do not create Auth0 users or change tenant configuration.
 
 The source checks cover accepted image formats and sizes, account/workspace scoping, cloud acknowledgement, blob round trips, cancellation, and offline errors without local storage or IndexedDB. Crowd-estimation checks use isolated transport fixtures to cover multipart requests, zero counts, max across overlapping views, invalid results, streaming byte limits, origin rejection, bearer forwarding, cancellation, deadlines, unavailable/busy services, and required production configuration. Live cloud checks cover the authenticated Next-to-backend connection, session-derived ownership, mutation origin checks, private images, revision conflicts, and deletion tombstones.
+
+The live evacuation checks use deterministic clocks and deferred transport fixtures to verify camera-only occupancy, immutable frame provenance, stable-count reuse, latest-only serial scheduling, cooldown/retry timing, and stale/pause/session cancellation. They need no camera or backend.
 
 The backend adapter checks include recorded native completed and timed-out runs. HTTP checks exercise the full Next.js-to-Python connection, actual two-exit results, request limits, and invalid-layout recovery. Image-upload checks cover dimensions, the complete base64 request budget, PNG/JPEG fallback, and oversized/non-JSON error handling. Run `.venv/bin/python -m unittest discover -s tests -v` from `backend/` for the Python engine, API, and artifact-storage tests.
 

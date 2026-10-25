@@ -75,6 +75,16 @@ Starting occupancy uses the median of the latest three received frames, or the a
 
 Run the estimator with **one process and one warm replica**. Terraform enforces minimum and maximum replicas of one; multiple replicas need shared session storage first. Current sessions are lost on restart/redeployment, so reconnect after either. There are at most 16 concurrent sessions. See [session API and lifecycle](../services/crowd-estimation/README.md#live-camera-sessions).
 
+### Live evacuation analytics
+
+Open **Live analytics** beside Layout, Simulation, and Compare. Connect the iPhone in that tab or reuse the connection from Venue images; both views share one feed. With the tab selected and the browser page visible, a fresh valid count automatically runs a native evacuation forecast. The forecast shows evacuation time, people remaining, playback, exit use, and recent estimates. Manual Simulation results and pinned comparisons remain independent.
+
+Analytics uses the median live headcount and the current layout, mobility, placement, seed, body width, behavior, and blocked exits. It ignores manual occupancy, room-count overrides, and pinned-baseline starting people. Camera positions are not tracked: the simulator generates starting positions from the layout and placement settings.
+
+Requests start at most once every 10 seconds. Unchanged headcount/settings reuse the existing forecast; changes during a run retain only the latest pending inputs, with one request active at a time. A forecast stays labeled **PREVIOUS ESTIMATE** when its inputs differ or the feed becomes unavailable. Both the raw and smoothed count must be 1–200, and the frame must be less than 12 seconds old. Zero, above-limit, paused, stale, and failed camera observations wait for valid data. Simulation errors show the failure and retry after the update interval while fresh data remains available. A new camera connection clears the previous connection's forecasts.
+
+**Pause analytics** stops automatic forecasts while the phone can keep capturing. **Resume analytics** permits updates again. Leaving Live analytics, hiding the browser page, or running a manual simulation also suspends forecasts. An already-issued simulation finishes before the manual Run button becomes available; its result is discarded if live inputs were invalidated. Phone **Pause camera** stops frame capture separately; **End feed** closes the shared camera connection. The existing Venue images occupancy toggle controls Layout updates independently of analytics.
+
 ## Validation
 
 From `backend/`: `python -m unittest discover -s tests`, plus the four `node tests/editor_*.test.cjs` scripts listed in the root README.
@@ -84,6 +94,8 @@ From `frontend/`: `npm run lint`, `npm run build`, `npm run test:simulation`, `n
 The backend entrance-review regressions replay recorded POFA observations through import, manual calibration, placement of 24 people, and real JuPedSim evacuation. Source-image endpoint rounding is clipped only within half a source pixel, 2 cm, and a quarter wall thickness; larger overshoots and interior boundary crossings still require correction.
 
 The checks include real native evacuation through both geometry formats, edited polygon furniture, calibrated playback, stable seeds, mixed speeds, retained workspace geometry, invalid input recovery, upload request-size budgets, asynchronous import progress/failures, cloud workspace/source persistence, legacy migration, validated crowd-estimation responses and failure handling, and image extraction using a mocked provider. Run `npm run test:crowd-estimates`, `npm run test:live-crowd`, and `npm run test:live-camera` in `frontend/`, plus the service's separate Python test suite for still/live HTTP contracts, token separation, expiry, and pause/delete races. Storage tests cover private Blob round trips and filesystem fallback. Synthetic Auth0 sessions test the application's session handling; they do not verify the team's actual login/callback configuration. Real image-provider requests are not needed for the integration regression suite.
+
+Run `npm run test:live-evacuation` for deterministic clock/transport fixtures covering camera-only occupancy, immutable source snapshots, stable-count reuse, latest-only scheduling, cooldown/retries, and stale/pause/session cancellation without a camera or backend.
 
 ## Blocked exits and matched comparisons
 

@@ -30,7 +30,9 @@
 .auto input { width: 14px; height: 14px; accent-color: #5e8046; flex: none; }
 .links { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 12px; }
 .links a, .links button { display: flex; align-items: center; gap: 5px; color: #4f6b3b; font-size: 10px; min-height: 32px; padding: 4px 0; text-decoration: underline; text-underline-offset: 3px; }
+.reconnect { width: 100%; padding: 9px 12px; margin: 6px 0 0; border: 1px solid #bdd0aa; border-radius: 5px; background: #e3edda; color: #496637; font-size: 11px; }
+.reconnect:hover:not(:disabled) { background: #d8e5cc; }
 .privacy { font-size: 9px; color: #758369; line-height: 1.6; margin-top: 6px; }
 .message, .error { margin-top: 8px; padding: 8px 9px; border-radius: 4px; font-size: 10px; line-height: 1.6; background: #f8f3e5; color: #846b43; }
 .error { background: #fbf0e8; border: 1px solid #ecd9cc; color: #945e43; overflow-wrap: anywhere; }
-@media (max-width: 700px) { .connect, .end, .links a, .links button { min-height: 44px; } }
+@media (max-width: 700px) { .connect, .end, .links a, .links button, .reconnect { min-height: 44px; } }
