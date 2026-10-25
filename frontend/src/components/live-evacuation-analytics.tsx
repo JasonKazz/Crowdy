@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { runBackendSimulation } from "@/lib/backend-simulation";
 import { initialLiveEvacuationState, LiveEvacuationRunner, type LiveEvacuationCompletion } from "@/lib/live-evacuation";
 import { getEvacuatedCount, type FloorPlan, type Scenario, type SimulationResult } from "@/lib/simulation";
+import {isUsableCrowdEstimate} from "@/lib/crowd-estimates";
 import { useLiveCrowd } from "./live-crowd-provider";
 import LiveCrowdFeed from "./live-crowd-feed";
 import FloorPlanView from "./floor-plan";
@@ -82,13 +83,12 @@ export default function LiveEvacuationAnalytics({ active, plan, scenario, busy, 
     let lastCompletion: LiveEvacuationCompletion | null = null;
     const transports = new Set<AbortController>();
     const instance = new LiveEvacuationRunner({
-      run: (submittedPlan, submittedScenario) => {
-        // Native simulation keeps computing when an HTTP client disconnects.
-        // Drain issued work so manual runs wait for its actual response. The
-        // runner still invalidates paused/old results immediately.
+      run: (submittedPlan, submittedScenario, options) => {
+        // The transport owns the job deadline and cancellation. The runner
+        // still invalidates paused/old results immediately.
         const controller = new AbortController();
         transports.add(controller);
-        return runBackendSimulation(submittedPlan, submittedScenario, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]) })
+        return runBackendSimulation(submittedPlan, submittedScenario, { signal: AbortSignal.any([controller.signal, options.signal]) })
           .finally(() => transports.delete(controller));
       },
       onState: next => {
@@ -133,6 +133,9 @@ export default function LiveEvacuationAnalytics({ active, plan, scenario, busy, 
   const status = state.active ? state.status === "running" ? "Calculating" : "Finishing previous run" : !automatic ? "Analytics paused" : current ? "Up to date" : state.error ? "Needs attention" : state.nextRunAt ? "Update queued" : "Waiting for camera";
   const lastEstimate = completion ? `For ${completion.count} people · calculated ${elapsed(completion.completedAt, feed.now)}` : "Connect a camera to calculate an estimate";
   const cameraIsLive = feed.observation.status === "live";
+  const partialCount = feed.snapshot?.estimate && !isUsableCrowdEstimate(feed.snapshot.estimate);
+  const displayedCount = partialCount ? feed.snapshot?.estimate?.count ?? null : feed.count;
+  const aboveCapacity = plan.capacity != null && displayedCount !== null && displayedCount > plan.capacity;
 
   return (
     <section id={id} role="tabpanel" aria-labelledby={labelledBy} className={styles.root} hidden={!active}>
@@ -140,20 +143,28 @@ export default function LiveEvacuationAnalytics({ active, plan, scenario, busy, 
         <div><p className={styles.eyebrow}>LIVE EVACUATION ANALYTICS</p><h2>A forecast that follows your crowd.</h2><p>Live headcount, your floor plan, and a fresh evacuation estimate.</p></div>
         <button type="button" className={styles.toggle} aria-pressed={automatic} onClick={() => setAutomatic(!automatic)}><Icon name={automatic ? "pause" : "play"} size={14} />{automatic ? "Pause analytics" : "Resume analytics"}</button>
       </div>
+      {plan.capacity != null ? <p className={aboveCapacity ? styles.outdated : styles.explanation} role="status">
+        {plan.name.toUpperCase().includes("POFA") ? "POFA" : "Venue"} capacity: {plan.capacity.toLocaleString("en-US")} people.
+        {displayedCount === null ? " Waiting for a camera count." : aboveCapacity ? ` ${partialCount ? "At least " : ""}${(displayedCount - plan.capacity).toLocaleString("en-US")} above capacity. Analysis remains available.` : partialCount ? " Partial headcount; capacity status awaits a complete count." : displayedCount === plan.capacity ? " At capacity." : ` ${(plan.capacity - displayedCount).toLocaleString("en-US")} below capacity.`}
+      </p> : null}
       <div className={styles.metrics}>
-        <div className={styles.metric}><span><Icon name="video" size={14} />Crowd now</span><p>{feed.count ?? "—"}<small>people</small></p><em>{cameraIsLive ? "Detected in the current view" : feed.observation.status === "disconnected" ? "No camera connected" : feed.count === null ? "Waiting for a camera frame" : "Last observed count"}</em></div>
+        <div className={styles.metric}><span><Icon name="video" size={14} />Crowd now</span><p>{partialCount ? "≥ " : ""}{displayedCount?.toLocaleString("en-US") ?? "—"}<small>{feed.snapshot?.estimate?.method === "density" ? "estimated people" : "people"}</small></p><em>{partialCount ? "Partial count · waiting for complete data" : cameraIsLive ? feed.snapshot?.estimate?.method === "density" ? "Estimated from crowd density in the current view" : "Detected in the current view" : feed.observation.status === "disconnected" ? "No camera connected" : feed.count === null ? "Waiting for a camera frame" : "Last observed count"}</em></div>
         <div className={`${styles.metric} ${styles.primaryMetric}`}><span><Icon name="clock" size={14} />Estimated evacuation time</span><p className={estimate === null && result ? styles.incomplete : undefined}>{estimate === null ? result ? "Incomplete" : "—" : estimate.toFixed(1)}{estimate !== null ? <small>seconds</small> : null}</p><em>{lastEstimate}</em><span className={`${styles.badge} ${current ? styles.current : styles.previous}`}>{current ? "CURRENT INPUTS" : completion ? "PREVIOUS ESTIMATE" : "AWAITING FIRST ESTIMATE"}</span></div>
         <div className={styles.metric}><span><Icon name="people" size={14} />Remaining at run end</span><p>{result?.remaining ?? "—"}<small>people</small></p><em>{result ? `${result.trapped ?? 0} trapped · ${result.movingRemaining ?? result.remaining} with a route` : "Reported from simulated movement"}</em></div>
       </div>
       <div className={styles.body}>
         <div className={styles.forecast}>
           <div className={styles.sectionTop}><h3><Icon name="route" size={15} />Evacuation forecast</h3><span className={styles.runStatus}><span className={`${styles.statusDot} ${state.active ? styles.computing : current ? styles.ready : ""}`} />{status}</span></div>
-          <p className={styles.explanation} role="status">{!automatic ? "Automatic estimates are paused. Your camera can stay connected." : state.reason || (current ? "This forecast matches the latest headcount and layout settings." : "Connect your iPhone, then keep its camera page visible to start live analysis.")}</p>
+          <p className={styles.explanation} role="status">{!automatic ? "Automatic estimates are paused. Your camera can stay connected." : partialCount ? "The latest camera count is incomplete. Analytics waits for a complete count; the lower bound cannot start a forecast." : state.reason || (current ? "This forecast matches the latest headcount and layout settings." : "Connect your iPhone, then keep its camera page visible to start live analysis.")}</p>
           {state.error ? <div className={styles.error} role="alert">{state.error} Fresh inputs will retry after the update interval.</div> : null}
           {completion ? <>
             {!current ? <p className={styles.outdated}><Icon name="clock" size={13} />This shows a previous estimate. {state.active ? `Calculating for ${state.active.count} people…` : state.nextRunAt ? `Next update in ${Math.max(0, Math.ceil((state.nextRunAt - feed.now) / 1_000))}s.` : "Waiting for fresh, valid camera data."}</p> : null}
             <ForecastPlayback key={completion.result.id} completion={completion} />
             <div className={styles.resultFacts}><span>{result!.exited} / {completion.count} evacuated</span><span>{result!.peakDensity.toFixed(1)} peak people / m²</span><span>{result!.scenario.behaviorMode === "behavioral" ? "Natural" : "Direct"} evacuation</span></div>
+            {result!.execution ? <>
+              <p className={styles.explanation}>All {result!.execution.populationCount.toLocaleString("en-US")} people simulated individually. Processing took {result!.execution.wallTimeSeconds.toFixed(1)} s.{result!.execution.playbackTemporallyThinned ? ` Playback is sampled every ${result!.execution.playbackSampleInterval.toFixed(2)} simulated seconds; the headcount is unchanged.` : ""}</p>
+              {result!.execution.runtimeLimited ? <p className={styles.outdated} role="status">Processing time limit reached. This incomplete run records {result!.totalTime.toFixed(1)} simulated seconds with {result!.remaining.toLocaleString("en-US")} people remaining. A complete evacuation time is unavailable.</p> : null}
+            </> : null}
             <div className={styles.exits}><h4>Exit use</h4>{completion.plan.exits.map(exit => <div key={exit.id}><span>{exit.label}{completion.scenario.blockedExitIds?.includes(exit.id) ? " · blocked" : ""}</span><strong>{result!.perExitCounts?.[exit.id] ?? 0} people</strong></div>)}</div>
           </> : <div className={styles.empty}>
             <div className={styles.emptyPlan}><FloorPlanView plan={plan} result={null} mode="simulation" selectedId={null} onSelect={() => undefined} onMove={() => undefined} time={0} showPeople={false} showRoutes={false} showDensity={false} zoom={1} blockedExitIds={scenario.blockedExitIds} /></div>
@@ -161,7 +172,7 @@ export default function LiveEvacuationAnalytics({ active, plan, scenario, busy, 
           </div>}
           <p className={styles.assumptions}>Camera data supplies the headcount. Starting positions are generated from your layout and placement settings; individual camera positions are not tracked. This is a simulation estimate.</p>
         </div>
-        <aside className={styles.camera} aria-label="Live analytics camera connection"><div className={styles.sectionTop}><h3><Icon name="video" size={15} />Venue camera</h3><span className={styles.cameraTag}>IPHONE</span></div><p className={styles.cameraIntro}>Connect once. The same feed is available in Venue images.</p><LiveCrowdFeed purpose="analytics" busy={busy} blockedReason="" /><p className={styles.interval}>Forecasts refresh when the headcount or layout changes, at most once every 10 seconds. Zero, above-limit and stale counts wait for a valid frame.</p></aside>
+        <aside className={styles.camera} aria-label="Live analytics camera connection"><div className={styles.sectionTop}><h3><Icon name="video" size={15} />Venue camera</h3><span className={styles.cameraTag}>IPHONE</span></div><p className={styles.cameraIntro}>Connect once. The same feed is available in Venue images.</p><LiveCrowdFeed purpose="analytics" busy={busy} blockedReason="" /><p className={styles.interval}>Forecasts refresh when the headcount or layout changes, at most once every 10 seconds. Zero, partial, above-limit and stale counts wait for a valid frame.</p></aside>
       </div>
       {history.length ? <div className={styles.history}><div className={styles.sectionTop}><h3><Icon name="clock" size={14} />Recent estimates</h3><span>THIS CONNECTION</span></div><div className={styles.tableWrap}><table><thead><tr><th>Calculated</th><th>People</th><th>Evacuation estimate</th><th>Remaining</th></tr></thead><tbody>{history.map(item => <tr key={item.result.id}><td>{elapsed(item.completedAt, feed.now)}</td><td>{item.count}</td><td>{clearance(item.result) === null ? "Incomplete" : `${clearance(item.result)!.toFixed(1)} s`}</td><td>{item.result.remaining}</td></tr>)}</tbody></table></div></div> : null}
     </section>

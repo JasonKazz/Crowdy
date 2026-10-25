@@ -4,6 +4,7 @@ import math
 from typing import Literal
 
 from pydantic import Field, model_validator
+from app.limits import MAX_POPULATION
 
 from app.schemas.extraction import ExtractionInfo, SourceImage
 from app.schemas.rooms import BuildingType, RoomType
@@ -89,6 +90,7 @@ def exit_from_marker(marker: Region, floors: list[Region], *, jamb_tolerance: fl
 class Layout(InputModel):
     schema_version: Literal[1] = 1
     name: str = Field(min_length=1)
+    capacity: int | None = Field(default=None, ge=1, le=MAX_POPULATION)
     units: Literal["meters"] = "meters"
     walkable_areas: list[Region] = Field(min_length=1)
     furniture: list[Region] = Field(default_factory=list)
@@ -105,7 +107,7 @@ class Layout(InputModel):
     building_type: BuildingType = "auto"
     source_image: SourceImage | None = None
     extraction: ExtractionInfo | None = None
-    occupants: list[Occupant] = Field(default_factory=list)
+    occupants: list[Occupant] = Field(default_factory=list, max_length=MAX_POPULATION)
     population: Population | None = None
     agent_defaults: AgentDefaults
     settings: SimulationSettings

@@ -1,4 +1,5 @@
 import type {FloorPlan, Point, Scenario, SimulationResult} from "./simulation";
+import {MAX_CROWD_SIZE} from "./crowd-limits.ts";
 
 export const BUILDING_TYPES = ["auto", "office", "school", "venue", "residential", "other"] as const;
 export const ROOM_TYPES = ["office", "classroom", "meeting", "cafeteria", "kitchen", "lounge", "corridor", "lobby", "auditorium", "bedroom", "restroom", "storage", "unknown"] as const;
@@ -57,10 +58,11 @@ export function validPopulationSettings(value: unknown): value is PopulationSett
     if (!values || typeof values !== "object" || Array.isArray(values) || Object.keys(values).length > 101) return false;
     for (const [key, item] of Object.entries(values)) {
       if (!key || key.length > 128) return false;
-      if (name === "counts" ? typeof item !== "number" || !Number.isInteger(item) || item < 0 || item > 200 :
+      if (name === "counts" ? typeof item !== "number" || !Number.isInteger(item) || item < 0 || item > MAX_CROWD_SIZE :
         !ROOM_TYPES.includes(item as RoomType)) return false;
     }
   }
+  if (Object.values(v.roomCounts ?? {}).reduce((sum, count) => sum + count, 0) > MAX_CROWD_SIZE) return false;
   return true;
 }
 

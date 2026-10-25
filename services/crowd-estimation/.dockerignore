@@ -2,6 +2,7 @@
 !Dockerfile
 !pyproject.toml
 !uv.lock
+!THIRD_PARTY_NOTICES.md
 !app/
 !app/**
 **/__pycache__/

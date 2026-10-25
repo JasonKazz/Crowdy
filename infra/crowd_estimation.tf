@@ -1,5 +1,5 @@
 variable "deploy_crowd_estimation" {
-  description = "Opt in to the independent YOLO service after its real image has been built."
+  description = "Opt in to the independent crowd-counting service after its real image has been built."
   type        = bool
   default     = false
 }
@@ -103,8 +103,8 @@ resource "azurerm_container_app" "crowd_estimation" {
     container {
       name   = "crowd-estimation"
       image  = var.crowd_estimation_image
-      cpu    = 1
-      memory = "2Gi"
+      cpu    = 2
+      memory = "4Gi"
 
       env {
         name        = "CROWDY_CROWD_ESTIMATION_TOKEN"
@@ -121,6 +121,30 @@ resource "azurerm_container_app" "crowd_estimation" {
       env {
         name  = "CROWDY_YOLO_THREADS"
         value = "2"
+      }
+      env {
+        name  = "CROWDY_COUNT_METHOD"
+        value = "density"
+      }
+      env {
+        name  = "CROWDY_DENSITY_MODEL"
+        value = "/srv/crowdy/models/zip-n-nwpu.pth"
+      }
+      env {
+        name  = "CROWDY_DENSITY_MIN_SIZE"
+        value = "896"
+      }
+      env {
+        name  = "CROWDY_DENSITY_MAX_SIZE"
+        value = "4096"
+      }
+      env {
+        name  = "CROWDY_YOLO_MAX_DETECTIONS"
+        value = "10000"
+      }
+      env {
+        name  = "CROWDY_YOLO_INFERENCE_SECONDS"
+        value = "25"
       }
 
       # Uvicorn binds only after the FastAPI lifespan loads and warms the model,

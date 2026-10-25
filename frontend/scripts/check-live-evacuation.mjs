@@ -75,7 +75,7 @@ function fixture() {
     get maximumConcurrent() { return maximumConcurrent; } };
 }
 
-assert.equal(LIVE_EVACUATION_MAX_FRAME_AGE_MS, 12_000);
+assert.equal(LIVE_EVACUATION_MAX_FRAME_AGE_MS, 45_000);
 assert.equal(LIVE_EVACUATION_MIN_INTERVAL_MS, 10_000);
 assert.deepEqual(initialLiveEvacuationState(), { status: "idle", reason: null, error: null, completed: null,
   active: null, pending: false, current: false, nextRunAt: null, observation: null });
@@ -179,7 +179,7 @@ assert.deepEqual(initialLiveEvacuationState(), { status: "idle", reason: null, e
     assert.equal(f.runner.state.completed, completed);
     assert.equal(completed.sourceSequence, 1, "A fresh equal count must not rewrite the source frame that ran");
   }
-  f.clock.advance(12_000);
+  f.clock.advance(LIVE_EVACUATION_MAX_FRAME_AGE_MS);
   assert.equal(f.runner.state.current, false);
   assert.equal(f.runner.state.status, "waiting");
   assert.equal(f.runner.state.completed, completed);
@@ -217,9 +217,10 @@ assert.deepEqual(initialLiveEvacuationState(), { status: "idle", reason: null, e
 // Smoothed counts cannot disguise a zero/out-of-range raw observation. Missing,
 // stale, future, fractional, or non-live observations never start simulations.
 for (const change of [
-  { count: 0 }, { rawCount: 0 }, { count: 201 }, { rawCount: 201 }, { count: -1 },
+  { count: 0 }, { rawCount: 0 }, { count: 10001 }, { rawCount: 10001 }, { count: -1 },
   { count: 1.5 }, { rawCount: NaN }, { count: null }, { rawCount: null },
-  { updatedAt: null }, { updatedAt: "invalid" }, { updatedAt: new Date(origin - 12_000).toISOString() },
+  { complete: false },
+  { updatedAt: null }, { updatedAt: "invalid" }, { updatedAt: new Date(origin - LIVE_EVACUATION_MAX_FRAME_AGE_MS).toISOString() },
   { updatedAt: new Date(origin + 5_001).toISOString() }, { sessionId: null }, { sequence: 0 }, { sequence: 1.1 },
   ...["disconnected", "waiting", "paused", "stale", "error", "ended"].map(status => ({ status })),
 ]) {
@@ -245,7 +246,7 @@ for (const offset of [1, 1_000, 5_000]) {
   assert.equal(f.runner.state.current, true);
   f.runner.dispose();
 }
-for (const count of [1, 200]) {
+for (const count of [1, 200, 5000, 5001, 10000]) {
   const f = fixture();
   f.update(count);
   await flush();
@@ -254,13 +255,62 @@ for (const count of [1, 200]) {
   await f.finish();
 }
 
+// Inference can finish later than the old twelve-second window. A complete
+// frame remains valid until the shared 45-second boundary, without rounding or
+// sampling away any people from the submitted scenario.
+{
+  const f=fixture();
+  const input=f.input(10000);
+  input.observation.updatedAt=new Date(origin-44_999).toISOString();
+  input.observation.complete=true;
+  f.runner.update(input);
+  await flush();
+  assert.equal(f.requests.length,1);
+  assert.equal(f.requests[0].scenario.occupancy,10000);
+  f.clock.advance(1);
+  assert.equal(f.requests[0].signal.aborted,true,"The exact freshness boundary must still cancel a stale run");
+  await f.finish();
+  assert.equal(f.runner.state.completed,null);
+  f.runner.dispose();
+}
+
+// A partial/truncated frame invalidates an active result even if its numeric
+// count is within range. The old transport must settle before complete data
+// can launch another forecast; a lower bound must never feed analytics.
+{
+  const f=fixture();
+  f.update(20);
+  await flush();
+  f.clock.advance(2_000);
+  const partial=f.input(5000);
+  partial.observation.complete=false;
+  f.runner.update(partial);
+  assert.equal(f.requests[0].signal.aborted,true);
+  assert.equal(f.runner.state.current,false);
+  assert.match(f.runner.state.reason,/lower bound|complete/i);
+  await f.finish();
+  assert.equal(f.requests.length,1);
+  assert.equal(f.runner.state.completed,null);
+  f.clock.advance(8_000);
+  const complete=f.input(5000);
+  complete.observation.complete=true;
+  f.runner.update(complete);
+  await flush();
+  assert.equal(f.requests.length,2);
+  assert.equal(f.requests[1].scenario.occupancy,5000);
+  await f.finish();
+  assert.equal(f.runner.state.current,true);
+  assert.equal(f.maximumConcurrent,1);
+  f.runner.dispose();
+}
+
 // A stale frame cancels the active job automatically. Its late success is
 // discarded while the in-flight gate remains occupied until actual settlement.
 {
   const f = fixture();
   f.update(20);
   await flush();
-  f.clock.advance(12_000);
+  f.clock.advance(LIVE_EVACUATION_MAX_FRAME_AGE_MS);
   assert.equal(f.requests[0].signal.aborted, true);
   assert.equal(f.runner.state.active.count, 20);
   assert.equal(f.runner.state.current, false);
@@ -409,4 +459,4 @@ for (const changes of [
   assert.equal(f.clock.tasks.size, 0);
 }
 
-console.log("Live evacuation checks passed: fresh camera-only occupancy, immutable source snapshots, latest-only serial scheduling, stable-count deduplication, geometry/settings invalidation, ten-second cooldown/retry, stale/pause/manual/session cancellation, late completion isolation, and disposal.");
+console.log("Live evacuation checks passed: complete camera-only 1–10,000 occupancy, 45-second freshness, partial-count rejection, immutable source snapshots, latest-only serial scheduling, stable-count deduplication, geometry/settings invalidation, ten-second cooldown/retry, stale/pause/manual/session cancellation, late completion isolation, and disposal.");

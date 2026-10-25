@@ -7,6 +7,7 @@ import type {
 } from "./simulation";
 
 import {startingPopulation} from "./room-population.ts";
+import {submitSimulation, type SimulationProgress} from "./simulation-jobs.ts";
 const PIXELS_PER_METRE = 32;
 const CANVAS_HEIGHT = 600;
 const TIME_TOLERANCE = 1e-7;
@@ -370,6 +371,23 @@ export function adaptBackendSimulation(
       desiredSpeed: behaviorById.get(occupant.id)?.speed,
     };
   });
+  let execution: SimulationResult["execution"];
+  if (result.execution !== undefined) {
+    const meta=record(result.execution,"execution");
+    if (meta.mode !== "full_agent" || typeof meta.runtime_limited !== "boolean" ||
+      typeof meta.playback_temporally_thinned !== "boolean" ||
+      !["completed","simulation_time_limit","wall_time_limit","trapped"].includes(meta.stop_reason as string))
+      invalid("execution metadata is unsupported");
+    const populationCount=count(meta.population_count,"simulated population");
+    const interval=finite(meta.playback_sample_interval,"playback interval",0);
+    if (populationCount!==occupants.length || interval<=0 ||
+      meta.runtime_limited !== (meta.stop_reason === "wall_time_limit") ||
+      (meta.runtime_limited && clearanceTime !== null)) invalid("execution metadata does not match the run");
+    execution={mode:"full_agent",populationCount,wallTimeSeconds:finite(meta.wall_time_seconds,"processing time",0),
+      wallTimeLimitSeconds:meta.wall_time_limit_seconds===null?null:finite(meta.wall_time_limit_seconds,"processing limit",0),
+      runtimeLimited:meta.runtime_limited,stopReason:meta.stop_reason as NonNullable<SimulationResult["execution"]>["stopReason"],
+      playbackTemporallyThinned:meta.playback_temporally_thinned,playbackSampleInterval:interval};
+  }
   return {
     id: `jupedsim-${createdAt}-${occupants.length}`,
     plan: structuredClone(inputPlan),
@@ -398,6 +416,7 @@ export function adaptBackendSimulation(
       "excluded placement area", 0),
     ...(engineVersion === undefined ? {} : { engineVersion }),
     ...(modelSettings === undefined ? {} : { modelSettings }),
+    ...(execution === undefined ? {} : {execution}),
     status,
     clearanceTime,
     perExitCounts,
@@ -411,40 +430,13 @@ export function adaptBackendSimulation(
 export async function runBackendSimulation(
   inputPlan: FloorPlan,
   inputScenario: Scenario,
-  { signal, baseline }: { signal?: AbortSignal; baseline?: SimulationResult } = {},
+  { signal, baseline, onProgress }: { signal?: AbortSignal; baseline?: SimulationResult; onProgress?: (progress: SimulationProgress) => void } = {},
 ): Promise<SimulationResult> {
   const plan = structuredClone(inputPlan);
   const scenario = structuredClone(inputScenario);
   const createdAt = Date.now();
-  let response: Response;
-  try {
-    response = await fetch("/api/simulations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plan, scenario: {...scenario, blocked_exit_ids: scenario.blockedExitIds ?? []},
-        ...(baseline ? {starting_population: startingPopulation(baseline)} : {}) }),
-      signal,
-      cache: "no-store",
-    });
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    throw new Error("Unable to reach the simulation service. Please try again.");
-  }
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    throw new Error("The simulation service returned an unreadable response. Please try again.");
-  }
-  if (!response.ok) {
-    const message = payload && typeof payload === "object" && "error" in payload
-      ? payload.error
-      : undefined;
-    throw new Error(typeof message === "string" && message.trim()
-      ? message
-      : `Simulation failed (HTTP ${response.status}). Please try again.`);
-  }
+  const payload=await submitSimulation({plan,scenario:{...scenario,blocked_exit_ids:scenario.blockedExitIds??[]},async_run:true,
+    ...(baseline?{starting_population:startingPopulation(baseline)}:{})},{signal,onProgress});
   const result = adaptBackendSimulation(payload, plan, scenario, createdAt);
   if (baseline && (!result.reusedStarts || !sameStartingPopulation(baseline, result)))
     throw new Error("The comparison did not preserve the baseline starting people. Clear the baseline and retry.");

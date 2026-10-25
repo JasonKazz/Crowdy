@@ -8,7 +8,9 @@ function moduleUrl(path, replace = value => value) {
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
   return `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`;
 }
-const estimateUrl = moduleUrl("../src/lib/crowd-estimates.ts");
+const limitsUrl = moduleUrl("../src/lib/crowd-limits.ts");
+const estimateUrl = moduleUrl("../src/lib/crowd-estimates.ts", source => source.replace('"./crowd-limits.ts"', JSON.stringify(limitsUrl)));
+const {isUsableCrowdEstimate}=await import(estimateUrl);
 const contractUrl = moduleUrl("../src/lib/live-crowd.ts", source => source.replace('"./crowd-estimates"', JSON.stringify(estimateUrl)));
 const { LiveCrowdError, isLiveCrowdSession, isLiveCrowdSnapshot, isLiveCrowdSessionId, isLiveCrowdToken,
   createLiveCrowdSession, getLiveCrowdSession, endLiveCrowdSession, sendLiveCrowdFrame, pauseLiveCrowdSession } = await import(contractUrl);
@@ -22,10 +24,20 @@ const estimate = { estimate_id: "fixture-estimate", count: 0, detections: [], im
   model: "fixture-model", processing_ms: 3, warnings: ["Visible people only."] };
 const waiting = { session_id: id, expires_at: expires, sequence: 0, updated_at: null, estimate: null, preview: null, status: "waiting" };
 const live = { ...waiting, sequence: 1, updated_at: "2026-10-25T01:00:00.123456Z", estimate, preview: "data:image/jpeg;base64,/9j/2Q==", status: "live" };
+const inference={strategy:"whole",tiles_processed:1,tiles_planned:1,max_detections:10000,truncated:false,complete:true};
+const densityEstimate={...estimate,method:"density",count:5000,density_count:5000.25,inference};
+const cappedDensityEstimate={...densityEstimate,count:10000,density_count:11000.4,inference:{...inference,truncated:true,complete:false}};
+const partialDetectionEstimate={...estimate,method:"detections",count:1,detections:[{confidence:.9,bbox:[1,2,10,20]}],inference:{...inference,strategy:"tiled",tiles_processed:1,tiles_planned:4,complete:false}};
+const maxDetectionEstimate={...estimate,method:"detections",count:10000,detections:Array.from({length:10000},()=>({confidence:.9,bbox:[1,2,10,20]})),inference};
 const image = new Blob(["fixture-frame"], { type: "image/jpeg" });
 assert.ok(isLiveCrowdSession(session));
 assert.ok(isLiveCrowdSnapshot(waiting, id));
 assert.ok(isLiveCrowdSnapshot(live, id), "Zero people is a valid live estimate");
+for(const value of [densityEstimate,cappedDensityEstimate,partialDetectionEstimate,maxDetectionEstimate])
+  assert.ok(isLiveCrowdSnapshot({...live,estimate:value},id),"Complete and partial large estimates remain displayable with their quality metadata");
+assert.ok(isUsableCrowdEstimate(densityEstimate));
+assert.equal(isUsableCrowdEstimate(cappedDensityEstimate),false);
+assert.equal(isUsableCrowdEstimate(partialDetectionEstimate),false);
 assert.ok(isLiveCrowdSnapshot({ ...waiting, sequence: 1, status: "paused" }, id), "The camera can pause before sending a frame");
 assert.ok(isLiveCrowdSnapshot({ ...live, sequence: 2, status: "paused" }, id));
 for (const value of [null, "", "../", id.toUpperCase(), `${id}/frames`, id.slice(1)]) assert.equal(isLiveCrowdSessionId(value), false);
@@ -38,7 +50,13 @@ for (const value of [null, {}, { ...live, session_id: otherId }, { ...live, view
   { ...live, preview: "https://attacker.invalid/frame.jpg" }, { ...live, preview: "data:image/svg+xml;base64,YQ==" },
   { ...live, preview: "data:image/jpeg;base64," }, { ...live, preview: "data:image/jpeg;base64,malformed==" },
   { ...live, preview: `data:image/jpeg;base64,${"a".repeat(360_000)}` }, { ...live, estimate: null },
-  { ...waiting, status: "live" }]) assert.equal(isLiveCrowdSnapshot(value, id), false);
+  { ...waiting, status: "live" },
+  {...live,estimate:{...maxDetectionEstimate,count:10001}},
+  {...live,estimate:{...densityEstimate,method:"unknown"}},
+  {...live,estimate:{...densityEstimate,density_count:4990}},
+  {...live,estimate:{...partialDetectionEstimate,inference:{...partialDetectionEstimate.inference,complete:true}}},
+  {...live,estimate:{...cappedDensityEstimate,inference:{...cappedDensityEstimate.inference,complete:true}}},
+]) assert.equal(isLiveCrowdSnapshot(value, id), false);
 
 const originalFetch = globalThis.fetch;
 const originalTimeout = AbortSignal.timeout;
@@ -180,6 +198,19 @@ try {
   response = await proxyLiveCrowd(request([id]), [id]);
   assert.equal(response.status, 200);
   assert.doesNotMatch(await response.text(), /private_secret|fixture-service-credential/);
+  for(const value of [densityEstimate,cappedDensityEstimate,partialDetectionEstimate,maxDetectionEstimate]) {
+    const upstream={...value,private_secret:serviceToken,
+      image:{...value.image,private_secret:serviceToken},
+      inference:{...value.inference,private_secret:serviceToken},
+      detections:value.detections.map(detection=>({...detection,private_secret:serviceToken}))};
+    globalThis.fetch=async()=>Response.json({...live,estimate:upstream});
+    response=await proxyLiveCrowd(request([id]),[id]);
+    assert.equal(response.status,200);
+    const publicData=await response.json();
+    assert.deepEqual(publicData.estimate,value,"The public whitelist must preserve method, fractional density and complete/truncated inference metadata");
+    assert.doesNotMatch(JSON.stringify(publicData),/private_secret|fixture-service-credential/);
+    assert.equal(isUsableCrowdEstimate(publicData.estimate),isUsableCrowdEstimate(value),"Sanitizing a partial estimate must not make it eligible for occupancy or analytics");
+  }
   for (const secret of [serviceToken, viewerToken]) {
     globalThis.fetch = async () => Response.json({ ...live, estimate: { ...estimate, warnings: [`Private diagnostic ${secret}`] } });
     response = await proxyLiveCrowd(request([id]), [id]);
@@ -213,4 +244,4 @@ try {
   AbortSignal.timeout = originalTimeout;
   for (const [key, value] of Object.entries(originalEnv)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 }
-console.log("Live crowd transport checks passed: separate viewer/camera capabilities, client contracts, expiry/auth statuses, origin rejection, multipart validation, frame/preview/stream limits, deadlines, cancellation, private errors, no caching, and secret isolation.");
+console.log("Live crowd transport checks passed: separate viewer/camera capabilities, 1–10,000 counts, density/partial inference whitelists, client contracts, expiry/auth statuses, origin rejection, multipart validation, frame/preview/stream limits, deadlines, cancellation, private errors, no caching, and secret isolation.");

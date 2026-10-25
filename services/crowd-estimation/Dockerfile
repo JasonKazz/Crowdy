@@ -9,6 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8001 \
     CROWDY_YOLO_MODEL=/srv/crowdy/models/yolo26n.pt \
     CROWDY_YOLO_DEVICE=cpu \
+    CROWDY_COUNT_METHOD=density \
+    CROWDY_DENSITY_MODEL=/srv/crowdy/models/zip-n-nwpu.pth \
     YOLO_AUTOINSTALL=false \
     YOLO_CONFIG_DIR=/tmp/ultralytics \
     MPLCONFIGDIR=/tmp/matplotlib
@@ -22,9 +24,11 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,id=crowdy-estimation-uv,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 COPY app ./app
+COPY THIRD_PARTY_NOTICES.md ./THIRD_PARTY_NOTICES.md
 # Bake weights into the image. Startup and inference need no model downloads.
 RUN chmod -R u=rwX,go=rX app \
     && python -m app.download_model --output models \
+    && python -m app.download_model --model yolo26n.pt --output models \
     && useradd --create-home --uid 10001 crowdy \
     && rm -rf /tmp/ultralytics /tmp/matplotlib
 USER crowdy

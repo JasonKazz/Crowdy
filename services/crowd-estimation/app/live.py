@@ -66,6 +66,7 @@ class FrameTicket:
 
     session: _Session
     generation: int
+    admitted_at: datetime
 
 
 def _digest(token: str) -> bytes:
@@ -145,7 +146,7 @@ class LiveSessions:
     def begin_frame(self, session_id: str, token: str) -> FrameTicket:
         with self._lock:
             session = self._authorize(session_id, token, camera=True)
-            return FrameTicket(session=session, generation=session.generation)
+            return FrameTicket(session=session, generation=session.generation, admitted_at=self._wall_clock())
 
     def finish_frame(self, ticket: FrameTicket, estimate: Estimate, preview: str) -> LiveSnapshot:
         with self._lock:
@@ -158,7 +159,9 @@ class LiveSessions:
             # may resume the session. Deleted/expired sessions cannot reappear.
             if session.generation == ticket.generation:
                 session.sequence += 1
-                session.updated_at = self._wall_clock()
+                # Upload and inference time consume the viewer's freshness
+                # window; finishing a slow estimate must not refresh its age.
+                session.updated_at = ticket.admitted_at
                 session.estimate = estimate
                 session.preview = preview
                 session.status = "live"

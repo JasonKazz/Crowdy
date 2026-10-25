@@ -21,6 +21,7 @@ import LiveEvacuationAnalytics from "./live-evacuation-analytics";
 import {nativeLayout, type GeometrySelection, type GeometryTool} from "@/lib/native-editor";
 import { IMAGE_UPLOAD_SIZE_ERROR, prepareImageUpload } from "@/lib/image-upload";
 import pofaVerifiedDemo from "@/lib/demos/pofa-verified.json";
+import {isSupportedCrowdSize, MAX_CROWD_SIZE} from "@/lib/crowd-limits";
 import {
   SAMPLE_PLAN,
   getEvacuatedCount,
@@ -104,6 +105,7 @@ function WorkspaceContent({
   const [runCount, setRunCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState(false);
+  const [runProgress, setRunProgress] = useState("");
   const [liveRunning, setLiveRunning] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
@@ -520,6 +522,7 @@ function WorkspaceContent({
       runController.current = null;
       setBusy(false);
       setRunning(false);
+      setRunProgress("");
       setRunError("");
       setNotice("Run cancelled. Your setup is unchanged.");
       return;
@@ -530,25 +533,34 @@ function WorkspaceContent({
     const submittedScenario = { ...scenario };
     setBusy(true);
     setRunning(true);
+    setRunProgress(`Preparing ${submittedScenario.occupancy.toLocaleString("en-US")} people…`);
     setRunError("");
     setPlaying(false);
     try {
       const next = await runBackendSimulation(submittedPlan, submittedScenario, {
         signal: controller.signal,
         baseline: baseline ?? undefined,
+        onProgress: progress => {
+          if (runController.current !== controller || controller.signal.aborted) return;
+          const count = (progress.populationCount || submittedScenario.occupancy).toLocaleString("en-US");
+          const elapsed = `${progress.elapsedSeconds.toFixed(1)} s processing`;
+          setRunProgress(progress.phase === "placing" ? `Placing ${count} people · ${elapsed}` : progress.phase === "routing" ? `Calculating routes for ${count} people · ${elapsed}` : `Simulating ${count} people · ${progress.simulationTime.toFixed(1)} simulated seconds · ${progress.evacuatedCount.toLocaleString("en-US")} exited · ${elapsed}`);
+        },
       });
       if (runController.current !== controller || controller.signal.aborted) return;
       setResult(next);
       setTime(0);
       setMode("simulation");
       setRunCount((count) => count + 1);
-      setPlaying(next.totalTime > 0 && !reducedMotion());
+      setPlaying(next.scenario.occupancy <= 1000 && next.totalTime > 0 && !reducedMotion());
       setNotice(
-        next.trapped && !next.movingRemaining
+        next.execution?.runtimeLimited
+          ? `Processing time limit reached with ${next.remaining.toLocaleString("en-US")} people remaining. Inspect the incomplete recorded movement; a complete evacuation time is unavailable.`
+          : next.trapped && !next.movingRemaining
           ? `${next.exited} evacuated; ${next.trapped} trapped with no available route. Trapped people remain visible in red.`
           : next.remaining
           ? `Time limit reached: ${next.trapped ?? 0} trapped and ${next.movingRemaining ?? next.remaining} with a route still inside; ${next.remaining} ${next.remaining === 1 ? "person" : "people"} remaining. Inspect the recorded movement and exits.`
-          : "Run complete. Inspect playback or pin this run as your baseline.",
+          : next.scenario.occupancy > 1000 ? "Run complete. Playback is paused; press Play to inspect the full crowd." : "Run complete. Inspect playback or pin this run as your baseline.",
       );
     } catch (error) {
       if (runController.current !== controller || controller.signal.aborted) return;
@@ -562,6 +574,7 @@ function WorkspaceContent({
         runController.current = null;
         setBusy(false);
         setRunning(false);
+        setRunProgress("");
       }
     }
   }
@@ -665,6 +678,7 @@ function WorkspaceContent({
                 : "Crowdy illustrative grid model",
               engine: result.engine,
               engineVersion: result.engineVersion,
+              execution: result.execution,
               modelSettings: result.modelSettings,
               bodyWidthMetres: result.agentRadius === undefined ? undefined : 2 * result.agentRadius,
               exitWidthsMetres: result.exitWidths,
@@ -816,7 +830,7 @@ function WorkspaceContent({
               busy={busy}
               liveBlockedReason={baseline ? "Clear the pinned baseline to update the starting crowd from this feed." : mode !== "layout" ? "Return to Layout to apply live crowd updates." : ""}
               onUseLiveCrowdEstimate={(occupancy) => {
-                if (busy || baseline || mode !== "layout" || occupancy < 1 || occupancy > 200) return;
+                if (busy || baseline || mode !== "layout" || !isSupportedCrowdSize(occupancy)) return;
                 setScenario((current) => current.occupancy === occupancy && !Object.keys(current.population?.roomCounts ?? {}).length
                   ? current
                   : { ...current, occupancy, population: { ...current.population, roomCounts: {} } });
@@ -829,6 +843,7 @@ function WorkspaceContent({
                 setError("");
               }}
               onUseCrowdEstimate={(occupancy) => {
+                if (!isSupportedCrowdSize(occupancy)) return;
                 const clearingBaseline = Boolean(baseline && (scenario.occupancy !== occupancy ||
                   ((scenario.distribution === "rooms" || scenario.distribution === "normal") && Object.keys(scenario.population?.roomCounts ?? {}).length > 0)));
                 if (clearingBaseline) {
@@ -987,7 +1002,7 @@ function WorkspaceContent({
                     aria-label="Number of people"
                     type="number"
                     min="1"
-                    max="200"
+                    max={MAX_CROWD_SIZE}
                     value={scenario.occupancy}
                     onChange={(e) => {
                       const value = Number(e.target.value);
@@ -996,7 +1011,7 @@ function WorkspaceContent({
                           ...scenario,
                           occupancy: Math.max(
                             1,
-                            Math.min(200, Math.round(value)),
+                            Math.min(MAX_CROWD_SIZE, Math.round(value)),
                           ),
                         });
                     }}
@@ -1009,11 +1024,11 @@ function WorkspaceContent({
                 className="range-input"
                 type="range"
                 min="1"
-                max="200"
+                max={MAX_CROWD_SIZE}
                 value={scenario.occupancy}
                 style={
                   {
-                    "--range-progress": `${((scenario.occupancy - 1) / 199) * 100}%`,
+                    "--range-progress": `${((scenario.occupancy - 1) / (MAX_CROWD_SIZE - 1)) * 100}%`,
                   } as React.CSSProperties
                 }
                 onChange={(e) =>
@@ -1025,8 +1040,12 @@ function WorkspaceContent({
               />
               <div className="range-labels">
                 <span>1 person</span>
-                <span>200 people</span>
+                <span>{MAX_CROWD_SIZE.toLocaleString("en-US")} people</span>
               </div>
+              {plan.capacity != null ? <p className={`helper${scenario.occupancy > plan.capacity ? " room-placement-warning" : ""}`} role="status">
+                {plan.name.toUpperCase().includes("POFA") ? "POFA" : "Venue"} capacity: {plan.capacity.toLocaleString("en-US")} people.
+                {scenario.occupancy > plan.capacity ? ` ${(scenario.occupancy - plan.capacity).toLocaleString("en-US")} above capacity. This scenario is available for analysis.` : scenario.occupancy === plan.capacity ? " At capacity." : ` ${(plan.capacity - scenario.occupancy).toLocaleString("en-US")} below capacity.`}
+              </p> : null}
               <label className="field-label" htmlFor="population-seed">Placement seed</label>
               <input id="population-seed" type="number" min="0" max="4294967295" step="1" value={scenario.seed ?? 42}
                 onChange={event=>{const seed=Number(event.target.value); if(Number.isInteger(seed)&&seed>=0&&seed<=4294967295)
@@ -1447,11 +1466,12 @@ function WorkspaceContent({
                 ? "Running"
                 : result
                   ? result.remaining
-                    ? result.status === "trapped" ? "Trapped" : "Time limit"
+                    ? result.execution?.runtimeLimited ? "Processing limit" : result.status === "trapped" ? "Trapped" : "Time limit"
                     : "Complete"
                   : "Not run"}
             </span>
           </div>
+          {running && runProgress ? <p className="results-subtitle" role="status">{runProgress}</p> : null}
           {(result?.plan??plan).native&&nativeLayout(result?.plan??plan).source_image?.calibration?.method==="estimated"&&
             <p className="scale-estimate-note">Estimated scale: these results use assumed object sizes. Calibrate with a known measurement for more reliable distances and density.</p>}
           {result && (result.placementExcludedArea ?? 0) > .01 &&
@@ -1462,6 +1482,8 @@ function WorkspaceContent({
             </p>
           )}
           {result?.exitChanges && result.exitChanges.length>0 && <p className="results-subtitle">{new Set(result.exitChanges.map(change=>change.agentId)).size} people changed exits to avoid congestion ({result.exitChanges.length} changes).</p>}
+          {result?.execution ? <p className="results-subtitle">All {result.execution.populationCount.toLocaleString("en-US")} people simulated individually · {result.execution.wallTimeSeconds.toFixed(1)} s processing.{result.execution.playbackTemporallyThinned ? ` Playback sampled every ${result.execution.playbackSampleInterval.toFixed(2)} simulated seconds; headcount unchanged.` : ""}</p> : null}
+          {result?.execution?.runtimeLimited ? <p className="scale-estimate-note" role="status">Processing time limit reached. This run is incomplete, with {result.remaining.toLocaleString("en-US")} people remaining after {result.totalTime.toFixed(1)} simulated seconds. A complete evacuation time is unavailable.</p> : null}
           {stale && (
             <div className="result-stale">Inputs changed since this run</div>
           )}
@@ -1471,7 +1493,7 @@ function WorkspaceContent({
               <button
                 className="inline-help"
                 aria-label="Evacuation time definition"
-                title="Time until everyone exits. Unavailable if anyone remains at the simulation time limit."
+                title="Time until everyone exits. Unavailable if anyone remains at a simulation or processing time limit."
                 onClick={() => setModal("help")}
               >
                 <Icon name="help" size={12} />

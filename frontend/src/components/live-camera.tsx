@@ -127,7 +127,7 @@ export default function LiveCamera() {
       if (generation.current !== current) return;
       const media = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 15, max: 24 } },
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 15, max: 24 } },
       });
       if (generation.current !== current || document.visibilityState === "hidden") {
         media.getTracks().forEach(track => track.stop());

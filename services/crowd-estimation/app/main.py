@@ -13,6 +13,7 @@ from starlette.formparsers import MultiPartException, MultiPartParser
 
 from app.config import Settings
 from app.estimator import CrowdEstimator, Estimate, EstimatorBusy
+from app.tiling import EstimationLimit
 from app.images import ALLOWED_TYPES, InvalidImage, decode_image, jpeg_preview
 from app.live import (
     CreatedLiveSession,
@@ -63,7 +64,13 @@ def failure(message: str, status: int, headers: dict | None = None):
 
 def create_app(settings: Settings | None = None, estimator=None, live_sessions: LiveSessions | None = None) -> FastAPI:
     config = settings if settings is not None else Settings.from_env()
-    detector = estimator if estimator is not None else CrowdEstimator(config)
+    if estimator is not None:
+        detector = estimator
+    elif config.method == "density":
+        from app.density import DensityEstimator
+        detector = DensityEstimator(config)
+    else:
+        detector = CrowdEstimator(config)
     sessions = live_sessions if live_sessions is not None else LiveSessions()
 
     @asynccontextmanager
@@ -101,15 +108,19 @@ def create_app(settings: Settings | None = None, estimator=None, live_sessions: 
 
     @app.get("/healthz")
     async def health():
-        return {"status": "ok"}
+        return {"status": "ok", "application_version": app.version}
 
     @app.get("/readyz")
     async def readiness():
         if not detector.ready:
             return failure("Model is not ready.", 503)
-        return {"status": "ready"}
+        return {"status": "ready", "application_version": app.version,
+                "count_method": config.method,
+                "model": (config.density_model_path if config.method == "density" else config.model_path).name,
+                "max_detections": config.max_detections, "max_tiles": config.max_tiles,
+                "inference_seconds": config.inference_seconds}
 
-    @app.post("/v1/estimates", response_model=Estimate, openapi_extra={
+    @app.post("/v1/estimates", response_model=Estimate, response_model_exclude_none=True, openapi_extra={
         "security": [{"serviceBearer": []}],
         "requestBody": IMAGE_REQUEST_BODY,
     })
@@ -230,7 +241,7 @@ def create_app(settings: Settings | None = None, estimator=None, live_sessions: 
 
             try:
                 return await run_in_threadpool(infer)
-            except InvalidImage as error:
+            except (InvalidImage, EstimationLimit) as error:
                 return failure(str(error), 422)
             except EstimatorBusy:
                 return failure("Crowd estimation is busy. Retry shortly.", 503, {"Retry-After": "2"})

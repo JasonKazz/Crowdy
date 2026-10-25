@@ -23,7 +23,7 @@ def stage_context(source: Path, destination: Path) -> None:
         shutil.copyfile(original, target)
         target.chmod(0o644)
 
-    for name in ("Dockerfile", "pyproject.toml", "uv.lock"):
+    for name in ("Dockerfile", "pyproject.toml", "uv.lock", "THIRD_PARTY_NOTICES.md"):
         original = source / name
         if original.is_symlink() or not original.is_file():
             raise ValueError("A required crowd-estimation build source is missing or is a symlink.")

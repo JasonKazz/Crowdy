@@ -1,5 +1,6 @@
 import type { FloorPlan, Scenario } from "./simulation";
 import {validPlanRooms, validPopulationSettings} from "./room-population.ts";
+import {isSupportedCrowdSize, isVenueCapacity} from "./crowd-limits.ts";
 
 export const SAMPLE_WORKSPACE_ID = "berkeley-studio";
 export const DEFAULT_SCENARIO: Scenario = {
@@ -87,6 +88,7 @@ function validPlan(value: unknown): value is FloorPlan {
   if (!isObject(value) || !isText(value.id) || !isText(value.name))
     return false;
   if (!validPlanRooms(value.rooms)) return false;
+  if (value.capacity != null && !isVenueCapacity(value.capacity)) return false;
   if (
     value.width !== 900 ||
     value.height !== 600 ||
@@ -168,10 +170,7 @@ function validPlan(value: unknown): value is FloorPlan {
 function validScenario(value: unknown): value is Scenario {
   return (
     isObject(value) &&
-    finite(value.occupancy) &&
-    Number.isInteger(value.occupancy) &&
-    value.occupancy >= 1 &&
-    value.occupancy <= 200 &&
+    isSupportedCrowdSize(value.occupancy) &&
     (value.mobility === "standard" || value.mobility === "mixed") &&
     (value.distribution === "uniform" || value.distribution === "workstations" || value.distribution === "rooms" || value.distribution === "normal") &&
     (value.population === undefined || validPopulationSettings(value.population)) &&
@@ -189,6 +188,7 @@ function copyPlan(plan: FloorPlan): FloorPlan {
     width: plan.width,
     height: plan.height,
     area: plan.area,
+    ...(plan.capacity == null ? {} : {capacity: plan.capacity}),
     ...(plan.rooms ? {rooms: structuredClone(plan.rooms)} : {}),
     ...(plan.native ? {native: structuredClone(plan.native)} : {}),
     items: plan.items.map((item) => ({

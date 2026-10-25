@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {SAMPLE_PLAN} from '../src/lib/simulation.ts';
 import {simulationRequest} from '../src/lib/simulation-request.ts';
 import {validPopulationSettings,placementKey,populationPreviewState,startingPopulation,adaptPopulationPreview} from '../src/lib/room-population.ts';
+import {isSupportedCrowdSize, MAX_CROWD_SIZE, POFA_CAPACITY} from '../src/lib/crowd-limits.ts';
 
 const scenario={occupancy:40,mobility:'standard',distribution:'rooms',seed:42,bodyWidth:.46,
   population:{activity:'workday',roomCounts:{'meeting-room':7}}};
@@ -10,6 +11,24 @@ const request=simulationRequest({plan:SAMPLE_PLAN,scenario});
 assert.equal(request.scenario.population_config.activity,'workday');
 assert.equal(request.scenario.population_config.room_counts['meeting-room'],7);
 assert.equal(request.plan.rooms.length,4);
+assert.equal(MAX_CROWD_SIZE,10000);
+assert.equal(POFA_CAPACITY,5000);
+for(const count of [1,5000,5001,10000]) {
+  assert.ok(isSupportedCrowdSize(count));
+  const large=simulationRequest({plan:{...SAMPLE_PLAN,capacity:POFA_CAPACITY},scenario:{...scenario,occupancy:count,population:{roomCounts:{hall:count}}}});
+  assert.equal(large.scenario.occupancy,count,'Capacity is metadata, not an analysis ceiling');
+  assert.equal(large.scenario.population_config.room_counts.hall,count);
+  assert.equal(large.plan.capacity,5000);
+}
+for(const occupancy of [0,-1,10001,1.5,NaN,Infinity,'10000']) {
+  assert.equal(isSupportedCrowdSize(occupancy),false);
+  assert.throws(()=>simulationRequest({plan:SAMPLE_PLAN,scenario:{...scenario,occupancy}}),/1–10,000/);
+}
+assert.equal(validPopulationSettings({roomCounts:{a:5000,b:5000}}),true);
+assert.equal(validPopulationSettings({roomCounts:{a:5000,b:5001}}),false,'Room totals must remain within the supported headcount');
+assert.equal(validPopulationSettings({roomCounts:{hall:10001}}),false);
+for(const capacity of [0,-1,1.5,NaN,'5000'])
+  assert.throws(()=>simulationRequest({plan:{...SAMPLE_PLAN,capacity},scenario}),/capacity/);
 for(const value of [{roomCounts:{x:-1}},{roomCounts:{x:1.5}},{roomTypes:{x:'secret'}},{activity:'panic'},[],null])
   assert.equal(validPopulationSettings(value),false);
 assert.throws(()=>simulationRequest({plan:SAMPLE_PLAN,scenario:{...scenario,population:{roomCounts:{x:true}}}}));

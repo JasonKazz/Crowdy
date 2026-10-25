@@ -9,6 +9,8 @@ from shapely.prepared import prep
 
 from app.schemas.rooms import PopulationConfig
 from app.services.population.rooms import allocate_counts, plan_room_zones, zone_polygons
+from app.simulation.spatial import SpatialIndex
+from app.simulation.budget import check_simulation_budget
 
 
 def place_in_rooms(plan, settings, walkable, base_floor, exits, radius, metadata, layout=None):
@@ -29,6 +31,7 @@ def place_in_rooms(plan, settings, walkable, base_floor, exits, radius, metadata
     counts, typed, building, activity = allocate_counts(zones, {key: shape.area for key, shape in spaces.items()},
         settings["occupancy"], config, layout.building_type if layout else "auto", plan["name"])
     positions, assignments, room_data = [], [], []
+    clearance_index = SpatialIndex(2 * radius + .05)
     if plan.get("native"):
         convert = lambda point: pixel_point(point, plan["native"]["transform"])
     else:
@@ -43,13 +46,16 @@ def place_in_rooms(plan, settings, walkable, base_floor, exits, radius, metadata
         if wanted:
             prepared = prep(space)
             left, bottom, right, top = space.bounds
-            for _ in range(max(8000, wanted * 1200)):
+            for attempt in range(max(8000, wanted * 1200)):
+                if attempt % 128 == 0:
+                    check_simulation_budget()
                 candidate = (rng.uniform(left, right), rng.uniform(bottom, top))
                 if not prepared.covers(Point(candidate)):
                     continue
-                if any(math.dist(candidate, other) < 2 * radius + .05 for other in positions):
+                if clearance_index.collides(candidate):
                     continue
                 positions.append(candidate)
+                clearance_index.add(candidate)
                 assignments.append(zone.id)
                 placed += 1
                 if placed == wanted:

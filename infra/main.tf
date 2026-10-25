@@ -6,9 +6,10 @@ locals {
     managed_by  = "terraform"
   }
   # Fixed-size single replica prevents background imports from being scaled away
-  # after the request returns and bounds compute capacity for the student budget.
-  backend_cpu    = 0.5
-  backend_memory = "1Gi"
+  # after the request returns. Dedicated headroom keeps HTTP polling responsive
+  # during a full-agent POFA forecast; native physics still uses one CPU core.
+  backend_cpu    = 2
+  backend_memory = "4Gi"
 }
 
 resource "random_string" "suffix" {

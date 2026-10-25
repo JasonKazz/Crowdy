@@ -2,6 +2,7 @@
 from typing import Annotated, Literal
 from pydantic import Field
 from app.schemas.scenario import InputModel
+from app.limits import MAX_POPULATION
 
 BuildingType = Literal["auto", "office", "school", "venue", "residential", "other"]
 RoomType = Literal["office", "classroom", "meeting", "cafeteria", "kitchen", "lounge",
@@ -18,6 +19,6 @@ class RoomClassification(InputModel):
 class PopulationConfig(InputModel):
     building_type: BuildingType = "auto"
     activity: Activity = "auto"
-    room_counts: dict[str, Annotated[int, Field(strict=True, ge=0, le=200)]] = Field(default_factory=dict, max_length=101,
+    room_counts: dict[str, Annotated[int, Field(strict=True, ge=0, le=MAX_POPULATION)]] = Field(default_factory=dict, max_length=101,
         description="Fixed counts for selected rooms. Unspecified rooms share the remaining population.")
     room_types: dict[str, RoomType] = Field(default_factory=dict, max_length=101)

@@ -1,6 +1,8 @@
 import type { FloorPlan, Scenario, SimulationResult } from "./simulation";
+import {MAX_CROWD_SIZE} from "./crowd-limits.ts";
+import {LIVE_STALE_AFTER_MS} from "./live-camera.ts";
 
-export const LIVE_EVACUATION_MAX_FRAME_AGE_MS = 12_000;
+export const LIVE_EVACUATION_MAX_FRAME_AGE_MS = LIVE_STALE_AFTER_MS;
 export const LIVE_EVACUATION_MIN_INTERVAL_MS = 10_000;
 const MAX_CAMERA_CLOCK_SKEW_MS = 5_000;
 
@@ -11,6 +13,7 @@ export type LiveCrowdObservation = {
   sessionId: string | null;
   status: "disconnected" | "waiting" | "live" | "paused" | "stale" | "error" | "ended";
   sequence: number;
+  complete?: boolean;
 };
 
 export type LiveEvacuationInput = {
@@ -216,9 +219,10 @@ export class LiveEvacuationRunner {
     if (observation.status === "paused") return { status: "paused", reason: "The camera is paused." };
     if (observation.status !== "live") return { status: "waiting", reason: observation.status === "stale"
       ? "Waiting for a fresh camera frame." : "Waiting for the live camera." };
-    const validCount = (count: number | null): count is number => Number.isSafeInteger(count) && count! >= 1 && count! <= 200;
+    if (observation.complete === false) return {status:"waiting",reason:"The camera count is a lower bound. Waiting for a complete estimate."};
+    const validCount = (count: number | null): count is number => Number.isSafeInteger(count) && count! >= 1 && count! <= MAX_CROWD_SIZE;
     if (!validCount(observation.count) || !validCount(observation.rawCount))
-      return { status: "waiting", reason: "A live estimate of 1–200 people is required." };
+      return { status: "waiting", reason: `A live estimate of 1–${MAX_CROWD_SIZE.toLocaleString()} people is required.` };
     const capturedAt = observation.updatedAt === null ? NaN : Date.parse(observation.updatedAt);
     if (!Number.isFinite(capturedAt) || capturedAt > now + MAX_CAMERA_CLOCK_SKEW_MS || now - capturedAt >= LIVE_EVACUATION_MAX_FRAME_AGE_MS)
       return { status: "waiting", reason: "Waiting for a fresh camera frame." };

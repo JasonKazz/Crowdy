@@ -3,7 +3,8 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { FloorPlan } from "@/lib/simulation";
 import { prepareImageUpload } from "@/lib/image-upload";
-import { estimateVenueCrowd, largestCrowdEstimate, type CrowdEstimate } from "@/lib/crowd-estimates";
+import { estimateVenueCrowd, isUsableCrowdEstimate, largestCrowdEstimate, type CrowdEstimate } from "@/lib/crowd-estimates";
+import {isSupportedCrowdSize, MAX_CROWD_SIZE} from "@/lib/crowd-limits";
 import {
   deleteVenueImage,
   listVenueImages,
@@ -87,6 +88,8 @@ export default function WorkspaceSources({
   const [uploading, setUploading] = useState(false);
   const [estimating, setEstimating] = useState(false);
   const [estimate, setEstimate] = useState<number | null>(null);
+  const [estimateUsable, setEstimateUsable] = useState(false);
+  const [densityEstimate, setDensityEstimate] = useState(false);
   const [estimateWarnings, setEstimateWarnings] = useState<string[]>([]);
   const [removing, setRemoving] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -117,6 +120,8 @@ export default function WorkspaceSources({
       if (generation.current !== current) return;
       setImages([]);
       setEstimate(null);
+      setEstimateUsable(false);
+      setDensityEstimate(false);
       setEstimateWarnings([]);
       setLoading(!isSample && !!ownerId);
       setUploading(false);
@@ -158,6 +163,8 @@ export default function WorkspaceSources({
   async function estimateImages(sources: ImagePreview[], current: number, allImagesAdded = true) {
     setEstimating(true);
     setEstimate(null);
+    setEstimateUsable(false);
+    setDensityEstimate(false);
     setEstimateWarnings([]);
     const estimates: CrowdEstimate[] = [];
     const failures: string[] = [];
@@ -177,14 +184,19 @@ export default function WorkspaceSources({
       setStatus("Added images kept. Not every selected image could be processed; your starting crowd is unchanged. Retry or review occupancy manually.");
     } else {
       const count = largestCrowdEstimate(estimates);
+      const usable = estimates.length > 0 && estimates.every(isUsableCrowdEstimate);
       setEstimate(count);
+      setEstimateUsable(usable);
+      setDensityEstimate(estimates.some(result => result.count === count && result.method === "density"));
       setEstimateWarnings([...new Set(estimates.flatMap(result => result.warnings))]);
-      if (count === 0) {
+      if (!usable && count !== null) {
+        setStatus(`Estimated at least ${count.toLocaleString("en-US")} people. This count is incomplete; your starting crowd is unchanged. Retry or set occupancy manually.`);
+      } else if (count === 0) {
         setStatus("No people detected. Your starting crowd is unchanged; review the image and set occupancy manually.");
-      } else if (count !== null && count > 200) {
-        setStatus(`${count} people detected. This exceeds the simulation limit of 200; your starting crowd is unchanged. Review occupancy manually.`);
+      } else if (count !== null && count > MAX_CROWD_SIZE) {
+        setStatus(`Estimated ${count.toLocaleString("en-US")} people. This exceeds the simulation limit of ${MAX_CROWD_SIZE.toLocaleString("en-US")}; your starting crowd is unchanged. Review occupancy manually.`);
       } else if (latest.current.busy) {
-        setStatus(`${count} people detected. Finish the current operation, then use this estimate to update the starting crowd.`);
+        setStatus(`Estimated ${count} people. Finish the current operation, then use this estimate to update the starting crowd.`);
       } else if (count !== null) {
         latest.current.onUseCrowdEstimate(count);
         setStatus(`Crowd set to ${count} people${sources.length > 1 ? " using the largest individual image estimate" : ""}. Review the estimate before running.`);
@@ -264,6 +276,8 @@ export default function WorkspaceSources({
       if (generation.current !== current) return;
       setImages((previous) => previous.filter((image) => image.id !== source.id));
       setEstimate(null);
+      setEstimateUsable(false);
+      setDensityEstimate(false);
       setEstimateWarnings([]);
       objectUrls.current.delete(source.url);
       URL.revokeObjectURL(source.url);
@@ -382,11 +396,11 @@ export default function WorkspaceSources({
               ))}
             </ul>
             <div className={styles.estimateCard}>
-              <div className={styles.estimateTop}><span><Icon name="people" size={15} />Estimated crowd</span><span className={styles.previewBadge}>YOLO</span></div>
-              <p className={styles.estimateNumber}>{estimate ?? "—"} <span>people</span></p>
-              <p className={styles.estimateNote}>{estimating ? "Counting visible people…" : estimate === null ? "Estimate your images to set the starting crowd." : images.length > 1 ? "Largest individual image count. Overlapping views are never added together." : "Visible people detected in this image."}</p>
+              <div className={styles.estimateTop}><span><Icon name="people" size={15} />Estimated crowd</span><span className={styles.previewBadge}>{densityEstimate ? "DENSITY" : "VISION"}</span></div>
+              <p className={styles.estimateNumber}>{estimate !== null && !estimateUsable ? <span>At least </span> : null}{estimate?.toLocaleString("en-US") ?? "—"} <span>people</span></p>
+              <p className={styles.estimateNote}>{estimating ? "Estimating the visible crowd…" : estimate === null ? "Estimate your images to set the starting crowd." : !estimateUsable ? "Partial count shown as a lower bound. It cannot update occupancy automatically." : images.length > 1 ? "Largest individual image estimate. Overlapping views are never added together." : densityEstimate ? "People estimated from crowd density in this image." : "Visible people detected in this image."}</p>
               <p className={styles.estimateNote}>{estimateWarnings.length ? estimateWarnings.join(" ") : "People hidden from view or too small may be missed. Review occupancy before running."}</p>
-              {estimate !== null && estimate > 0 && estimate <= 200 ? (
+              {estimateUsable && isSupportedCrowdSize(estimate) ? (
                 <button type="button" className={styles.estimateButton} disabled={disabled} onClick={() => {
                   onUseCrowdEstimate(estimate);
                   setStatus(`Crowd set to ${estimate} people. Review the estimate before running.`);

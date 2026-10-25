@@ -10,6 +10,7 @@ from shapely.ops import nearest_points
 from shapely.prepared import prep
 
 from app.simulation.geometry import build_geometry, region_to_polygon
+from app.simulation.budget import check_simulation_budget
 
 
 class VisibilityGraph:
@@ -76,8 +77,11 @@ class MeshGraph:
     def __init__(self, polygon):
         self.polygon = polygon
         self.engine = jupedsim.RoutingEngine(polygon.buffer(1e-8))
+        self.visible_space = prep(polygon.buffer(1e-8))
 
     def path(self, start, goal):
+        if self.visible_space.covers(LineString([start, goal])):
+            return [start, goal]
         if not self.engine.is_routable(start) or not self.engine.is_routable(goal):
             return None
         return self.engine.compute_waypoints(start, goal)
@@ -103,13 +107,20 @@ class RoutePlanner:
         # offsets can create artificial spikes that close a perfectly usable door.
         self.components = body_clear_components(geometry, radius)
         self.graphs = [routing_graph(component) for component in self.components if not component.is_empty]
+        self.target_areas = {}
 
     def route(self, start, exit_polygon, preferred=None):
         start_point = Point(start)
         choices = []
-        for graph in self.graphs:
+        for graph_index, graph in enumerate(self.graphs):
             component = graph.polygon
-            target_area = component.intersection(exit_polygon)
+            key = (graph_index, id(exit_polygon))
+            cached = self.target_areas.get(key)
+            if cached is None:
+                target_area = component.intersection(exit_polygon)
+                self.target_areas[key] = (exit_polygon, target_area)
+            else:
+                _, target_area = cached
             if target_area.is_empty or target_area.area < 1e-8:
                 continue
             entry = start_point if component.covers(start_point) else nearest_points(component, start_point)[0]
@@ -175,9 +186,22 @@ def plan_routes(scenario, geometry=None, planner=None, allow_trapped=False):
     exits = [(region, region_to_polygon(region)) for region in sorted(scenario.exits, key=lambda r: r.id)
              if region.id not in blocked]
     routes = []
-    for person in scenario.occupants:
+    for index, person in enumerate(scenario.occupants):
+        if index % 16 == 0:
+            check_simulation_budget()
         choices = []
-        for region, polygon in exits:
+        # The distance to a target's bounding box is a lower bound on every
+        # body-clear route to it. Stop only when no remaining exit can beat the
+        # best actual route; this retains exact routing and stable tie breaking.
+        def lower_bound(pair):
+            region, polygon = pair
+            left, bottom, right, top = polygon.bounds
+            x, y = person.position
+            return (math.hypot(max(left-x, 0, x-right), max(bottom-y, 0, y-top)), region.id)
+        best = math.inf
+        for region, polygon in sorted(exits, key=lower_bound):
+            if lower_bound((region, polygon))[0] > best + 1e-9:
+                break
             preferred = None
             boundary = boundaries.get(region.id)
             if boundary:
@@ -196,6 +220,7 @@ def plan_routes(scenario, geometry=None, planner=None, allow_trapped=False):
             if planned:
                 distance, points = planned
                 choices.append((distance, region.id, points))
+                best = min(best, distance)
         if not choices:
             if allow_trapped:
                 routes.append({"agent_id": person.id, "exit_id": None, "route_length": None,

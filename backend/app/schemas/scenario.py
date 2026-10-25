@@ -1,6 +1,7 @@
 import math
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.limits import MAX_POPULATION
 
 Point = tuple[float, float]
 
@@ -34,7 +35,7 @@ class SimulationSettings(InputModel):
 
 
 class Population(InputModel):
-    count: int = Field(ge=1, le=5000)
+    count: int = Field(ge=1, le=MAX_POPULATION)
     seed: int = Field(default=42, ge=0, le=2**32 - 1)
     spawn_area_ids: list[str] = Field(min_length=1)
 
@@ -64,7 +65,7 @@ class Scenario(InputModel):
     obstacles: list[Region]
     exits: list[Region] = Field(min_length=1)
     exit_boundaries: list[ExitBoundary] = Field(default_factory=list)
-    occupants: list[Occupant] = Field(default_factory=list)
+    occupants: list[Occupant] = Field(default_factory=list, max_length=MAX_POPULATION)
     population: Population | None = None
 
     agent_defaults: AgentDefaults

@@ -15,6 +15,8 @@ from shapely.prepared import prep
 from app.schemas.scenario import ExitBoundary, Occupant, Region, Scenario
 from app.simulation.geometry import build_geometry
 from app.simulation.routing import body_clear_components
+from app.simulation.spatial import SpatialIndex
+from app.simulation.budget import check_simulation_budget
 
 PIXELS_PER_METRE = 32.0
 CANVAS_HEIGHT = 600.0
@@ -194,7 +196,10 @@ def _positions(plan: dict, settings: dict, walkable, base_floor, exits, convert=
     rng = random.Random(settings.get("seed", POPULATION_SEED))
     min_x, min_y, max_x, max_y = base_floor.bounds
     positions = []
-    for _ in range(max(5000, count * 400)):
+    clearance_index = SpatialIndex(separation)
+    for attempt in range(max(5000, count * 400)):
+        if attempt % 128 == 0:
+            check_simulation_budget()
         if clustered:
             centre = desks[rng.randrange(len(desks))]
             candidate = (rng.gauss(centre[0], 1.8), rng.gauss(centre[1], 1.8))
@@ -208,9 +213,10 @@ def _positions(plan: dict, settings: dict, walkable, base_floor, exits, convert=
         # the route planner's normal trapped-occupant error.
         if not accessible.covers(point):
             continue
-        if any(math.dist(candidate, other) < separation for other in positions):
+        if clearance_index.collides(candidate):
             continue
         positions.append(candidate)
+        clearance_index.add(candidate)
         if len(positions) == count:
             return positions
     raise ValueError(

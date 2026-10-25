@@ -2,14 +2,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { estimateVenueCrowd, isCrowdEstimate, largestCrowdEstimate } from "../src/lib/crowd-estimates.ts";
+import { estimateVenueCrowd, isCrowdEstimate, isUsableCrowdEstimate, largestCrowdEstimate } from "../src/lib/crowd-estimates.ts";
+import {MAX_CROWD_SIZE} from "../src/lib/crowd-limits.ts";
 
 function moduleUrl(path, replace = value => value) {
   const source = replace(readFileSync(new URL(path, import.meta.url), "utf8"));
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
   return `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`;
 }
-const contractUrl = moduleUrl("../src/lib/crowd-estimates.ts");
+const limitsUrl = moduleUrl("../src/lib/crowd-limits.ts");
+const contractUrl = moduleUrl("../src/lib/crowd-estimates.ts", source => source.replace('"./crowd-limits.ts"', JSON.stringify(limitsUrl)));
 const { proxyCrowdEstimate } = await import(moduleUrl("../src/lib/crowd-estimation-proxy.ts", source => source.replace('"./crowd-estimates"', JSON.stringify(contractUrl))));
 const result = count => ({ estimate_id: "estimate-fixture", count,
   detections: Array.from({ length: count }, () => ({ confidence: .9, bbox: [1, 2, 10, 20] })),
@@ -19,6 +21,31 @@ assert.ok(isCrowdEstimate(result(0)), "A valid zero result is not a missing esti
 assert.equal(largestCrowdEstimate([]), null);
 assert.equal(largestCrowdEstimate([result(0)]), 0);
 assert.equal(largestCrowdEstimate([result(2), result(3)]), 3, "Overlapping views must never be summed");
+for(const count of [5000,10000]) {
+  assert.ok(isCrowdEstimate(result(count)),'Complete large counts remain valid at the supported boundary');
+  assert.ok(isUsableCrowdEstimate(result(count)));
+}
+assert.equal(isCrowdEstimate(result(MAX_CROWD_SIZE+1)),false);
+const inference={strategy:'tiled',tiles_processed:16,tiles_planned:16,max_detections:10000,truncated:false,complete:true};
+const complete={...result(5000),inference};
+assert.ok(isCrowdEstimate(complete));
+assert.ok(isUsableCrowdEstimate(complete));
+for(const meta of [{...inference,tiles_processed:8,complete:false},{...inference,truncated:true,complete:false}]) {
+  const partial={...result(5000),inference:meta};
+  assert.ok(isCrowdEstimate(partial),'Partial results remain displayable as lower bounds');
+  assert.equal(isUsableCrowdEstimate(partial),false,'Partial and capped counts cannot autoapply or start live analytics');
+  assert.equal([complete,partial].every(isUsableCrowdEstimate),false,'A partial source cannot be masked by a complete overlapping image');
+}
+assert.equal(isCrowdEstimate({...complete,inference:{...inference,tiles_processed:15}}),false);
+assert.equal(isCrowdEstimate({...complete,inference:{...inference,truncated:true}}),false);
+const density={...result(0),method:'density',count:5000,density_count:5000.25,detections:[],inference:{...inference,strategy:'whole',tiles_processed:1,tiles_planned:1}};
+assert.ok(isCrowdEstimate(density),'Density results do not invent one box per estimated person');
+assert.ok(isUsableCrowdEstimate(density));
+assert.equal(isCrowdEstimate({...density,density_count:4998.5}),false,'The rounded density estimate must match the applied headcount');
+assert.equal(isCrowdEstimate({...density,detections:result(1).detections}),false);
+const cappedDensity={...density,count:10000,density_count:11000.4,inference:{...density.inference,truncated:true,complete:false}};
+assert.ok(isCrowdEstimate(cappedDensity));
+assert.equal(isUsableCrowdEstimate(cappedDensity),false,'A capped density count is displayable only as a lower bound');
 for (const invalid of [null, {}, { ...result(0), count: -1 }, { ...result(0), count: 1 },
   { ...result(1), detections: [{ confidence: 2, bbox: [1, 2, 10, 20] }] },
   { ...result(1), detections: [{ confidence: .9, bbox: [1, 2, 1000, 20] }] },

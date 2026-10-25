@@ -223,6 +223,30 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(pending.result(timeout=5).status_code, 404)
         self.assertEqual(self.client.get(self.url, headers=self.viewer).status_code, 404)
 
+    def test_inference_and_polling_do_not_make_an_older_frame_fresh(self):
+        entered, release = self.block_inference()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(self.frame)
+            try:
+                self.assertTrue(entered.wait(5))
+                self.clock[0] += 25
+            finally:
+                release.set()
+            response = pending.result(timeout=5)
+        self.assertEqual(response.status_code, 200, response.text)
+        live = response.json()
+        admitted_at = datetime.fromisoformat(live["updated_at"])
+        self.assertEqual(admitted_at, self.started,
+                         "The published frame age must include the time spent in inference")
+        self.clock[0] += 20
+        polled = self.client.get(self.url, headers=self.viewer).json()
+        self.assertEqual(polled["updated_at"], live["updated_at"])
+        current_time = self.started + timedelta(seconds=self.clock[0] - 100)
+        self.assertEqual((current_time - admitted_at).total_seconds(), 45,
+                         "The frontend's 45-second freshness cutoff must include processing time")
+        self.assertEqual(datetime.fromisoformat(self.frame().json()["updated_at"]), current_time,
+                         "Only a newly admitted frame may advance the observation timestamp")
+
     def test_pause_during_inference_discards_old_frame_and_new_frame_resumes(self):
         completed = self.frame().json()
         entered, release = self.block_inference()

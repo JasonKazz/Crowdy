@@ -1,4 +1,5 @@
 import math
+import time
 
 import jupedsim as jps
 from shapely.geometry import Point
@@ -8,6 +9,7 @@ from app.services.population.generate import resolve_population
 from app.simulation.behavior import agent_behaviors
 from app.simulation.geometry import build_geometry, region_to_polygon
 from app.simulation.routing import RoutePlanner, plan_routes
+from app.simulation.budget import SimulationDeadlineExceeded
 
 
 def crossed_exit_threshold(previous, current, boundary):
@@ -23,7 +25,8 @@ def crossed_exit_threshold(previous, current, boundary):
     return -1e-9 <= along <= sum(value * value for value in edge) + 1e-9
 
 
-def run_simulation(scenario: Scenario) -> dict:
+def run_simulation(scenario: Scenario, *, runtime_deadline=None, cancelled=None, position_budget=None, progress=None) -> dict:
+    started = time.monotonic()
     # Revalidate in case an interactive caller changed a model in place.
     scenario = Scenario.model_validate(scenario.model_dump())
     population_config = scenario.population
@@ -45,6 +48,10 @@ def run_simulation(scenario: Scenario) -> dict:
     max_steps = math.floor(settings.max_time / settings.dt + 1e-9)
     if max_steps < 1:
         raise ValueError("max_time must be at least dt")
+    requested_sample_steps = sample_steps
+    if position_budget is not None:
+        max_frames = max(2, position_budget // max(1, len(ids)))
+        sample_steps = max(sample_steps, math.ceil(max_steps / (max_frames - 1)))
 
     geometry = build_geometry(scenario)
     simulation = jps.Simulation(
@@ -77,6 +84,7 @@ def run_simulation(scenario: Scenario) -> dict:
     agent_paths = {}
     cursors = {}
     waiting = set()
+    previous_positions = {}
     for occupant, assignment in zip(scenario.occupants, assignments):
         exit_id = assignment["exit_id"]
         behavior = behavior_by_id[occupant.id]
@@ -96,6 +104,7 @@ def run_simulation(scenario: Scenario) -> dict:
         agent_exits[engine_id] = exit_id
         agent_paths[engine_id] = assignment["path"]
         cursors[engine_id] = 1
+        previous_positions[engine_id] = occupant.position
         if occupant.id in trapped or behavior["response_delay"] > 0:
             simulation.agent(engine_id).target = occupant.position
         if occupant.id not in trapped and behavior["response_delay"] > 0:
@@ -120,18 +129,30 @@ def run_simulation(scenario: Scenario) -> dict:
     crossed = set()
     passed_threshold = set()
     boundaries = {boundary.id: boundary for boundary in scenario.exit_boundaries}
+    exit_bounds = {identifier: shape.bounds for identifier, shape in exit_shapes.items()}
     steering_interval = max(1, round(.1 / settings.dt))
     from app.simulation.adaptive import AdaptiveExitChoices
     adaptive = AdaptiveExitChoices(scenario,planner,exit_shapes,behavior_by_id) if settings.behavior_mode == "behavioral" else None
     decision_interval = max(1,round(1 / settings.dt))
 
     steps_to_run = 0 if len(trapped) == len(ids) else max_steps
+    runtime_limited = False
     for step in range(1, steps_to_run + 1):
+        if cancelled is not None and cancelled.is_set():
+            raise ValueError("Simulation cancelled.")
+        if runtime_deadline is not None and time.monotonic() >= runtime_deadline:
+            runtime_limited = True
+            break
         any_released = False
         if adaptive is not None and (step == 1 or step % decision_interval == 0):
-            adaptive.reconsider(list(simulation.agents()),agent_ids,agent_exits,agent_paths,cursors,
-                                simulation.elapsed_time(),passed_threshold | crossed | waiting)
-        for agent in simulation.agents():
+            try:
+                adaptive.reconsider(list(simulation.agents()),agent_ids,agent_exits,agent_paths,cursors,
+                                    simulation.elapsed_time(),passed_threshold | crossed | waiting)
+            except SimulationDeadlineExceeded:
+                runtime_limited = True
+                break
+        steering_agents = simulation.agents() if waiting or step == 1 or step % steering_interval == 0 else ()
+        for agent in steering_agents:
             if agent_ids[agent.id] in trapped:
                 continue
             released = False
@@ -151,7 +172,6 @@ def run_simulation(scenario: Scenario) -> dict:
         # regular 0.2 s sample interval can make a person walk before responding.
         if any_released and frames[-1]["time"] < round(simulation.elapsed_time(), 8):
             frames.append(capture_frame())
-        previous_positions = {agent.id: agent.position for agent in simulation.agents()}
         simulation.iterate()
 
         for agent in list(simulation.agents()):
@@ -169,20 +189,29 @@ def run_simulation(scenario: Scenario) -> dict:
                     crossed.add(agent.id)
                     door_crossings.append({"agent_id": agent_ids[agent.id], "exit_id": boundary.id,
                                            "time": round(simulation.elapsed_time(), 8)})
-            if (boundary is None or agent.id in crossed) and exit_shapes[agent_exits[agent.id]].covers(Point(position)):
+            previous_positions[agent.id] = position
+            left, bottom, right, top = exit_bounds[agent_exits[agent.id]]
+            if ((boundary is None or agent.id in crossed) and left <= position[0] <= right and bottom <= position[1] <= top
+                    and exit_shapes[agent_exits[agent.id]].covers(Point(position))):
                 evacuations.append({"agent_id": agent_ids[agent.id], "exit_id": agent_exits[agent.id],
                                     "time": round(simulation.elapsed_time(), 8)})
                 simulation.mark_agent_for_removal(agent.id)
 
         finished = simulation.agent_count() == len(trapped)
+        if progress is not None and step % max(1, round(1 / settings.dt)) == 0:
+            progress({"phase": "simulating", "simulation_time": round(simulation.elapsed_time(), 8),
+                      "evacuated_count": len(evacuations), "population_count": len(ids)})
         if step % sample_steps == 0 or finished or step == max_steps:
             frames.append(capture_frame())
 
         if finished:
             break
 
+    if frames[-1]["time"] < round(simulation.elapsed_time(), 8):
+        frames.append(capture_frame())
+    engine_ids = {identifier: key for key, identifier in agent_ids.items()}
     for assignment in assignments:
-        engine_id=next(key for key,value in agent_ids.items() if value==assignment["agent_id"])
+        engine_id=engine_ids[assignment["agent_id"]]
         assignment["final_exit_id"] = agent_exits[engine_id]
     completed = simulation.agent_count() == 0
     moving_remaining = simulation.agent_count() - len(trapped)
@@ -202,6 +231,13 @@ def run_simulation(scenario: Scenario) -> dict:
         "frames": frames,
         "evacuations": evacuations,
         "door_crossings": door_crossings,
+        "execution": {"mode": "full_agent", "population_count": len(ids),
+                      "wall_time_seconds": round(time.monotonic() - started, 3),
+                      "wall_time_limit_seconds": None if runtime_deadline is None else max(0, round(runtime_deadline - started, 3)),
+                      "runtime_limited": runtime_limited,
+                      "stop_reason": "completed" if completed else "wall_time_limit" if runtime_limited else "trapped" if moving_remaining == 0 else "simulation_time_limit",
+                      "playback_temporally_thinned": sample_steps != requested_sample_steps,
+                      "playback_sample_interval": sample_steps * settings.dt},
         "summary": {
             "evacuated_count": len(evacuations),
             "remaining_count": simulation.agent_count(),

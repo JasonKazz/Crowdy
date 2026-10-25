@@ -559,7 +559,7 @@ input::-webkit-inner-spin-button {
   font-size: 9px;
 }
 .occupancy-label input {
-  width: 26px;
+  width: 72px;
   border: 0;
   color: #405432;
   background: transparent;

@@ -111,7 +111,7 @@ def native_to_editor(data, strict=True):
                    "rings": zone_polygons(room.shape, lambda p: pixel_point(p, transform))}
                   for room in room_zones if not room.shape.is_empty]
     return {"id": "layout-" + hashlib.sha256(layout.name.encode()).hexdigest()[:16],
-            "name": layout.name[:80], "width": 900, "height": 600,
+            "name": layout.name[:80], "capacity": layout.capacity, "width": 900, "height": 600,
             "area": unary_union([Polygon(r.polygon) for r in layout.walkable_areas]).area,
             "items": items, "walls": [], "exits": exits, "rooms": room_views,
             "native": {"layout": layout.model_dump(mode="json"), "transform": transform,
@@ -125,6 +125,8 @@ def editor_native_layout(plan):
     if plan.get("walls"):
         raise ValueError("For imported layouts, edit walls and doors in the source layout using the detailed editor")
     layout = Layout.model_validate(plan["native"]["layout"])
+    if plan.get("capacity") is not None:
+        layout.capacity = plan["capacity"]
     transform = projection(layout)
     supplied = plan["native"]["transform"]
     if any(not math.isclose(supplied[key], value, rel_tol=1e-9, abs_tol=1e-7)

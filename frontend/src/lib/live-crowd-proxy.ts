@@ -48,6 +48,13 @@ function publicSnapshot(data: LiveCrowdSnapshot): LiveCrowdSnapshot {
       processing_ms: estimate.processing_ms, warnings: [...estimate.warnings],
       image: { width: estimate.image.width, height: estimate.image.height },
       detections: estimate.detections.map(({ confidence, bbox }) => ({ confidence, bbox: [...bbox] })),
+      ...(estimate.method ? {method: estimate.method} : {}),
+      ...(estimate.method === "density" ? {density_count: estimate.density_count} : {}),
+      ...(estimate.inference ? {inference: {
+        strategy: estimate.inference.strategy, tiles_processed: estimate.inference.tiles_processed,
+        tiles_planned: estimate.inference.tiles_planned, max_detections: estimate.inference.max_detections,
+        truncated: estimate.inference.truncated, complete: estimate.inference.complete,
+      }} : {}),
     },
   };
 }

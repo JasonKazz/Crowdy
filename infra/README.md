@@ -14,8 +14,8 @@ be retried after an interrupted deployment.
 | Subscription | Pinned to `146aa8b7-dd72-4385-a658-2e1e39da630c` |
 | Resource group | `rg-crowdy-student` |
 | Region | `westus2`, allowed by this student subscription |
-| Backend | Container Apps Consumption profile, 0.5 vCPU, 1 GiB, one replica |
-| Optional crowd estimation | Separate Container App, 1 vCPU, 2 GiB, exactly one warm replica |
+| Backend | Container Apps Consumption profile, 2 vCPU, 4 GiB, one replica |
+| Optional crowd estimation | Separate Container App, 2 vCPU, 4 GiB, exactly one warm replica |
 | Images | Container Registry Basic, admin access disabled |
 | Persistence | StorageV2, Hot, Standard LRS, private `crowdy` blob container |
 | Credentials | User-assigned managed identity with scoped `AcrPull` and `Storage Blob Data Contributor` |
@@ -51,12 +51,15 @@ West US 2 USD retail prices checked on October 24, 2026:
 | Blob Hot LRS, first storage tier | $0.0184/GB/month, plus operations |
 | ACR quick builds | $0.0001 per task vCPU-second after any allowance |
 
-For a 30-day month with the subscription's full free grants available, backend
-compute is approximately **$13.39 if entirely idle** or **$46.87 if continuously
-active**. Including ACR gives roughly **$18–52/month**, before storage, builds,
-operations, requests beyond the allowance, and outbound data. The traffic mix,
-other resources using free grants, and actual Azure meters determine the bill.
-Old blob versions and soft-deleted files also consume storage.
+At the rates above, the v0.1 demo allocation (two warm apps, each 2 vCPU
+and 4 GiB) is approximately **$122.26/month entirely idle** or
+**$427.90/month continuously active**, with the subscription's full free grants
+available. ACR adds approximately $5/month. These are 30-day projections,
+not measured bills; each hour of both apps costs approximately $0.17 idle or
+$0.60 active before grants. The existing $40 budget alerts remain alerts and
+do not cap spending. Reduce the allocation after the demo if this headroom is
+no longer needed. Storage, builds, operations, excess requests, and outbound
+data are additional. Old blob versions also consume storage.
 
 These estimates use the
 [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices),
@@ -204,7 +207,7 @@ still waits for usable inference. The startup probe allows approximately five
 minutes for this warmup. Anonymous HTTP `/healthz` and `/readyz` endpoints remain
 available for callers and manual checks. See [Azure's health probe guidance](https://learn.microsoft.com/en-us/azure/container-apps/health-probes).
 
-The service has 1 vCPU and 2 GiB of memory. Both replica defaults and validations
+The service has 2 vCPU and 4 GiB of memory. Both replica defaults and validations
 require one warm replica because camera sessions and their latest previews are
 stored in process memory. Update any older overrides in your ignored
 `infra/terraform.tfvars` to match:

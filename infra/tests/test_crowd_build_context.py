@@ -22,7 +22,7 @@ class CrowdBuildContextTests(unittest.TestCase):
         self.destination = self.root / "context"
         (self.source / "app/nested").mkdir(parents=True)
         self.destination.mkdir()
-        for name in ("Dockerfile", "pyproject.toml", "uv.lock", "app/__init__.py", "app/nested/main.py"):
+        for name in ("Dockerfile", "pyproject.toml", "uv.lock", "THIRD_PARTY_NOTICES.md", "app/__init__.py", "app/nested/main.py"):
             (self.source / name).write_text(f"# Public build source: {name}\n")
 
     def test_private_umask_and_sources_produce_nonroot_readable_image_inputs(self):
@@ -52,7 +52,7 @@ class CrowdBuildContextTests(unittest.TestCase):
         context.stage_context(self.source, self.destination)
         self.assertEqual(
             sorted(str(item.relative_to(self.destination)) for item in self.destination.rglob("*") if item.is_file()),
-            ["Dockerfile", "app/__init__.py", "app/nested/main.py", "pyproject.toml", "uv.lock"],
+            ["Dockerfile", "THIRD_PARTY_NOTICES.md", "app/__init__.py", "app/nested/main.py", "pyproject.toml", "uv.lock"],
         )
 
     def test_rejects_symlinks_in_build_inputs(self):

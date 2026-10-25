@@ -40,7 +40,8 @@ try {
   await rejected(input, 415, { "Content-Type": "text/plain" });
   await rejected("{", 400);
   await rejected("null", 400);
-  await rejected({ ...input, scenario: { ...scenario, occupancy: 201 } }, 400);
+  await rejected({ ...input, scenario: { ...scenario, occupancy: 10001 } }, 400);
+  await rejected({...input, async_run:"yes"},400);
   await rejected({ ...input, scenario: { ...scenario, behaviorMode: "optimal" } }, 400);
   await rejected({ ...input, scenario: { ...scenario, bodyWidth: .39 } }, 400);
   await rejected({ ...input, scenario: { ...scenario, bodyWidth: "0.5" } }, 400);
@@ -64,6 +65,31 @@ try {
   assert.ok(result.agents.every((agent) => agent.samples.length > 1));
   assert.equal(positionAt(result.agents[0], result.agents[0].duration), null);
   passed++;
+
+  const submitted=await post({...input,async_run:true});
+  assert.equal(submitted.status,202);
+  const queued=await submitted.json();
+  assert.match(queued.job_id,/^[a-f0-9]{32}$/);
+  let completed;
+  for(let attempt=0;attempt<100;attempt++) {
+    const polled=await fetch(new URL(`/api/simulations?job_id=${queued.job_id}`,base));
+    assert.equal(polled.status,200);
+    completed=await polled.json();
+    if(completed.status!=="running")break;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  assert.equal(completed.status,"complete");
+  assert.equal(adaptBackendSimulation(completed.result,SAMPLE_PLAN,scenario).exited,20);
+  const cancelled=await fetch(new URL(`/api/simulations?job_id=${queued.job_id}`,base),
+    {method:"DELETE",headers:{Origin:base.origin}});
+  assert.equal(cancelled.status,204);
+  const blockedCancel=await fetch(new URL(`/api/simulations?job_id=${queued.job_id}`,base),
+    {method:"DELETE",headers:{Origin:"https://unrelated.example"}});
+  assert.equal(blockedCancel.status,403);
+  for(const query of ["job_id=invalid",`job_id=${queued.job_id}&job_id=${queued.job_id}`,`job_id=${queued.job_id}&extra=x`]) {
+    assert.equal((await fetch(new URL(`/api/simulations?${query}`,base))).status,400);
+  }
+  passed+=6;
 
   const withMetadata = structuredClone(input);
   withMetadata.scenario.occupancy = 2;

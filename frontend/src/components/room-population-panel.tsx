@@ -1,6 +1,7 @@
 "use client";
 import type {Scenario,FloorPlan} from "@/lib/simulation";
 import {ROOM_TYPES,roomTypeLabel,type PopulationPreview} from "@/lib/room-population";
+import {MAX_CROWD_SIZE} from "@/lib/crowd-limits";
 
 type Props={plan:FloorPlan;scenario:Scenario;preview:PopulationPreview|null;loading:boolean;error:string;
   onChange:(scenario:Scenario)=>void};
@@ -23,9 +24,9 @@ export default function RoomPopulationPanel({plan,scenario,preview,loading,error
           {ROOM_TYPES.map(type=><option key={type} value={type}>{roomTypeLabel(type)}</option>)}
         </select>
         <div className="room-count-controls"><input id={`room-count-${room.id}`} aria-label={`People in ${room.label}`}
-          type="number" min="0" max="200" step="1" value={config.roomCounts?.[room.id]??room.count}
-          onChange={event=>{if(event.target.value==='')return;const count=Number(event.target.value);if(!Number.isInteger(count)||count<0||count>200)return;
-            const roomCounts={...config.roomCounts,[room.id]:count};const fixed=Object.values(roomCounts).reduce((a,b)=>a+b,0);if(fixed>200)return;
+          type="number" min="0" max={MAX_CROWD_SIZE} step="1" value={config.roomCounts?.[room.id]??room.count}
+          onChange={event=>{if(event.target.value==='')return;const count=Number(event.target.value);if(!Number.isInteger(count)||count<0||count>MAX_CROWD_SIZE)return;
+            const roomCounts={...config.roomCounts,[room.id]:count};const fixed=Object.values(roomCounts).reduce((a,b)=>a+b,0);if(fixed>MAX_CROWD_SIZE)return;
             onChange({...scenario,occupancy:Math.max(scenario.occupancy,fixed),population:{...config,roomCounts}});}}/>
           <button type="button" className="text-button" disabled={config.roomCounts?.[room.id]===undefined}
             aria-label={`Use automatic count for ${room.label}`} onClick={()=>{const roomCounts={...config.roomCounts};delete roomCounts[room.id];onChange({...scenario,population:{...config,roomCounts}});}}>

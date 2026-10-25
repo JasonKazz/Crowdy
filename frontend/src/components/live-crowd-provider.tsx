@@ -8,6 +8,8 @@ import {
 } from "@/lib/live-crowd";
 import { canApplyLiveCount, LIVE_FRAME_INTERVAL_MS, LIVE_STALE_AFTER_MS, smoothedCrowdCount } from "@/lib/live-camera";
 import type { LiveCrowdObservation } from "@/lib/live-evacuation";
+import {isUsableCrowdEstimate} from "@/lib/crowd-estimates";
+import {isSupportedCrowdSize} from "@/lib/crowd-limits";
 
 type LiveCrowdContextValue = {
   observation: LiveCrowdObservation;
@@ -135,7 +137,9 @@ export function LiveCrowdProvider({ children, scope = "" }: { children: ReactNod
           if (isNewSequence && next.status === "live" && next.estimate && next.updated_at &&
             (!lastFrameAt.current || Date.parse(next.updated_at) > Date.parse(lastFrameAt.current))) {
             const recent = lastFrameAt.current && Date.parse(next.updated_at) - Date.parse(lastFrameAt.current) < LIVE_STALE_AFTER_MS ? history.current : [];
-            history.current = [...recent, next.estimate.count].slice(-3);
+            // Partial frames are lower bounds, never samples of the current
+            // headcount. Clear the old median so it cannot mask that gap.
+            history.current = isUsableCrowdEstimate(next.estimate) ? [...recent, next.estimate.count].slice(-3) : [];
             lastFrameAt.current = next.updated_at;
             setCount(smoothedCrowdCount(history.current));
             setSampleCount(history.current.length);
@@ -259,16 +263,18 @@ export function LiveCrowdProvider({ children, scope = "" }: { children: ReactNod
   const frameAge = matchesScope && snapshot?.updated_at ? now - Date.parse(snapshot.updated_at) : null;
   const stale = frameAge !== null && (!Number.isFinite(frameAge) || frameAge < -5_000 || frameAge >= LIVE_STALE_AFTER_MS);
   const live = matchesScope && !ending && !terminal && !error && snapshot?.status === "live" && !stale;
-  const fresh = live && snapshot.estimate !== null && snapshot.estimate.count > 0 && snapshot.estimate.count <= 200 &&
+  const usable = snapshot?.estimate !== undefined && snapshot.estimate !== null && isUsableCrowdEstimate(snapshot.estimate);
+  const fresh = live && usable && isSupportedCrowdSize(snapshot.estimate?.count) &&
     canApplyLiveCount(count, snapshot.updated_at, now);
   const age = frameAge === null ? null : Math.max(0, Math.floor(frameAge / 1_000));
   const status: LiveCrowdObservation["status"] = !matchesScope ? "disconnected" : terminal || ended ? "ended" : error ? "error" : !session ? "disconnected" :
     snapshot?.status === "paused" ? "paused" : stale ? "stale" : snapshot?.status ?? "waiting";
   const observation = useMemo<LiveCrowdObservation>(() => ({
-    count: matchesScope ? count : null, rawCount: matchesScope ? snapshot?.estimate?.count ?? null : null,
+    count: matchesScope && usable ? count : null, rawCount: matchesScope && usable ? snapshot?.estimate?.count ?? null : null,
+    complete: matchesScope && usable,
     updatedAt: matchesScope ? snapshot?.updated_at ?? null : null,
     sessionId: matchesScope ? session?.session_id ?? null : null, status, sequence: matchesScope ? snapshot?.sequence ?? 0 : 0,
-  }), [matchesScope, count, snapshot, session, status]);
+  }), [matchesScope, usable, count, snapshot, session, status]);
 
   return <LiveCrowdContext.Provider value={{
     observation, session: matchesScope ? session : null, snapshot: matchesScope ? snapshot : null,

@@ -1,21 +1,20 @@
 import {validatePlan} from "./plan-validation.ts";
 import {populationConfig, validPopulationSettings} from "./room-population.ts";
+import {isSupportedCrowdSize, MAX_CROWD_SIZE} from "./crowd-limits.ts";
 
 export function simulationRequest(input: Record<string, unknown>) {
     const plan = validatePlan(input.plan);
     const scenario = input.scenario as import("./simulation").Scenario & {blocked_exit_ids?: unknown};
     if (
       !scenario ||
-      !Number.isInteger(scenario.occupancy) ||
-      scenario.occupancy < 1 ||
-      scenario.occupancy > 200 ||
+      !isSupportedCrowdSize(scenario.occupancy) ||
       !["standard", "mixed"].includes(scenario.mobility) ||
       !["uniform", "workstations", "rooms", "normal"].includes(scenario.distribution) ||
       (scenario.behaviorMode !== undefined && !["idealized", "behavioral"].includes(scenario.behaviorMode)) ||
       (scenario.bodyWidth !== undefined && (typeof scenario.bodyWidth !== "number" || !Number.isFinite(scenario.bodyWidth) || scenario.bodyWidth < .4 || scenario.bodyWidth > .7)) ||
       (scenario.seed !== undefined && (!Number.isInteger(scenario.seed) || scenario.seed < 0 || scenario.seed > 4294967295))
     )
-      throw new Error("Choose 1–200 people and valid scenario settings.");
+      throw new Error(`Choose 1–${MAX_CROWD_SIZE.toLocaleString("en-US")} people and valid scenario settings.`);
     if (scenario.population !== undefined && !validPopulationSettings(scenario.population))
       throw new Error("Choose valid building, activity and room counts.");
     const blocked = scenario.blocked_exit_ids ?? [];
@@ -32,6 +31,7 @@ export function simulationRequest(input: Record<string, unknown>) {
         width: plan.width,
         height: plan.height,
         area: plan.area,
+        ...(plan.capacity === undefined ? {} : {capacity: plan.capacity}),
         ...(plan.native ? {native: {layout: plan.native.layout, transform: plan.native.transform}} : {}),
         items: plan.items.map(({ id, label, kind, x, y, width, height, polygon }) => ({
           id, label, kind, x, y, width, height, ...(polygon ? {polygon} : {}),

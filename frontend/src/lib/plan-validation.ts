@@ -1,5 +1,6 @@
 import type { FloorPlan } from "./simulation";
 import {validPlanRooms} from "./room-population.ts";
+import {isVenueCapacity} from "./crowd-limits.ts";
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -41,6 +42,8 @@ export function validatePlan(value: unknown): FloorPlan {
     );
   const plan = value as FloorPlan;
   if (!validPlanRooms(plan.rooms)) throw new Error("Room outlines need unique IDs, valid types and polygons inside the canvas.");
+  if (plan.capacity != null && !isVenueCapacity(plan.capacity))
+    throw new Error("Venue capacity must be a positive whole number of people.");
   const finite = (...numbers: number[]) => numbers.every(Number.isFinite);
   if (typeof plan.id !== "string" || !plan.id.trim() || plan.id.length > 80)
     throw new Error("The floor plan needs an ID between 1 and 80 characters.");

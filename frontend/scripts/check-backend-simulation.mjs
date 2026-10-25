@@ -76,6 +76,18 @@ assert.equal(result.clearanceTime, null, "Timeout is not a clearance time");
 assert.equal(result.averageTime, 2.5, "Average includes evacuated people only");
 assert.deepEqual(result.perExitCounts, { "exit-a": 1, "exit-b": 0 });
 assert.equal(result.remaining, 1);
+const bounded=structuredClone(fixture);
+bounded.execution={mode:"full_agent",population_count:2,wall_time_seconds:120.1,
+  wall_time_limit_seconds:120,runtime_limited:true,stop_reason:"wall_time_limit",
+  playback_temporally_thinned:true,playback_sample_interval:1};
+assert.deepEqual(adaptBackendSimulation(bounded,SAMPLE_PLAN,scenario).execution,{
+  mode:"full_agent",populationCount:2,wallTimeSeconds:120.1,wallTimeLimitSeconds:120,
+  runtimeLimited:true,stopReason:"wall_time_limit",playbackTemporallyThinned:true,playbackSampleInterval:1});
+for(const mutate of [meta=>meta.population_count=1,meta=>meta.playback_sample_interval=0,
+  meta=>meta.runtime_limited=false,meta=>meta.mode="sampled",meta=>meta.wall_time_seconds=NaN]) {
+  const invalid=structuredClone(bounded);mutate(invalid.execution);
+  assert.throws(()=>adaptBackendSimulation(invalid,SAMPLE_PLAN,scenario),/invalid results/);
+}
 assert.equal(result.exited, 1);
 const [departed, stillMoving] = result.agents;
 assert.equal(departed.id, 0);
@@ -248,7 +260,8 @@ try {
   globalThis.fetch = async (url, options) => {
     assert.equal(url, "/api/simulations");
     assert.equal(options.method, "POST");
-    assert.equal(options.signal, controller.signal);
+    assert.ok(options.signal instanceof AbortSignal);
+    assert.equal(options.signal.aborted, false);
     assert.equal(options.cache, "no-store");
     submitted = JSON.parse(options.body);
     return Response.json(fixture);
@@ -257,7 +270,7 @@ try {
   const run = runBackendSimulation(plan, scenario, { signal: controller.signal });
   plan.items[0].x += 100;
   const fetched = await run;
-  assert.deepEqual(submitted, { plan: SAMPLE_PLAN, scenario: {...scenario,blocked_exit_ids:[]} });
+  assert.deepEqual(submitted, { plan: SAMPLE_PLAN, scenario: {...scenario,blocked_exit_ids:[]}, async_run:true });
   assert.deepEqual(fetched.plan, SAMPLE_PLAN, "Async requests must retain their submitted snapshot");
   globalThis.fetch = async () => Response.json({ error: "This plan has no reachable exits." }, { status: 422 });
   await assert.rejects(runBackendSimulation(SAMPLE_PLAN, scenario), /This plan has no reachable exits\./);
@@ -266,7 +279,7 @@ try {
   globalThis.fetch = async () => new Response("not JSON", { status: 200 });
   await assert.rejects(runBackendSimulation(SAMPLE_PLAN, scenario), /unreadable response/);
   const abort = new DOMException("Request aborted", "AbortError");
-  controller.abort();
+  controller.abort(abort);
   globalThis.fetch = async () => { throw abort; };
   await assert.rejects(runBackendSimulation(SAMPLE_PLAN, scenario, { signal: controller.signal }), (error) => error === abort);
 } finally {

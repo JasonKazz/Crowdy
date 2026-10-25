@@ -1,0 +1,408 @@
+{
+  "model": "ZIP-N NWPU",
+  "revision": "5885abd667066660bd094cec2d584e5926371914",
+  "weight_sha256": "30474977b7979394469802b0b5e57476391252c86a1e5fd3248aa255d28d817e",
+  "hardware": "Apple M4 CPU, 2 PyTorch threads",
+  "date": "2026-10-24",
+  "density_min_size": 896,
+  "density_max_size": 4096,
+  "source": "https://www.crcv.ucf.edu/data/ucf-qnrf/",
+  "notes": [
+    "All selected scenes are reported; this is illustrative cross-dataset evaluation, not aggregate dataset metrics.",
+    "POFA user photos are unlabeled; no accuracy claim.",
+    "Images and weights are not committed."
+  ],
+  "results": [
+    {
+      "image": "img_0340.jpg",
+      "size": [
+        2592,
+        1944
+      ],
+      "truth": 12672,
+      "count": 10000,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 565.06,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": false,
+        "truncated": true,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 14000.6640625,
+      "relative_error": 0.10485038372001262,
+      "image_sha256": "dff3be634a58de8ae72e575bef069f6a059a6c6013dfd874ed85e382ba5f0091",
+      "annotation_sha256": "566be6f058b966bbfcd6486e6c8d9f29ad24448427af49dbdcbfb9a57d434ec0"
+    },
+    {
+      "image": "img_0341.jpg",
+      "size": [
+        1600,
+        1066
+      ],
+      "truth": 5387,
+      "count": 2722,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 189.67,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 2721.90625,
+      "relative_error": 0.49472688880638577,
+      "image_sha256": "9a2ebebb9f398d53dbc8a7105495adbf84dcd9c6c212904aaf7f69a595db4faf",
+      "annotation_sha256": "3eedb26f1da52954a3467877674557f02ea07cf493d8691912d85f0ab85fe9d0"
+    },
+    {
+      "image": "img_0424.jpg",
+      "size": [
+        3648,
+        2736
+      ],
+      "truth": 10274,
+      "count": 8297,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 1221.67,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 8296.9013671875,
+      "relative_error": 0.19243708709485108,
+      "image_sha256": "ef6bb1cfca7e2c0c676365f0ba77f48ac21ce580aa7f6d595669a0f92c6a6fa9",
+      "annotation_sha256": "91d63d1ef99de83b0877d919ee8df908bb9159b8afb2cd8fdaeb54d9328a0870"
+    },
+    {
+      "image": "img_0727.jpg",
+      "size": [
+        2560,
+        1920
+      ],
+      "truth": 6052,
+      "count": 6337,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 559.91,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 6337.0458984375,
+      "relative_error": 0.047099454467531394,
+      "image_sha256": "84621e3df44436ca5a6140e3b99c44fb6cb6ee2985760f1a0ef9f610f89691c4",
+      "annotation_sha256": "851e432bb39d6d5a5e977b55db720eaffd42ff280474bb2391d2af282842a37f"
+    },
+    {
+      "image": "img_1042.jpg",
+      "size": [
+        3339,
+        2611
+      ],
+      "truth": 7930,
+      "count": 7101,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 739.77,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 7100.73486328125,
+      "relative_error": 0.10457315721547919,
+      "image_sha256": "4a167fac46046fc3a4ae18a3c0aa33e81420001da91abd403fb9ce811a49f525",
+      "annotation_sha256": "6edca4c80513b73b607835e181400791b95b34e2278d1c41cdf2033376c764b7"
+    },
+    {
+      "image": "img_1194.jpg",
+      "size": [
+        3264,
+        2448
+      ],
+      "truth": 12865,
+      "count": 8072,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 606.04,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 8072.228515625,
+      "relative_error": 0.3725434500097163,
+      "image_sha256": "175c1aa746270e146954aad16f1c322ee69eb519216bc10a41c0d402e2c1cebf",
+      "annotation_sha256": "e34dfd1f6e7faa9bf88d43cc541f00dc2600d67c45113ea05e7b582540a36e9b"
+    },
+    {
+      "image": "1.jpg",
+      "size": [
+        984,
+        648
+      ],
+      "truth": 4633,
+      "count": 1580,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 114.53,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 1580.1986083984375,
+      "relative_error": 0.6589254028926317,
+      "image_sha256": "88300b1ece3fc576b16f732d17375fbd50a5bc9b8c207a0903dec6346fff810d",
+      "annotation_sha256": "72a47dbb8a8f266757ebda22fc8768ee75d4b372e051d75c5c1e9754e6160298"
+    },
+    {
+      "image": "9.jpg",
+      "size": [
+        1024,
+        768
+      ],
+      "truth": 3406,
+      "count": 3269,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 102.75,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 3268.6181640625,
+      "relative_error": 0.040335242494862006,
+      "image_sha256": "57fcfde2ea59e0dfe66eac2900b34cbe8e98000fb1cb00b50b53180c8123f901",
+      "annotation_sha256": "9f0aee7654bb19deb04bf11352f46619afba7c08249a601986f00f7aeaa963fd"
+    },
+    {
+      "image": "14.jpg",
+      "size": [
+        1024,
+        680
+      ],
+      "truth": 2961,
+      "count": 3558,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 111.41,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 3557.5810546875,
+      "relative_error": 0.2014795861828774,
+      "image_sha256": "0a01f392bfb809c0553a0f9721b5a8f9d6bbd6c23c64b4c70f5c2a066a9962f5",
+      "annotation_sha256": "cb56ea25b12ef60785bb57c548e5089cc913fb1b679bfaab1baa241e7eea51b5"
+    },
+    {
+      "image": "pofa_1.jpeg",
+      "size": [
+        2048,
+        1536
+      ],
+      "truth": null,
+      "count": 96,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 259.35,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 96.48361206054688,
+      "relative_error": null,
+      "image_sha256": "36ae5d0d4257194c06bb98ccad2d01462f43cd9c2901a681d2ec5b6eedb29392"
+    },
+    {
+      "image": "pofa_2.jpeg",
+      "size": [
+        2048,
+        1536
+      ],
+      "truth": null,
+      "count": 98,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 251.41,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 98.26286315917969,
+      "relative_error": null,
+      "image_sha256": "e3f5dad7adfb5dc6acfae35af0dd2ecedebf3446a615e7c96c24b672195093bc"
+    },
+    {
+      "image": "pofa_3.jpeg",
+      "size": [
+        2048,
+        1536
+      ],
+      "truth": null,
+      "count": 95,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 249.89,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 94.84593200683594,
+      "relative_error": null,
+      "image_sha256": "02be14770c1338494dae0aa5042af85715cd4968474745ea64da99b9e0d4997d"
+    },
+    {
+      "image": "pofa_4.jpeg",
+      "size": [
+        1080,
+        1920
+      ],
+      "truth": null,
+      "count": 2,
+      "model": "zip-n-nwpu.pth",
+      "processing_ms": 169.45,
+      "inference": {
+        "strategy": "whole",
+        "tiles_processed": 1,
+        "tiles_planned": 1,
+        "complete": true,
+        "truncated": false,
+        "max_detections": 10000
+      },
+      "method": "density",
+      "density_count": 2.4603524208068848,
+      "relative_error": null,
+      "image_sha256": "2e58641c845b6917684b4fec5469c8477350f3cfc2bff52bd6322a9f2fc6b323"
+    }
+  ],
+  "http_checks_jpeg_3mib": [
+    {
+      "image": "img_0727",
+      "jpeg_bytes": 2272945,
+      "jpeg_quality": 88,
+      "http_status": 200,
+      "total_ms": 734.11,
+      "response_bytes": 546,
+      "estimate": {
+        "count": 6290,
+        "detections": [],
+        "image": {
+          "width": 2560,
+          "height": 1920
+        },
+        "model": "zip-n-nwpu.pth",
+        "processing_ms": 708.75,
+        "warnings": [
+          "Density estimates infer crowd size from image patterns; they are not individual detections or verified attendance. Occlusion, scale, lighting and camera domain can cause substantial error."
+        ],
+        "inference": {
+          "strategy": "whole",
+          "tiles_processed": 1,
+          "tiles_planned": 1,
+          "complete": true,
+          "truncated": false,
+          "max_detections": 10000
+        },
+        "method": "density",
+        "density_count": 6290.251953125
+      }
+    },
+    {
+      "image": "img_1042",
+      "jpeg_bytes": 2639779,
+      "jpeg_quality": 88,
+      "http_status": 200,
+      "total_ms": 1211.16,
+      "response_bytes": 545,
+      "estimate": {
+        "count": 7005,
+        "detections": [],
+        "image": {
+          "width": 3339,
+          "height": 2611
+        },
+        "model": "zip-n-nwpu.pth",
+        "processing_ms": 1166.25,
+        "warnings": [
+          "Density estimates infer crowd size from image patterns; they are not individual detections or verified attendance. Occlusion, scale, lighting and camera domain can cause substantial error."
+        ],
+        "inference": {
+          "strategy": "whole",
+          "tiles_processed": 1,
+          "tiles_planned": 1,
+          "complete": true,
+          "truncated": false,
+          "max_detections": 10000
+        },
+        "method": "density",
+        "density_count": 7005.0390625
+      }
+    }
+  ],
+  "runtime_stress_4k": {
+    "test": "4k tensor budget stress, source was resampled; no new accuracy claim",
+    "input": [
+      4096,
+      2304
+    ],
+    "count": 6381,
+    "raw": 6381.3486328125,
+    "ms": 2679.72,
+    "inference": {
+      "strategy": "whole",
+      "tiles_processed": 1,
+      "tiles_planned": 1,
+      "complete": true,
+      "truncated": false,
+      "max_detections": 10000
+    },
+    "peak_rss_bytes": 2039562240
+  }
+}

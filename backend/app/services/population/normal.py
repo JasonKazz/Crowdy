@@ -7,6 +7,8 @@ from shapely.prepared import prep
 from app.schemas.rooms import PopulationConfig
 from app.services.population.furniture import seating_candidates
 from app.services.population.rooms import plan_room_zones, zone_polygons, infer_building_type
+from app.simulation.spatial import SpatialIndex
+from app.simulation.budget import check_simulation_budget
 
 
 def place_normally(plan,settings,walkable,base_floor,exits,radius,metadata,convert,layout=None):
@@ -27,6 +29,7 @@ def place_normally(plan,settings,walkable,base_floor,exits,radius,metadata,conve
     safe=prep(spawn);rng=random.Random(settings.get('seed',42))
     positions=[];placements=[];counts={z.id:0 for z in zones};sides={};desk_owners=set()
     separation=2*radius+.05
+    standing_index=SpatialIndex(separation);seat_index=SpatialIndex(separation)
     def owner(position):
         point=Point(position)
         return next((z for z in zones if z.shape.covers(point)),None)
@@ -37,10 +40,11 @@ def place_normally(plan,settings,walkable,base_floor,exits,radius,metadata,conve
         reserved=sum(max(0,target-counts[key]) for key,target in fixed.items())
         if zone.id not in fixed and len(positions)+reserved>=total:return False
         if not safe.covers(Point(position)):return False
-        if any(math.dist(position,p)<separation for p in positions):return False
+        if standing_index.collides(position):return False
         if not base_floor.covers(Point(seat)):return False
-        if any(math.dist(seat,p['seat_position'])<separation for p in placements):return False
+        if seat_index.collides(seat):return False
         positions.append(position);counts[zone.id]+=1
+        standing_index.add(position);seat_index.add(seat)
         placements.append(dict(agent_id=f'p{len(positions):04d}',object_id=object_id,kind=kind,
             seat_position=seat,standing_position=position,facing=face,inferred=inferred,room_id=zone.id))
         return True
@@ -72,14 +76,16 @@ def place_normally(plan,settings,walkable,base_floor,exits,radius,metadata,conve
         space=spawn.intersection(zone.shape)
         if space.is_empty:raise ValueError(f"Room '{zone.label}' has no clear starting space.")
         left,bottom,right,top=space.bounds
-        for _ in range(max(8000,needed*800)):
+        for attempt in range(max(8000,needed*800)):
+            if attempt%128==0:check_simulation_budget()
             p=(rng.uniform(left,right),rng.uniform(bottom,top))
             if not space.covers(Point(p)):continue
             accept(p,p,'circulating')
             if counts[zone.id]==fixed[zone.id]:break
         if counts[zone.id]!=fixed[zone.id]:raise ValueError(f"Could not place {fixed[zone.id]} people in room '{zone.label}' with body clearance.")
     left,bottom,right,top=spawn.bounds
-    for _ in range(max(8000,total*800)):
+    for attempt in range(max(8000,total*800)):
+        if attempt%128==0:check_simulation_budget()
         if len(positions)==total:break
         p=(rng.uniform(left,right),rng.uniform(bottom,top))
         accept(p,p,'circulating')

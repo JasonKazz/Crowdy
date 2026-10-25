@@ -30,12 +30,18 @@ from app.services.floorplans.import_jobs import create_job, update_job, job_stat
 from app.simulation.workspace_layout import editor_native_layout, native_to_editor
 from app.simulation.editor_adapter import POPULATION_SEED, editor_to_scenario, placement_access
 from app.simulation.engine import run_simulation
+from app.limits import (APPLICATION_VERSION, MAX_POPULATION, ASYNC_POPULATION_THRESHOLD,
+                        SIMULATION_WALL_SECONDS, MAX_RECORDED_POSITIONS, MAX_SIMULATION_RESULT_BYTES)
+from app.simulation.jobs import SimulationJobs
+from app.simulation.budget import simulation_budget
+from app.simulation.response import bound_simulation_result
 
 MAX_BODY_BYTES = 1_048_576
 MAX_WORKSPACE_BODY_BYTES = 2 * 1_048_576
 FLOORPLAN_IMPORT_TIME_BUDGET = 90
 ENGINE_VERSION = version("jupedsim")
 _simulation_lock = threading.Lock()
+_simulation_jobs = SimulationJobs()
 logger = logging.getLogger(__name__)
 load_environment()
 _import_guard = threading.Lock()
@@ -184,6 +190,7 @@ class EditorRoom(InputModel):
 class EditorPlan(InputModel):
     id: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=80)
+    capacity: int | None = Field(default=None, ge=1, le=MAX_POPULATION)
     width: Literal[900]
     height: Literal[600]
     area: float = Field(gt=0)
@@ -203,7 +210,7 @@ class EditorPlan(InputModel):
 
 
 class EditorSettings(InputModel):
-    occupancy: int = Field(ge=1, le=200)
+    occupancy: int = Field(ge=1, le=MAX_POPULATION)
     mobility: Literal["standard", "mixed"]
     distribution: Literal["uniform", "workstations", "rooms", "normal"]
     seed: int = Field(default=42, ge=0, le=2**32 - 1)
@@ -214,7 +221,7 @@ class EditorSettings(InputModel):
 
 
 class StartingPopulation(InputModel):
-    occupants: list[Occupant] = Field(min_length=1, max_length=200)
+    occupants: list[Occupant] = Field(min_length=1, max_length=MAX_POPULATION)
     radius: float = Field(gt=0)
     mobility: Literal["standard", "mixed"]
     distribution: Literal["uniform", "workstations", "rooms", "normal"]
@@ -226,9 +233,10 @@ class SimulationRequest(InputModel):
     plan: EditorPlan
     scenario: EditorSettings
     starting_population: StartingPopulation | None = None
+    async_run: bool = False
 
 
-app = FastAPI(title="Crowdy JuPedSim service", version="1.0.0")
+app = FastAPI(title="Crowdy JuPedSim service", version=APPLICATION_VERSION)
 app.add_middleware(BodyLimitMiddleware)
 
 from app.api.workspaces import router as workspace_router
@@ -255,15 +263,27 @@ async def invalid_request(_request, exception):
 @app.get("/health")
 def health(response: Response):
     response.headers["Cache-Control"] = "no-store"
-    return {"engine": "jupedsim", "version": ENGINE_VERSION, "status": "busy" if _simulation_lock.locked() else "ready"}
+    return {"engine": "jupedsim", "version": ENGINE_VERSION, "application_version": APPLICATION_VERSION,
+            "limits": {"max_population": MAX_POPULATION, "async_population_threshold": ASYNC_POPULATION_THRESHOLD,
+                       "simulation_wall_seconds": SIMULATION_WALL_SECONDS, "max_result_bytes": MAX_SIMULATION_RESULT_BYTES},
+            "status": "busy" if _simulation_lock.locked() else "ready"}
 
 
-def run_editor_simulation(payload: SimulationRequest):
+def run_editor_simulation(payload: SimulationRequest, cancelled=None, progress=None):
     plan = payload.plan.model_dump()
     settings = payload.scenario.model_dump()
     room_population = {}
-    scenario = editor_to_scenario(plan, settings, payload.starting_population, room_population)
-    result = run_simulation(scenario)
+    started = time.monotonic()
+    deadline = started + SIMULATION_WALL_SECONDS
+    if progress:
+        progress({"phase": "placing", "population_count": settings["occupancy"]})
+    with simulation_budget(deadline, cancelled):
+        scenario = editor_to_scenario(plan, settings, payload.starting_population, room_population)
+        if progress:
+            progress({"phase": "routing"})
+        result = run_simulation(scenario, runtime_deadline=deadline, cancelled=cancelled,
+                                position_budget=MAX_RECORDED_POSITIONS if settings["occupancy"] > 200 else None,
+                                progress=progress)
     from app.simulation.geometry import build_geometry
     _, excluded_area = placement_access(build_geometry(scenario), scenario.exits, scenario.agent_defaults.radius)
     # Preserve native simulation timestamps and outcomes. Micrometre coordinate
@@ -274,12 +294,19 @@ def run_editor_simulation(payload: SimulationRequest):
             agent["y"] = round(agent["y"], 6)
     result["engine"] = "jupedsim"
     result["engine_version"] = ENGINE_VERSION
+    result["application_version"] = APPLICATION_VERSION
+    result["execution"]["wall_time_seconds"] = round(time.monotonic() - started, 3)
+    result["execution"]["wall_time_limit_seconds"] = SIMULATION_WALL_SECONDS
     result["editor_metadata"] = {"seed": settings.get("seed", POPULATION_SEED), "walking_profile": settings["mobility"],
         "excluded_spawn_area_m2": 0 if payload.starting_population is not None else round(excluded_area, 4),
         "reused_starting_population": payload.starting_population is not None,
         "distribution": settings["distribution"], "room_population": room_population or None,
         "pixels_per_metre": plan["native"]["transform"]["pixels_per_metre"] if plan.get("native") else 32}
-    return result
+    capacity = plan.get("capacity") or (plan.get("native") or {}).get("layout", {}).get("capacity")
+    if capacity:
+        result["editor_metadata"]["capacity"] = capacity
+        result["editor_metadata"]["over_capacity"] = settings["occupancy"] > capacity
+    return bound_simulation_result(result)
 
 
 def require_backend_token(authorization):
@@ -296,8 +323,9 @@ def population_preview(payload: SimulationRequest, response: Response, authoriza
     require_backend_token(authorization)
     metadata = {}
     try:
-        scenario = editor_to_scenario(payload.plan.model_dump(), payload.scenario.model_dump(),
-                                      payload.starting_population, metadata)
+        with simulation_budget(time.monotonic() + 30):
+            scenario = editor_to_scenario(payload.plan.model_dump(), payload.scenario.model_dump(),
+                                          payload.starting_population, metadata)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)[:600]) from exc
     response.headers["Cache-Control"] = "private, no-store"
@@ -310,6 +338,15 @@ async def simulate(payload: SimulationRequest, response: Response, authorization
     require_backend_token(authorization)
     if not _simulation_lock.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="A simulation is already running. Wait for it to finish and try again.", headers={"Retry-After": "2", "Cache-Control": "private, no-store"})
+    if payload.async_run or payload.scenario.occupancy > ASYNC_POPULATION_THRESHOLD:
+        try:
+            identifier = _simulation_jobs.submit(lambda cancelled, progress: run_editor_simulation(payload, cancelled, progress),
+                                                _simulation_lock.release, population_count=payload.scenario.occupancy)
+        except Exception:
+            _simulation_lock.release()
+            raise
+        return JSONResponse({"job_id": identifier, "status": "running"}, status_code=202,
+                            headers={"Cache-Control": "private, no-store"})
     try:
         result = await run_in_threadpool(run_editor_simulation, payload)
         response.headers["Cache-Control"] = "private, no-store"
@@ -321,6 +358,28 @@ async def simulate(payload: SimulationRequest, response: Response, authorization
         raise HTTPException(status_code=500, detail="The JuPedSim engine could not complete this run. Review the layout or try again.", headers={"Cache-Control": "private, no-store"}) from exc
     finally:
         _simulation_lock.release()
+
+
+@app.get("/api/simulations")
+def simulation_job(job_id: str, response: Response, authorization: str | None = Header(default=None)):
+    require_backend_token(authorization)
+    if len(job_id) != 32 or any(character not in "0123456789abcdef" for character in job_id):
+        raise HTTPException(status_code=400, detail="Invalid simulation job reference.")
+    result = _simulation_jobs.snapshot(job_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="This simulation job expired or the service restarted. Run it again.")
+    response.headers["Cache-Control"] = "private, no-store"
+    return result
+
+
+@app.delete("/api/simulations")
+def cancel_simulation_job(job_id: str, authorization: str | None = Header(default=None)):
+    require_backend_token(authorization)
+    if len(job_id) != 32 or any(character not in "0123456789abcdef" for character in job_id):
+        raise HTTPException(status_code=400, detail="Invalid simulation job reference.")
+    if not _simulation_jobs.cancel(job_id):
+        raise HTTPException(status_code=404, detail="This simulation job has ended or expired.")
+    return Response(status_code=204, headers={"Cache-Control": "private, no-store"})
 
 
 class FloorPlanImport(InputModel):

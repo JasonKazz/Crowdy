@@ -1,5 +1,8 @@
+import {MAX_CROWD_SIZE} from "./crowd-limits.ts";
+
 export const LIVE_FRAME_INTERVAL_MS = 2_000;
-export const LIVE_STALE_AFTER_MS = 12_000;
+export const LIVE_STALE_AFTER_MS = 45_000;
+export const MAX_LIVE_FRAME_EDGE = 4096;
 
 export function smoothedCrowdCount(counts: number[]): number | null {
   const recent = counts.slice(-3).filter(count => Number.isSafeInteger(count) && count >= 0);
@@ -9,7 +12,7 @@ export function smoothedCrowdCount(counts: number[]): number | null {
 }
 
 export function canApplyLiveCount(count: number | null, updatedAt: string | null, now: number): boolean {
-  if (count === null || count < 1 || count > 200 || !updatedAt) return false;
+  if (count === null || !Number.isSafeInteger(count) || count < 1 || count > MAX_CROWD_SIZE || !updatedAt) return false;
   const age = now - Date.parse(updatedAt);
   return Number.isFinite(age) && age >= -5_000 && age < LIVE_STALE_AFTER_MS;
 }
@@ -17,17 +20,21 @@ export function canApplyLiveCount(count: number | null, updatedAt: string | null
 export async function captureLiveFrame(video: HTMLVideoElement): Promise<Blob> {
   if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0)
     throw new Error("Waiting for the camera image. Keep this page open.");
-  const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+  let scale = Math.min(1, MAX_LIVE_FRAME_EDGE / Math.max(video.videoWidth, video.videoHeight));
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
   const context = canvas.getContext("2d");
   if (!context) throw new Error("This browser could not prepare a camera frame.");
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/jpeg", 0.8));
-  if (!blob || blob.size === 0 || blob.size > 3 * 1024 * 1024)
-    throw new Error("The camera frame could not be prepared. Try starting the camera again.");
-  return blob;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    for (const quality of [.9, .8, .65]) {
+      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
+      if (blob && blob.size > 0 && blob.size <= 3 * 1024 * 1024) return blob;
+    }
+    scale *= .75;
+  }
+  throw new Error("The camera frame could not be prepared. Try starting the camera again.");
 }
 
 export function cameraErrorMessage(error: unknown): string {

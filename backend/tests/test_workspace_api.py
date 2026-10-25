@@ -147,7 +147,11 @@ class EditorApiTests(unittest.TestCase):
     def test_health(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"engine": "jupedsim", "version": "1.4.2", "status": "ready"})
+        self.assertEqual(response.json()["engine"], "jupedsim")
+        self.assertEqual(response.json()["version"], "1.4.2")
+        self.assertEqual(response.json()["application_version"], "0.1.0")
+        self.assertEqual(response.json()["limits"]["max_population"], 10000)
+        self.assertEqual(response.json()["status"], "ready")
         self.assertEqual(response.headers["cache-control"], "no-store")
 
     def test_native_multiple_exit_run_preserves_frames_and_summary(self):
@@ -206,7 +210,7 @@ class EditorApiTests(unittest.TestCase):
 
     def test_invalid_parameters_are_422_without_engine_run(self):
         mutations = [
-            lambda p: p["scenario"].update(occupancy=201),
+            lambda p: p["scenario"].update(occupancy=10001),
             lambda p: p["scenario"].update(mobility="flying"),
             lambda p: p["scenario"].update(behavior_mode="optimal"),
             lambda p: p["scenario"].update(body_width=.39),

@@ -183,7 +183,7 @@ class ApiTests(unittest.TestCase):
 
     def test_health_readiness_and_lifespan(self):
         self.assertEqual(self.estimator.load_calls, 1)
-        self.assertEqual(self.client.get("/healthz").json(), {"status": "ok"})
+        self.assertEqual(self.client.get("/healthz").json(), {"status": "ok", "application_version": "0.1.0"})
         self.assertEqual(self.client.get("/readyz").status_code, 200)
         self.estimator.ready = False
         self.assertEqual(self.client.get("/healthz").status_code, 200)

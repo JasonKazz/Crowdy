@@ -3,6 +3,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import Icon from "./icon";
 import { useLiveCrowd } from "./live-crowd-provider";
+import {isUsableCrowdEstimate} from "@/lib/crowd-estimates";
+import {MAX_CROWD_SIZE} from "@/lib/crowd-limits";
 import styles from "./live-crowd-feed.module.css";
 
 export default function LiveCrowdFeed({ busy, blockedReason, onUseCrowdEstimate, purpose = "occupancy" }: {
@@ -20,6 +22,9 @@ export default function LiveCrowdFeed({ busy, blockedReason, onUseCrowdEstimate,
   const callback = useRef(onUseCrowdEstimate);
   const id = useId();
   const analytics = purpose === "analytics";
+  const partial = snapshot?.estimate ? !isUsableCrowdEstimate(snapshot.estimate) : false;
+  const displayedCount = partial ? snapshot?.estimate?.count ?? null : count;
+  const densityEstimate = snapshot?.estimate?.method === "density";
 
   useEffect(() => { callback.current = onUseCrowdEstimate; }, [onUseCrowdEstimate]);
   useEffect(() => {
@@ -61,10 +66,10 @@ export default function LiveCrowdFeed({ busy, blockedReason, onUseCrowdEstimate,
           <p className={styles.note}>Keep Safari open and point the rear camera at your venue. This private link expires in 30 minutes.</p>
           {!phoneReachable ? <p className={styles.message}>For iPhone pairing, open this workspace at an HTTPS address your phone can reach. This computer’s local address works only on this computer.</p> : null}
         </div> : null}
-        {count !== null ? <div className={styles.countRow}><p>{count}<span>people visible</span></p><div><Icon name="people" size={20} /><small>{age === null ? "" : age < 2 ? "Just updated" : `${age}s ago`}</small></div></div> : null}
-        {snapshot?.estimate ? <p className={styles.note}>Median of the latest {sampleCount} frame{sampleCount === 1 ? "" : "s"}. Hidden or distant people may be missed.</p> : null}
-        {snapshot?.estimate?.count === 0 || count === 0 ? <p className={styles.message}>{analytics ? "No people detected in the latest frame. Waiting for a crowd estimate before simulating." : "No people detected in the latest frame. Starting crowd is unchanged."}</p>
-          : snapshot?.estimate && snapshot.estimate.count > 200 || count !== null && count > 200 ? <p className={styles.message}>{analytics ? "Above the 200-person simulation limit. Waiting for an estimate within range." : "Above the 200-person simulation limit. Starting crowd is unchanged."}</p> : null}
+        {displayedCount !== null ? <div className={styles.countRow}><p>{partial ? "≥ " : ""}{displayedCount.toLocaleString("en-US")}<span>{partial ? "estimated people · lower bound" : densityEstimate ? "estimated people" : "people visible"}</span></p><div><Icon name="people" size={20} /><small>{age === null ? "" : age < 2 ? "Just updated" : `${age}s ago`}</small></div></div> : null}
+        {snapshot?.estimate ? <p className={styles.note}>{partial ? "Incomplete frame count, shown as a lower bound. Waiting for a complete count before updating occupancy or analytics." : `Median of the latest ${sampleCount} frame${sampleCount === 1 ? "" : "s"}.${densityEstimate ? " Estimated from crowd density." : ""} Hidden or distant people may be missed.`}</p> : null}
+        {!partial && (snapshot?.estimate?.count === 0 || count === 0) ? <p className={styles.message}>{analytics ? "No people detected in the latest frame. Waiting for a crowd estimate before simulating." : "No people detected in the latest frame. Starting crowd is unchanged."}</p>
+          : !partial && (snapshot?.estimate && snapshot.estimate.count > MAX_CROWD_SIZE || count !== null && count > MAX_CROWD_SIZE) ? <p className={styles.message}>{`Above the ${MAX_CROWD_SIZE.toLocaleString("en-US")}-person simulation limit. ${analytics ? "Waiting for an estimate within range." : "Starting crowd is unchanged."}`}</p> : null}
         {!analytics ? <label className={styles.auto}><input type="checkbox" checked={automatic} onChange={event => { lastApplied.current = null; setAutomatic(event.target.checked); }} />Automatically update starting crowd</label> : null}
         <p className={styles.note} role="status">{statusText}</p>
         {terminal && canReconnect ? <button type="button" className={styles.reconnect} disabled={busy || creating || ending} onClick={() => void connect()}>{creating ? "Preparing connection…" : "Create a new connection"}</button> : null}

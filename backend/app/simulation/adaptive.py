@@ -4,8 +4,10 @@ Queue-service estimates are illustrative, not calibrated pedestrian predictions.
 The native engine still owns every position and every collision interaction.
 """
 import math
+from bisect import bisect_left, bisect_right, insort
 from shapely.geometry import Point
 from app.simulation.routing import preferred_exit_point
+from app.simulation.budget import check_simulation_budget
 
 
 class AdaptiveExitChoices:
@@ -20,17 +22,26 @@ class AdaptiveExitChoices:
     def reconsider(self,agents,agent_ids,agent_exits,paths,cursors,now,committed):
         active=[a for a in agents if agent_exits.get(a.id) is not None and a.id not in committed]
         if len(self.shapes)<2:return
-        def distance(agent,exit_id):return Point(agent.position).distance(self.shapes[exit_id])
+        distances={}
+        def distance(agent,exit_id):
+            key=(agent.id,exit_id)
+            if key not in distances:distances[key]=Point(agent.position).distance(self.shapes[exit_id])
+            return distances[key]
+        queues={identifier:[] for identifier in self.shapes}
+        for agent in active:
+            identifier=agent_exits[agent.id];value=distance(agent,identifier)
+            if value<4:queues[identifier].append(value)
+        for values in queues.values():values.sort()
         def queue(agent,exit_id):
             current_distance=distance(agent,exit_id)
             # Count people physically near the doorway and at least as close to
             # it, rather than treating every remote assigned person as a queue.
-            return sum(1 for other in active if other.id!=agent.id and agent_exits[other.id]==exit_id
-                       and distance(other,exit_id)<4 and distance(other,exit_id)<=current_distance+.5)
+            return bisect_right(queues[exit_id],current_distance+.5)-(agent_exits[agent.id]==exit_id and current_distance<4)
         def remaining(agent):
             path=paths[agent.id];cursor=min(cursors[agent.id],len(path)-1)
             return math.dist(agent.position,path[cursor])+sum(math.dist(a,b) for a,b in zip(path[cursor:],path[cursor+1:]))
-        for agent in sorted(active,key=lambda a:agent_ids[a.id]):
+        for index,agent in enumerate(sorted(active,key=lambda a:agent_ids[a.id])):
+            if index%32==0:check_simulation_budget()
             identifier=agent_ids[agent.id];current=agent_exits[agent.id]
             if now<self.cooldown.get(identifier,-1) or self.switch_count.get(identifier,0)>=3 or distance(agent,current)<1:
                 continue
@@ -53,6 +64,9 @@ class AdaptiveExitChoices:
                 if score<current_cost-required:options.append((score,exit_id,path))
             if not options:continue
             score,exit_id,path=min(options,key=lambda value:(value[0],value[1]))
+            old_distance=distance(agent,current);new_distance=distance(agent,exit_id)
+            if old_distance<4:queues[current].pop(bisect_left(queues[current],old_distance))
+            if new_distance<4:insort(queues[exit_id],new_distance)
             agent_exits[agent.id]=exit_id;paths[agent.id]=path;cursors[agent.id]=1
             self.cooldown[identifier]=now+5
             self.switch_count[identifier]=self.switch_count.get(identifier,0)+1

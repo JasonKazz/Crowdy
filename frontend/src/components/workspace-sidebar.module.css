@@ -216,7 +216,7 @@
 }
 
 .editingPanel :global(.occupancy-label) input {
-  width: 36px;
+  width: 72px;
   min-height: 28px;
   padding: 0;
   font-size: 13px;

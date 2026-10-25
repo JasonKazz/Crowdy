@@ -23,6 +23,7 @@ export type FloorPlan = {
   width: number;
   height: number;
   area: number;
+  capacity?: number | null;
   items: PlanItem[];
   walls: Wall[];
   exits: Exit[];
@@ -81,6 +82,16 @@ export type SimulationResult = {
   createdAt: number;
   engine?: "jupedsim" | "browser";
   engineVersion?: string;
+  execution?: {
+    mode: "full_agent";
+    populationCount: number;
+    wallTimeSeconds: number;
+    wallTimeLimitSeconds: number | null;
+    runtimeLimited: boolean;
+    stopReason: "completed" | "simulation_time_limit" | "wall_time_limit" | "trapped";
+    playbackTemporallyThinned: boolean;
+    playbackSampleInterval: number;
+  };
   /** Physical collision-body radius in metres from the native engine. */
   agentRadius?: number;
   placementExcludedArea?: number;

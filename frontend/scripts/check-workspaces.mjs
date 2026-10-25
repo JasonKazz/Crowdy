@@ -4,6 +4,7 @@ import {
   SAMPLE_WORKSPACE_ID, DEFAULT_SCENARIO, listWorkspaces, getWorkspace,
   createWorkspace, updateWorkspace, deleteWorkspace, subscribeWorkspaces,
 } from "../src/lib/workspace-store.ts";
+import {MAX_CROWD_SIZE,POFA_CAPACITY} from "../src/lib/crowd-limits.ts";
 
 const plan = { id:"test-plan", name:"Test plan", width:900, height:600, area:304,
   items:[{id:"desk-1",label:"Desk",x:200,y:200,width:100,height:50,kind:"desk"}],
@@ -93,7 +94,7 @@ await assert.rejects(createWorkspace(ownerA,{name:"Wrong account",plan,scenario:
 session = ownerA;
 await assert.rejects(createWorkspace(ownerA,{name:"",plan,scenario:DEFAULT_SCENARIO}),/name/);
 await assert.rejects(createWorkspace(ownerA,{name:"Invalid",plan:{...plan,items:[{...plan.items[0],width:Infinity}]},scenario:DEFAULT_SCENARIO}),/geometry/);
-assert.throws(() => updateWorkspace(ownerA,first.id,{plan,scenario:{...DEFAULT_SCENARIO,occupancy:500}}),/scenario/);
+assert.throws(() => updateWorkspace(ownerA,first.id,{plan,scenario:{...DEFAULT_SCENARIO,occupancy:MAX_CROWD_SIZE+1}}),/scenario/);
 assert.equal(await getWorkspace(ownerA,SAMPLE_WORKSPACE_ID),null);
 assert.throws(() => deleteWorkspace(ownerA,SAMPLE_WORKSPACE_ID),/shared sample/);
 
@@ -143,6 +144,26 @@ await assert.rejects(createWorkspace(ownerA,{name:"Invalid zero crowd",plan,scen
 assert.throws(() => updateWorkspace(ownerA,smallCrowd.id,{plan,scenario:{...DEFAULT_SCENARIO,occupancy:0}}),/scenario/);
 assert.equal(requests.length,beforeZero,"Zero occupancy must fail before a cloud mutation");
 assert.equal(cloud.get(serverKey(ownerA,smallCrowd.id)).scenario.occupancy,9,"An invalid estimate must preserve the last saved occupancy");
+
+const capacityPlan={...plan,capacity:POFA_CAPACITY};
+const largeCrowd=await createWorkspace(ownerA,{name:"POFA capacity analysis",plan:capacityPlan,scenario:{...DEFAULT_SCENARIO,occupancy:5000}});
+assert.equal(largeCrowd.plan.capacity,5000,'Venue capacity survives cloud serialization');
+for(const occupancy of [5000,5001,10000]) {
+  await updateWorkspace(ownerA,largeCrowd.id,{plan:capacityPlan,scenario:{...DEFAULT_SCENARIO,occupancy,population:{roomCounts:{hall:occupancy}}}});
+  const loaded=await getWorkspace(ownerA,largeCrowd.id);
+  assert.equal(loaded.scenario.occupancy,occupancy);
+  assert.equal(loaded.scenario.population.roomCounts.hall,occupancy);
+  assert.equal(loaded.plan.capacity,5000,'Capacity must remain separate from the supported count');
+}
+const beforeInvalidLarge=requests.length;
+for(const occupancy of [10001,10000.5]) {
+  await assert.rejects(createWorkspace(ownerA,{name:"Invalid large crowd",plan:capacityPlan,scenario:{...DEFAULT_SCENARIO,occupancy}}),/scenario/);
+  assert.throws(()=>updateWorkspace(ownerA,largeCrowd.id,{plan:capacityPlan,scenario:{...DEFAULT_SCENARIO,occupancy}}),/scenario/);
+}
+for(const capacity of [0,-1,1.5,'5000'])
+  await assert.rejects(createWorkspace(ownerA,{name:"Invalid capacity",plan:{...plan,capacity},scenario:DEFAULT_SCENARIO}),/geometry/);
+assert.equal(requests.length,beforeInvalidLarge,'Unsupported counts and invalid capacities fail before cloud writes');
+assert.equal(DEFAULT_SCENARIO.occupancy,24,'Large analysis support must not change the verified demo default');
 
 unavailable = true;
 await assert.rejects(createWorkspace(ownerA,{name:"Offline",plan,scenario:DEFAULT_SCENARIO}),/unavailable/);

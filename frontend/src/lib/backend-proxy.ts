@@ -37,7 +37,7 @@ export function failure(error: string, status: number) {
   return Response.json({ error }, { status, headers });
 }
 
-export async function readBackendBody(request: Request, limit = MAX_BODY_BYTES) {
+export async function readBackendBody(request: Pick<Request,"headers"|"body">, limit = MAX_BODY_BYTES) {
   if (Number(request.headers.get("content-length")) > limit)
     throw new RangeError("The workspace is too large to simulate.");
   const reader = request.body?.getReader();
@@ -67,7 +67,8 @@ export async function readBackendBody(request: Request, limit = MAX_BODY_BYTES) 
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-export async function forwardBackend(request: Request, path: string, body?: unknown, timeout = 55_000) {
+export async function forwardBackend(request: Request, path: string, body?: unknown, timeout = 55_000,
+  method: "GET"|"POST"|"DELETE" = body === undefined ? "GET" : "POST") {
   let url: URL | null;
   try {
     url = backendUrl(path);
@@ -79,7 +80,7 @@ export async function forwardBackend(request: Request, path: string, body?: unkn
   const token = process.env.CROWDY_BACKEND_TOKEN;
   try {
     const response = await fetch(url, {
-      method: body === undefined ? "GET" : "POST",
+      method,
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -93,7 +94,13 @@ export async function forwardBackend(request: Request, path: string, body?: unkn
       return failure(path === "/api/floorplans"
         ? "This image is too large to upload. Crop to one floor plan or export a smaller PNG or JPEG, then try again."
         : "The workspace is too large to simulate. Reduce the layout size and try again.", 413);
-    const data = await response.json().catch(() => null);
+    if (response.status === 204) return new Response(null,{status:204,headers});
+    let data;
+    try {data = await readBackendBody(response,4*1024*1024);}
+    catch (error) {
+      if (error instanceof SyntaxError && !response.ok) data=null;
+      else throw error;
+    }
     if (!response.ok) {
       const message =
         typeof data?.error === "string"
@@ -104,9 +111,8 @@ export async function forwardBackend(request: Request, path: string, body?: unkn
       return failure(message, response.status >= 500 ? 502 : response.status);
     }
     const payload = JSON.stringify(data);
-    // Long venue runs retain their full trajectory samples. Imports and
-    // health responses keep the smaller existing response budget.
-    const responseLimit = (path === "/api/simulations" ? 16 : 4) * 1024 * 1024;
+    // Keep below Vercel's 4.5 MB response ceiling, including large native jobs.
+    const responseLimit = 4 * 1024 * 1024;
     if (Buffer.byteLength(payload) > responseLimit)
       return failure(
         "This run produced too much playback data. Reduce occupancy and try again.",
@@ -123,6 +129,7 @@ export async function forwardBackend(request: Request, path: string, body?: unkn
       return failure(path === "/api/floorplans"
         ? "Image extraction took too long. Check the provider status, then retry or choose the other provider."
         : "The run took too long. Reduce occupancy and try again.", 504);
+    if (error instanceof RangeError) return failure("This run produced too much playback data. Reduce occupancy and try again.",502);
     return failure(
       "The simulation service is unavailable. Your current setup is unchanged; try again shortly.",
       503,

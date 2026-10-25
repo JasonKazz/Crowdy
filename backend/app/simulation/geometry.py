@@ -3,6 +3,8 @@ from shapely.ops import unary_union
 from shapely.validation import explain_validity
 
 from app.schemas.scenario import Region, Scenario
+from app.simulation.spatial import SpatialIndex
+from app.simulation.budget import check_simulation_budget
 
 # Metre coordinates can acquire tiny overshoots when wall endpoints are expanded
 # into polygons. This tolerance is numerical, not an image-snapping allowance.
@@ -68,9 +70,12 @@ def build_geometry(scenario: Scenario) -> Polygon:
             )
 
     radius = scenario.agent_defaults.radius
-    positions = []
+    positions = SpatialIndex(2 * radius)
+    boundary = walkable.boundary
 
-    for occupant in scenario.occupants:
+    for index, occupant in enumerate(scenario.occupants):
+        if index % 128 == 0:
+            check_simulation_budget()
         point = Point(occupant.position)
 
         if not walkable.contains(point):
@@ -84,19 +89,19 @@ def build_geometry(scenario: Scenario) -> Polygon:
                 "or correct this fixed starting position."
             )
 
-        if point.distance(walkable.boundary) < radius:
+        if point.distance(boundary) < radius:
             raise ValueError(
                 f"Occupant '{occupant.id}' is too close to a wall "
                 "or obstacle. Enable automatic placement or regenerate people "
                 "in the editor, or correct this fixed starting position."
             )
 
-        for other_id, other_point in positions:
-            if point.distance(other_point) < 2 * radius:
+        for other_point, other_id in positions.nearby(occupant.position):
+            if point.distance(Point(other_point)) < 2 * radius:
                 raise ValueError(
                     f"Occupants '{occupant.id}' and '{other_id}' overlap"
                 )
 
-        positions.append((occupant.id, point))
+        positions.add(occupant.position, occupant.id)
 
     return walkable
