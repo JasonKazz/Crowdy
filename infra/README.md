@@ -15,7 +15,7 @@ be retried after an interrupted deployment.
 | Resource group | `rg-crowdy-student` |
 | Region | `westus2`, allowed by this student subscription |
 | Backend | Container Apps Consumption profile, 0.5 vCPU, 1 GiB, one replica |
-| Optional crowd estimation | Separate Container App, 1 vCPU, 2 GiB per replica, scale 0–2 |
+| Optional crowd estimation | Separate Container App, 1 vCPU, 2 GiB, exactly one warm replica |
 | Images | Container Registry Basic, admin access disabled |
 | Persistence | StorageV2, Hot, Standard LRS, private `crowdy` blob container |
 | Credentials | User-assigned managed identity with scoped `AcrPull` and `Storage Blob Data Contributor` |
@@ -169,7 +169,7 @@ endpoint cannot be overridden. See [provider setup](../docs/image-extraction.md)
 
 ## Deploy the independent crowd-estimation service
 
-`crowd_estimation.tf` adds the still-image YOLO service without changing the
+`crowd_estimation.tf` adds the still-image and live-frame YOLO service without changing the
 backend image or deployment flag. It is disabled by default. After the existing
 foundation has been deployed, explicitly build and enable it with:
 
@@ -204,24 +204,29 @@ still waits for usable inference. The startup probe allows approximately five
 minutes for this warmup. Anonymous HTTP `/healthz` and `/readyz` endpoints remain
 available for callers and manual checks. See [Azure's health probe guidance](https://learn.microsoft.com/en-us/azure/container-apps/health-probes).
 
-Each replica has 1 vCPU and 2 GiB of memory. The default minimum is zero, so the
-first estimate after idle time can wait for model startup. Set these in your
-ignored `infra/terraform.tfvars` to keep a model warm during a demo:
+The service has 1 vCPU and 2 GiB of memory. Both replica defaults and validations
+require one warm replica because camera sessions and their latest previews are
+stored in process memory. Update any older overrides in your ignored
+`infra/terraform.tfvars` to match:
 
 ```hcl
 crowd_estimation_min_replicas = 1
-crowd_estimation_max_replicas = 2
+crowd_estimation_max_replicas = 1
 ```
 
-A warm minimum adds compute cost beyond the backend estimates above. The HTTP
-scaler targets one concurrent request per replica, with an explicit maximum of
-one or two replicas. Azure documents a default 300-second scale-down cooldown
-and 30-second KEDA polling interval; polling does not apply to HTTP/TCP rules.
-Live Azure reads omit these defaults, so Terraform narrowly ignores their
-normalization along with Single-mode ingress traffic weights. CPU, memory,
-replica limits, the HTTP scaling rule, image, and security remain managed.
-See [Azure scaling behavior](https://learn.microsoft.com/en-us/azure/container-apps/scale-app#scale-behavior).
-Replica scaling is independent of the backend.
+A warm replica adds compute cost beyond the backend estimates above. The
+container runs one Uvicorn worker. More workers/replicas require shared session
+storage and coordinated frame updates first; scale-to-zero would discard active
+sessions. Restarts and deployments still invalidate camera links, which must be
+created again. The service expires sessions after 30 minutes and holds at most
+16 sessions, retaining only the latest estimate and bounded JPEG preview.
+See the [live session API](../services/crowd-estimation/README.md#live-camera-sessions).
+
+The HTTP rule retains a target of one concurrent request, while minimum and
+maximum capacity stay fixed at one. Azure reads omit the default scale-rule
+cooldown and polling values, so Terraform narrowly ignores their normalization
+along with Single-mode ingress traffic weights. CPU, memory, replica limits,
+the HTTP rule, image, and security remain managed.
 
 Terraform sets the following service environment:
 
@@ -232,7 +237,7 @@ CROWDY_YOLO_DEVICE=cpu
 CROWDY_YOLO_THREADS=2
 ```
 
-The model is baked into the image, so replicas do not need to download weights at
+The model is baked into the image, so the replica does not need to download weights at
 startup. Use the `crowd_estimation_url` output as the service base URL and retrieve
 the sensitive `crowd_estimation_token` output privately for the trusted caller's
 `CROWDY_CROWD_ESTIMATION_TOKEN`. Submit an image to `POST /v1/estimates` as multipart

@@ -83,7 +83,7 @@ The auth checks use encrypted synthetic sessions without changing Auth0 users or
 
 ## Separate crowd-estimation deployment
 
-The still-image service lives in `services/crowd-estimation/` and deploys as a
+The still-image and live-frame service lives in `services/crowd-estimation/` and deploys as a
 separate Container App sharing the registry/environment. It uses its own
 identity with registry-pull access, bearer token, image version, and replica
 settings. It has no workspace-storage access. The model weights are included
@@ -96,8 +96,11 @@ After the existing Azure foundation is available, use
 deploy the service. Preserve both ignored deployment-intent files for future
 Terraform runs; see [the infrastructure guide](../infra/README.md). Configure
 the two crowd-estimation frontend values above and redeploy Next.js to connect
-it. The default scales to zero; keep one minimum replica for a warm demo if
-model cold starts exceed the proxy's 55-second deadline.
+it. Live camera sessions require exactly one warm replica and one Uvicorn
+worker; Terraform enforces minimum and maximum replicas of one. Existing local
+tfvars with zero/two overrides must be changed to one/one. Sessions live in memory
+and expire on service restart or deployment. Deploy both the estimator image and
+frontend for the iPhone flow, using an HTTPS frontend address reachable by both devices.
 
 See [the service guide](../services/crowd-estimation/README.md) for local
 startup, authenticated requests, upload limits, independent tests, and model
