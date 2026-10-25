@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppHeader from "./app-header";
 import AppFooter from "./app-footer";
@@ -16,6 +16,8 @@ import ScaleCalibrator, {type PendingCalibration} from "./scale-calibrator";
 import GeometryPanel from "./geometry-panel";
 import WorkspaceSidebar from "./workspace-sidebar";
 import WorkspaceSources from "./workspace-sources";
+import LiveCrowdProvider from "./live-crowd-provider";
+import LiveEvacuationAnalytics from "./live-evacuation-analytics";
 import {nativeLayout, type GeometrySelection, type GeometryTool} from "@/lib/native-editor";
 import { IMAGE_UPLOAD_SIZE_ERROR, prepareImageUpload } from "@/lib/image-upload";
 import {
@@ -27,7 +29,7 @@ import {
   type SimulationResult,
 } from "@/lib/simulation";
 
-type Mode = "layout" | "simulation" | "compare";
+type Mode = "layout" | "simulation" | "compare" | "live";
 type ProviderStatus = Record<string, {configured: boolean; busy: boolean; elapsed_seconds: number; model?: string}>;
 function providerLabel(provider: string, model?: string) {
   if (model === "google/gemini-3.8-flash" || model === "gemini-3.8-flash") return "Gemini 3.8 Flash";
@@ -66,7 +68,11 @@ type WorkspaceProps = {
   ownerId: string | null;
 };
 
-export default function Workspace({
+export default function Workspace(props: WorkspaceProps) {
+  return <LiveCrowdProvider scope={`${props.ownerId ?? "guest"}:${props.workspaceId}`}><WorkspaceContent key={props.workspaceId} {...props} /></LiveCrowdProvider>;
+}
+
+function WorkspaceContent({
   workspaceId,
   workspaceName,
   initialPlan,
@@ -75,6 +81,7 @@ export default function Workspace({
   ownerId,
 }: WorkspaceProps) {
   const router = useRouter();
+  const viewId = useId();
   const [plan, setPlan] = useState<FloorPlan>(() => clonePlan(initialPlan));
   const [scenario, setScenario] = useState<Scenario>(() => ({
     ...initialScenario,
@@ -95,6 +102,7 @@ export default function Workspace({
   const [runCount, setRunCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState(false);
+  const [liveRunning, setLiveRunning] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [speed, setSpeed] = useState(1);
@@ -481,6 +489,7 @@ export default function Workspace({
     });
   }
   async function run() {
+    if (liveRunning) return;
     if (busy && !running) return;
     if (runController.current) {
       runController.current.abort();
@@ -658,7 +667,7 @@ export default function Workspace({
       if (id) setSidebarTab("editing");
     },
     onMove: moveItem,
-    mode,
+    mode: mode === "live" ? "simulation" as const : mode,
     time: mode === "layout" ? 0 : time,
     showPeople: layers.people,
     showRoutes: layers.routes,
@@ -706,14 +715,14 @@ export default function Workspace({
             <Icon name="download" size={16} />
             <span>Export workspace</span>
           </button>
-          <button
+          {mode !== "live" && <button
             className={`button primary ${running ? "is-loading" : ""}`}
-            disabled={busy && !running}
+            disabled={(busy && !running) || liveRunning}
             onClick={run}
           >
             <Icon name={running ? "close" : "play"} size={15} />
-            {running ? "Cancel run" : busy ? "Working…" : "Run simulation"}
-          </button>
+            {running ? "Cancel run" : liveRunning ? "Finishing live analysis…" : busy ? "Working…" : "Run simulation"}
+          </button>}
         </div>
       </div>
       {isSample && (
@@ -754,7 +763,7 @@ export default function Workspace({
           </button>
         </div>
       )}
-      <main className="workspace-grid">
+      <main className={`workspace-grid${mode === "live" ? " live-analytics-grid" : ""}`}>
         <WorkspaceSidebar
           activeTab={sidebarTab}
           onTabChange={(tab) => {
@@ -1115,11 +1124,15 @@ export default function Workspace({
                   { id: "layout", label: "Layout", icon: "layout" },
                   { id: "simulation", label: "Simulation", icon: "people" },
                   { id: "compare", label: "Compare", icon: "compare" },
+                  { id: "live", label: "Live analytics", icon: "video" },
                 ] as const
               ).map((tab) => (
                 <button
                   key={tab.id}
                   role="tab"
+                  id={`${viewId}-${tab.id}-tab`}
+                  aria-controls={`${viewId}-${tab.id}-panel`}
+                  tabIndex={mode === tab.id ? 0 : -1}
                   aria-selected={mode === tab.id}
                   disabled={
                     tab.id === "simulation"
@@ -1133,6 +1146,15 @@ export default function Workspace({
                     setSelectedId(null);
                     setPlaying(false);
                   }}
+                  onKeyDown={(event) => {
+                    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                    event.preventDefault();
+                    const buttons = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="tab"]:not(:disabled)') ?? []);
+                    const current = buttons.indexOf(event.currentTarget);
+                    const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+                    buttons[next]?.focus();
+                    buttons[next]?.click();
+                  }}
                 >
                   <Icon name={tab.icon} size={15} />
                   {tab.label}
@@ -1142,6 +1164,10 @@ export default function Workspace({
             </div>
             <span className="floor-label">FLOOR 01</span>
           </div>
+          <LiveEvacuationAnalytics active={mode === "live"} plan={plan} scenario={scenario} busy={busy} onBusyChange={setLiveRunning}
+            id={`${viewId}-live-panel`} labelledBy={`${viewId}-live-tab`} />
+          <div className="manual-view-panel" role="tabpanel" id={`${viewId}-${mode === "live" ? "layout" : mode}-panel`}
+            aria-labelledby={`${viewId}-${mode === "live" ? "layout" : mode}-tab`} style={mode === "live" ? { display: "none" } : undefined}>
           <div
             className={`canvas-container ${mode === "compare" ? "comparison-canvas" : ""}`}
           >
@@ -1388,8 +1414,9 @@ export default function Workspace({
               <span>{duration.toFixed(0)} s</span>
             </div>
           </div>
+          </div>
         </section>
-        <aside className="results-panel" aria-label="Simulation results">
+        <aside className="results-panel" aria-label="Simulation results" style={mode === "live" ? { display: "none" } : undefined}>
           <div className="results-heading">
             <h2>Run overview</h2>
             <span className={`result-status ${result ? "complete" : ""}`}>

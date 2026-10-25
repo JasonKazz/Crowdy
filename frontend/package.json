@@ -20,6 +20,7 @@
     "test:crowd-estimates": "node --experimental-strip-types scripts/check-crowd-estimates.mjs",
     "test:live-crowd": "node --experimental-strip-types scripts/check-live-crowd.mjs",
     "test:live-camera": "node --experimental-strip-types scripts/check-live-camera.mjs",
+    "test:live-evacuation": "node --experimental-strip-types scripts/check-live-evacuation.mjs",
     "test:room-population": "node --experimental-strip-types scripts/check-room-population.mjs"
   },
   "dependencies": {
