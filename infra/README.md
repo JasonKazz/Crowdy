@@ -7,6 +7,12 @@ User workspace records and files are durable across browser changes and backend
 restarts. Running background jobs still depend on the backend process and should
 be retried after an interrupted deployment.
 
+Publish a new counting-service image before applying model settings or count
+limits that its previous image does not support. Terraform reconciles both
+apps, so a backend deployment can also apply pending counting-service settings.
+Deploy the counting service first when changing that contract, then deploy the
+backend. The non-root, offline model startup check must pass before publishing.
+
 ## Resources
 
 | Resource | Configuration |

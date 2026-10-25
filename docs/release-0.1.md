@@ -34,7 +34,7 @@ The default is the author's pretrained **ZIP-N NWPU** density model; the
 SHA-256 verified at build and startup. No external model code is executed.
 YOLO remains an explicit alternative for person boxes, not an automatic fallback.
 
-Actual CPU inference on six selected, originally labeled UCF-QNRF images:
+Actual local CPU inference on six selected, originally labeled UCF-QNRF images:
 
 | Labeled people | Raw rounded estimate | Relative error |
 | ---: | ---: | ---: |
@@ -54,6 +54,12 @@ blocked. `complete: true` describes processing, not counting accuracy.
 The supplied POFA photos have no labeled attendance, so their counts cannot
 establish POFA accuracy. See the [full benchmark evidence and reproduction
 instructions](../services/crowd-estimation/benchmarks/README.md).
+
+The deployed public frontend was also tested with browser-sized JPEG uploads:
+6,052 labeled people produced 6,290 estimated (+3.9%), and 7,930 produced 7,005
+(−11.7%). A larger prediction retained its raw density sum while returning a
+capped, incomplete count of 10,000. A 4096 × 3072 input completed in 10.3 seconds
+including upload and proxy overhead; the model remained ready afterward.
 
 ## Forecast execution and limits
 
@@ -119,3 +125,11 @@ Run frontend contract scripts, native HTTP integration, infrastructure checks,
 and deployed health/auth/storage/live-frame smoke checks as well. A real iPhone
 must still be paired at the venue to check its permissions, view and network;
 browser/API smoke tests do not certify that physical camera setup.
+
+Release validation passed 396 backend tests, 69 counting-service tests, frontend
+contracts, TypeScript, ESLint and the production build. The deployed live-frame
+API and actual frontend scheduling/transport logic produced a 98-person estimate
+from a supplied POFA photo, then completed the corresponding 98-person forecast
+in 28.5 simulated seconds through 15 mapped exits. Pausing invalidated its current
+status. Production auth redirects, private API protection, storage reads and
+the preserved source overlay were also checked. Terraform reported no drift.
