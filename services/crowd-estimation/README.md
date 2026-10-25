@@ -1,7 +1,7 @@
 # Crowdy crowd estimation
 
 An independent Python 3.12 / FastAPI service that counts detected people in still
-images using Ultralytics YOLO26n. It has its own dependencies, process, Docker
+images and sampled live-camera frames using Ultralytics YOLO26n. It has its own dependencies, process, Docker
 image, Azure Container App, and server-to-server token. It has no dependency on
 JuPedSim, floor-plan extraction providers, or workspace storage.
 
@@ -37,8 +37,9 @@ Next.js forwards multipart bytes and the bearer token to this service. The
 existing browser preparation limits the image to 3 MiB and 3072 pixels per side
 to fit Vercel. The service independently checks the stream, file size, actual
 image format, animation, decompression size, and EXIF orientation. It never
-stores uploads or annotated images. The workspace source-storage flow remains
-responsible for saved images.
+stores original uploads or annotated images. Live sessions retain only their
+latest estimate and a small JPEG preview in memory. The workspace source-storage
+flow remains responsible for saved images.
 Upload decoding keeps Pillow's original PNG/JPEG/WebP decoder, so importing
 Ultralytics cannot activate its optional HEIF plugin fallback for corrupt input.
 Unreadable images return 422 after the model has loaded as well as before.
@@ -47,7 +48,7 @@ Unreadable images return 422 after the model has loaded as well as before.
 
 `POST /v1/estimates` takes exactly one multipart file field named `image`, with
 `Content-Type` `image/png`, `image/jpeg`, or `image/webp`. Supply
-`Authorization: Bearer <service token>`. No URL, path, camera, or video inputs
+`Authorization: Bearer <service token>`. No URL, path, or video-file inputs
 are accepted. Maximum file size is 10 MiB; maximum decoded area is 30 million
 pixels. The request stream has a separate 64 KiB multipart allowance.
 
@@ -89,6 +90,81 @@ time is admitted per process, including decoding. Excess requests fail promptly;
 they do not accumulate an unbounded inference queue. `/healthz` is an anonymous
 liveness check and `/readyz` confirms that weights have loaded and warmed.
 
+### Live camera sessions
+
+Live mode samples images from the phone's browser camera. It does not accept or
+record a continuous video stream. The trusted Next.js server creates a session
+and proxies its requests; the service bearer must never reach the phone/browser.
+Phone camera access requires a secure HTTPS origin (localhost is the browser's
+local exception). An iPhone cannot reach the developer computer through a
+`localhost` link; use the application's reachable HTTPS URL.
+
+All endpoints below require the same service `Authorization` header. Every
+session operation also requires `X-Crowdy-Live-Token` with the role shown:
+
+| Method and path | Live token | Result |
+| --- | --- | --- |
+| `POST /v1/live-sessions` | None | 201, `{session_id, viewer_token, camera_token, expires_at}`. |
+| `GET /v1/live-sessions/{id}` | Viewer | Current snapshot. |
+| `DELETE /v1/live-sessions/{id}` | Viewer | 204, immediately revokes both capabilities and discards state. |
+| `POST /v1/live-sessions/{id}/frames` | Camera | One multipart `image`, returning the updated snapshot. |
+| `POST /v1/live-sessions/{id}/pause` | Camera | Marks the session paused, keeping its last completed estimate. |
+
+Session IDs are random 32-character hexadecimal strings. Viewer and camera
+tokens are separate random 256-bit capabilities; keep them private and send them
+in the header, never in a query string. The service retains their SHA-256 digests
+and compares them in constant time. A camera token cannot read/delete a session;
+a viewer token cannot submit/pause frames. Missing/wrong capabilities return 401.
+Missing, deleted, or expired sessions return 404, and every response uses
+`Cache-Control: no-store`. Credentials are returned only by creation.
+
+A snapshot contains:
+
+```json
+{
+  "session_id": "2f529b8ec69a47b39bd9adf5d75d2cbb",
+  "expires_at": "2026-01-01T00:30:00Z",
+  "sequence": 0,
+  "updated_at": null,
+  "estimate": null,
+  "preview": null,
+  "status": "waiting"
+}
+```
+
+The first successful frame sets `status` to `live`, fills `estimate` with the
+same result as `/v1/estimates`, and fills `preview` with a JPEG data URL.
+`sequence` increases on each accepted frame and pause. `updated_at` is the server
+completion time of the latest accepted frame. A pause invalidates frames already
+in flight; their completion returns the unchanged paused snapshot. A newly
+submitted frame resumes live status. Deletion or expiry during inference causes
+that frame to return 404 and never recreates the session. Counts are per-frame
+visible detections; successive counts must never be summed as unique attendees.
+
+Live and still-image requests share one inference slot, including upload,
+decoding, and preview preparation. A busy caller receives 503 / `Retry-After: 2`
+without queueing. The phone should submit at most one frame at a time and respect
+backpressure. Frames use the same format, upload, pixel, EXIF, and animation
+checks as the still-image endpoint. The retained preview has a maximum 640-pixel
+edge, JPEG quality 70, no source metadata, and at most 256 KiB before base64;
+high-detail frames are further resized if needed. Only the latest result is
+retained; there are no recordings, image history, or persisted frame files.
+
+At most 16 sessions may be active. Creation at capacity returns 503 with
+`Retry-After: 30`. Each session expires exactly 30 minutes after creation;
+polling, frames, and pauses do not extend its lifetime. Expired sessions are
+lazily removed when the next session operation occurs. Shutdown clears all
+session state, and a process restart requires new camera links.
+
+**Live sessions require one Uvicorn worker and exactly one service replica.**
+Session capabilities and previews are held in that process's memory; requests
+routed to another process cannot find them. Set
+`crowd_estimation_min_replicas = 1` and `crowd_estimation_max_replicas = 1` before
+deploying live mode. Horizontal scaling requires a shared session store and
+coordinated inference/session lifecycle first. The service bearer remains a
+server-to-server credential, not per-user authentication; the frontend must
+restrict who may create sessions according to its application access model.
+
 ## Inference settings
 
 | Environment variable | Default | Purpose |
@@ -107,8 +183,9 @@ liveness check and `/readyz` confirms that weights have loaded and warmed.
 The lockfile pins dependencies. Linux uses the PyTorch CPU wheel index so the
 Azure image does not install CUDA runtimes. The Dockerfile bakes the default
 weights into `/srv/crowdy/models/`, runs as an unprivileged user, and starts one
-Uvicorn worker. Do not increase worker count without budgeting another model's
-memory. Scale the independent service using Container Apps replicas.
+Uvicorn worker. Do not increase worker count or replica count while using live
+sessions. Still-only deployments can scale separately, budgeting another model's
+memory for each worker/replica.
 
 ```sh
 docker build --platform linux/amd64 -t crowdy-crowd-estimation:local .
@@ -125,8 +202,9 @@ script, probes, scaling, frontend environment outputs, and credentials.
 uv run python -m unittest discover -s tests -v
 ```
 
-Tests use fake model outputs to exercise HTTP validation, concurrency, and
-count/coordinate conversion without downloading weights. Validate actual
+Tests use fake model outputs to exercise HTTP validation, concurrency,
+live-session roles/lifecycle/expiry, bounded previews, and count/coordinate
+conversion without downloading weights. Validate actual
 accuracy separately against labeled photos from the deployment's cameras,
 lighting, angles, and crowd densities. Dense crowds, occlusion, tiny people,
 reflections, and repeated views can cause undercounts or false positives.
@@ -137,11 +215,11 @@ current photos, never their sum; zero and counts above its 200-person simulation
 limit remain visible and require manual adjustment.
 
 `CrowdEstimator.estimate(frame)` accepts a decoded PIL frame independently of
-HTTP and storage. A later video worker can reuse it with frame timestamps,
-bounded sampling/backpressure, and temporal smoothing. Tracking/line-crossing
-counts and unique attendees require their own state and semantics; adding
-per-frame totals would count the same people repeatedly. No streaming endpoint
-or camera connection is implemented in this still-image version.
+HTTP and storage. Live sessions reuse it with bounded sampling and backpressure.
+Tracking/line-crossing counts, temporal smoothing, and unique attendees require
+their own state and semantics; adding per-frame totals would count the same
+people repeatedly. The phone streams sampled frames through its browser; this
+service does not open camera connections or implement a media-stream protocol.
 
 Implementation references: [Ultralytics predict API](https://docs.ultralytics.com/modes/predict/)
 and [shared-model thread safety](https://docs.ultralytics.com/guides/yolo-thread-safe-inference/).

@@ -18,11 +18,14 @@
     "test:workspace-sources": "node --experimental-strip-types scripts/check-workspace-sources.mjs",
     "test:cloud-workspaces": "node scripts/check-cloud-workspaces.mjs",
     "test:crowd-estimates": "node --experimental-strip-types scripts/check-crowd-estimates.mjs",
+    "test:live-crowd": "node --experimental-strip-types scripts/check-live-crowd.mjs",
+    "test:live-camera": "node --experimental-strip-types scripts/check-live-camera.mjs",
     "test:room-population": "node --experimental-strip-types scripts/check-room-population.mjs"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.33.0",
     "next": "16.4.3",
+    "qrcode": "^1.5.4",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "server-only": "^0.0.1"
@@ -30,6 +33,7 @@
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

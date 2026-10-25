@@ -1,4 +1,4 @@
-"""Frame-oriented inference, reusable by a future video ingestion worker."""
+"""Frame-oriented inference shared by still-image and live-camera uploads."""
 
 import math
 from threading import Lock

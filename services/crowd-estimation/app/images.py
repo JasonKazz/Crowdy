@@ -1,5 +1,6 @@
 """Decode bounded still images without retaining originals or trusting filenames."""
 
+import base64
 import warnings
 from io import BytesIO
 
@@ -8,10 +9,27 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from app import pillow_open
 
 ALLOWED_TYPES = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}
+MAX_PREVIEW_EDGE = 640
+MAX_PREVIEW_BYTES = 256 * 1024
 
 
 class InvalidImage(ValueError):
     pass
+
+
+def jpeg_preview(image: Image.Image) -> str:
+    """Retain a small preview, stripping metadata and the uploaded original."""
+    with image.copy() as preview:
+        preview.thumbnail((MAX_PREVIEW_EDGE, MAX_PREVIEW_EDGE))
+        # Bound encoded size as well as dimensions, including unusual highly
+        # detailed frames. Every retained image is at most 256 KiB before base64.
+        while True:
+            output = BytesIO()
+            preview.save(output, "JPEG", quality=70)
+            data = output.getvalue()
+            if len(data) <= MAX_PREVIEW_BYTES:
+                return "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
+            preview.thumbnail((max(1, preview.width // 2), max(1, preview.height // 2)))
 
 
 def decode_image(data: bytes, content_type: str, max_pixels: int) -> Image.Image:

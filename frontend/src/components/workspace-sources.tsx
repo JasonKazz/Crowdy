@@ -14,6 +14,7 @@ import {
   type VenueImageSource,
 } from "@/lib/workspace-sources";
 import Icon from "./icon";
+import LiveCrowdFeed from "./live-crowd-feed";
 import styles from "./workspace-sources.module.css";
 
 type WorkspaceSourcesProps = {
@@ -24,6 +25,8 @@ type WorkspaceSourcesProps = {
   busy: boolean;
   onUploadFloorPlan: () => void;
   onUseCrowdEstimate: (count: number) => void;
+  onUseLiveCrowdEstimate: (count: number) => void;
+  liveBlockedReason: string;
   children?: ReactNode;
 };
 
@@ -75,6 +78,8 @@ export default function WorkspaceSources({
   busy,
   onUploadFloorPlan,
   onUseCrowdEstimate,
+  onUseLiveCrowdEstimate,
+  liveBlockedReason,
   children,
 }: WorkspaceSourcesProps) {
   const [images, setImages] = useState<ImagePreview[]>([]);
@@ -309,6 +314,7 @@ export default function WorkspaceSources({
           {images.length > 0 ? <span className={styles.imageCount}>{images.length}</span> : <span className={styles.sectionNumber}>02</span>}
         </div>
         <p className={styles.sectionDescription}>Add a view of your venue to set the starting crowd.</p>
+        <LiveCrowdFeed busy={disabled} blockedReason={liveBlockedReason} onUseCrowdEstimate={onUseLiveCrowdEstimate} />
         <input
           ref={fileInput}
           className={styles.fileInput}

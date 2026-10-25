@@ -772,6 +772,14 @@ export default function Workspace({
               ownerId={ownerId}
               isSample={isSample}
               busy={busy}
+              liveBlockedReason={baseline ? "Clear the pinned baseline to update the starting crowd from this feed." : mode !== "layout" ? "Return to Layout to apply live crowd updates." : ""}
+              onUseLiveCrowdEstimate={(occupancy) => {
+                if (busy || baseline || mode !== "layout" || occupancy < 1 || occupancy > 200) return;
+                setScenario((current) => current.occupancy === occupancy && !Object.keys(current.population?.roomCounts ?? {}).length
+                  ? current
+                  : { ...current, occupancy, population: { ...current.population, roomCounts: {} } });
+                setNotice(`Live venue crowd: ${occupancy} people. Review the estimate before running.`);
+              }}
               onUploadFloorPlan={() => {
                 setCalibratingExisting(false);
                 setPendingCalibration(null);
