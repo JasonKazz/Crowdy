@@ -111,15 +111,17 @@ docker run --rm --platform linux/amd64 --network none \
 import os
 from app.config import Settings
 from app.estimator import CrowdEstimator
+from app.density import DensityEstimator
 from app.images import InvalidImage, decode_image
 from app.main import create_app
 if os.geteuid() == 0:
     raise SystemExit("The crowd-estimation image must run as a non-root user.")
 settings = Settings.from_env()
-with settings.model_path.open("rb") as weights:
+model_path = settings.density_model_path if settings.method == "density" else settings.model_path
+with model_path.open("rb") as weights:
     if not weights.read(1):
         raise SystemExit("The baked model weights are empty.")
-estimator = CrowdEstimator(settings)
+estimator = DensityEstimator(settings) if settings.method == "density" else CrowdEstimator(settings)
 create_app(settings=settings, estimator=estimator)
 estimator.load()
 if not estimator.ready:
