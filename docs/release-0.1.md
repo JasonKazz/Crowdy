@@ -79,6 +79,14 @@ complete evacuation time. The UI reports **Incomplete**, remaining people and
 the time limit. Complete forecasts at this density need further engine/runtime
 work. A continuous fresh camera feed is required while a long live job runs.
 
+The actual Azure deployment was also tested through Vercel's public proxy.
+The 24-person POFA run completed in 24.71 simulated seconds with 24 actual
+door crossings. The 5,000-person job returned in 124.52 wall seconds, retaining
+all 5,000 people in a 2.03 MB payload. It reached its 120-second processing
+limit after 12.38 simulated seconds: 505 evacuated, 4,495 still moving,
+zero trapped, and no complete clearance time. Deployment hardware is slower
+than the local benchmark, so this production result is the relevant demo limit.
+
 The backend has a 120-second native work budget; browser job transport has a
 180-second deadline. A density inference call is not forcibly interrupted:
 the 25-second service budget invalidates late results after the native call

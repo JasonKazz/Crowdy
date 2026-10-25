@@ -29,6 +29,7 @@ COPY THIRD_PARTY_NOTICES.md ./THIRD_PARTY_NOTICES.md
 RUN chmod -R u=rwX,go=rX app \
     && python -m app.download_model --output models \
     && python -m app.download_model --model yolo26n.pt --output models \
+    && chmod -R u=rwX,go=rX models \
     && useradd --create-home --uid 10001 crowdy \
     && rm -rf /tmp/ultralytics /tmp/matplotlib
 USER crowdy

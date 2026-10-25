@@ -2,7 +2,7 @@
 // AUTH_TEST_BASE_URL can target another app origin. Secrets and cookie values
 // stay in memory. These checks use synthetic encrypted sessions, create no Auth0
 // users, and never follow authorization/logout redirects to the provider.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { generateSessionCookie } from "@auth0/nextjs-auth0/testing";
 
@@ -11,6 +11,8 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 let stage = "configuration";
 let passed = 0;
+const version = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+const expectedFooter = `Crowdy v${version} · Cal Hacks 13.0`;
 
 function check(condition, message) {
   if (!condition) throw new Error(message);
@@ -75,10 +77,10 @@ function checkWorkspaceChrome(html) {
   ];
   check(footers.length > 0, "The page must render a footer.");
   // Streaming can include both a fallback and a completed footer. Both must
-  // contain only the requested credit; visual centering is checked in-browser.
+  // identify the released version and credit; visual centering is checked in-browser.
   check(
-    footers.every((footer) => markupText(footer[1]) === "Cal Hacks 13.0"),
-    "Each footer must contain only the Cal Hacks credit, without separators or a tagline.",
+    footers.every((footer) => markupText(footer[1]) === expectedFooter),
+    "Each footer must show the current Crowdy version and Cal Hacks credit.",
   );
   return text;
 }
