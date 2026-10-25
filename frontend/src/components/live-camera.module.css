@@ -1,5 +1,6 @@
 .page { min-height: 100dvh; background: var(--paper); color: var(--ink); padding: 0 24px; }
 .header { max-width: 1000px; margin: auto; min-height: 82px; display: flex; justify-content: space-between; align-items: center; gap: 16px; border-bottom: 1px solid var(--line); }
+.headerActions { display: flex; align-items: center; gap: 12px; }
 .wordmark { display: flex; align-items: center; gap: 10px; }
 .wordmark > span:last-child { font-size: 14px; font-weight: 400; color: var(--muted); letter-spacing: -.5px; }
 .eyebrow { display: flex; align-items: center; gap: 8px; font-family: var(--font-ibm-mono), monospace; font-size: 9px; letter-spacing: 1.3px; color: #a47959; }
@@ -40,4 +41,33 @@
 .privacy { font-size: 10px; line-height: 1.8; color: var(--muted); margin-top: 16px; }
 .footer { max-width: 1000px; margin: 50px auto 0; border-top: 1px solid var(--line); padding: 20px 0 26px; display: flex; justify-content: space-between; gap: 15px; color: var(--muted); font-size: 10px; }
 .footer span { font-family: var(--font-ibm-mono), monospace; font-size: 8px; letter-spacing: 1px; }
-@media (max-width: 540px) { .page { padding: 0 20px max(0px, env(safe-area-inset-bottom)); } .header { min-height: 70px; } .header > .eyebrow { font-size: 8px; letter-spacing: .7px; } .content { margin-top: 30px; } .intro { margin-bottom: 22px; } .viewfinder { aspect-ratio: 1; } .footer { margin-top: 34px; flex-direction: column; gap: 8px; } }
+@media (max-width: 540px) { .page { padding: 0 20px max(0px, env(safe-area-inset-bottom)); } .header { min-height: 70px; } .headerActions { gap: 8px; } .headerActions .eyebrow { font-size: 8px; letter-spacing: .7px; } .content { margin-top: 30px; } .intro { margin-bottom: 22px; } .viewfinder { aspect-ratio: 1; } .footer { margin-top: 34px; flex-direction: column; gap: 8px; } }
+@media (max-width: 380px) { .wordmark > span:last-child { display: none; } .headerActions .eyebrow { font-size: 7px; letter-spacing: .35px; } }
+
+:global([data-theme="dark"]) .eyebrow,
+:global([data-theme="dark"]) .facts > div {
+  color: var(--muted);
+}
+:global([data-theme="dark"]) .intro h1 span {
+  color: var(--accent);
+}
+:global([data-theme="dark"]) .start {
+  color: var(--on-accent);
+  background: var(--accent-fill);
+}
+:global([data-theme="dark"]) .start:hover:not(:disabled) {
+  background: var(--accent-fill-hover);
+}
+:global([data-theme="dark"]) .pause {
+  color: var(--ink-soft);
+  background: var(--control);
+  border-color: var(--line);
+}
+:global([data-theme="dark"]) .facts span {
+  color: var(--ink-soft);
+}
+:global([data-theme="dark"]) .error {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border-color: var(--danger-line);
+}

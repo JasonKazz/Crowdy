@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import AuthControls from "./auth-controls";
 import BrandLogo from "./brand-logo";
 import Icon from "./icon";
+import ThemeToggle from "./theme-toggle";
 
 export default function AppHeader({
   workspaceName,
@@ -59,6 +60,7 @@ export default function AppHeader({
             <Icon name="help" />
           </button>
         )}
+        <ThemeToggle />
         <AuthControls />
       </div>
     </header>

@@ -36,3 +36,39 @@
 .message, .error { margin-top: 8px; padding: 8px 9px; border-radius: 4px; font-size: 10px; line-height: 1.6; background: #f8f3e5; color: #846b43; }
 .error { background: #fbf0e8; border: 1px solid #ecd9cc; color: #945e43; overflow-wrap: anywhere; }
 @media (max-width: 700px) { .connect, .end, .links a, .links button, .reconnect { min-height: 44px; } }
+
+:global([data-theme="dark"]) .connect,
+:global([data-theme="dark"]) .cameraIcon,
+:global([data-theme="dark"]) .card,
+:global([data-theme="dark"]) .reconnect {
+  border-color: var(--line);
+}
+:global([data-theme="dark"]) .connect:hover:not(:disabled),
+:global([data-theme="dark"]) .reconnect:hover:not(:disabled) {
+  background: var(--control-hover);
+  border-color: var(--accent);
+}
+:global([data-theme="dark"]) .card {
+  background: var(--surface-raised);
+}
+:global([data-theme="dark"]) .connect small,
+:global([data-theme="dark"]) .note {
+  color: var(--muted);
+}
+:global([data-theme="dark"]) .pairing > p,
+:global([data-theme="dark"]) .auto {
+  color: var(--ink-soft);
+}
+:global([data-theme="dark"]) .end,
+:global([data-theme="dark"]) .countRow > div {
+  color: var(--accent);
+}
+:global([data-theme="dark"]) .message {
+  color: var(--warning-text);
+  background: var(--warning-bg);
+}
+:global([data-theme="dark"]) .error {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border-color: var(--danger-line);
+}

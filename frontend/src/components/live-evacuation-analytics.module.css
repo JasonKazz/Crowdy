@@ -63,3 +63,64 @@
 @media (max-width: 1180px) { .root { padding: 18px; } .body { grid-template-columns: minmax(0, 1fr) 225px; gap: 12px; } .metric { padding: 14px; } .metric > p { font-size: 27px; } .primaryMetric > p { font-size: 33px; } }
 @media (max-width: 980px) { .body { grid-template-columns: 1fr; } .camera { grid-row: 1; } .metrics { grid-template-columns: 1fr 1.4fr; } .metric:last-child { grid-column: 1/-1; border-left: 0; border-top: 1px solid var(--line); } }
 @media (max-width: 600px) { .root { padding: 16px 12px; } .metrics { grid-template-columns: 1fr; } .metric + .metric { border-top: 1px solid var(--line); border-left: 0; } .metric { padding: 15px; } .metric > p { margin-top: 8px; } .body { gap: 14px; } .toggle { width: 40px; height: 40px; } .sectionTop { flex-wrap: wrap; } .density span { display: none; } .empty { min-height: 280px; } }
+
+:global([data-theme="dark"]) .toggle {
+  background: var(--accent-pale);
+}
+:global([data-theme="dark"]) .toggle:hover {
+  background: var(--control-hover);
+}
+:global([data-theme="dark"]) .metric > p,
+:global([data-theme="dark"]) .exits strong,
+:global([data-theme="dark"]) .emptyLabel h4,
+:global([data-theme="dark"]) .history td {
+  color: var(--ink-soft);
+}
+:global([data-theme="dark"]) .primaryMetric > p {
+  color: var(--accent);
+}
+:global([data-theme="dark"]) .current {
+  color: var(--success-text);
+  background: var(--success-bg);
+  border-color: var(--success-line);
+}
+:global([data-theme="dark"]) .previous,
+:global([data-theme="dark"]) .outdated {
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  border-color: var(--warning-line);
+}
+:global([data-theme="dark"]) .forecast,
+:global([data-theme="dark"]) .camera {
+  background: var(--surface);
+}
+:global([data-theme="dark"]) .error {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border-color: var(--danger-line);
+}
+:global([data-theme="dark"]) .plan,
+:global([data-theme="dark"]) .empty {
+  background: var(--canvas);
+}
+:global([data-theme="dark"]) .play {
+  background: var(--control);
+}
+:global([data-theme="dark"]) .exits > div {
+  color: var(--muted);
+  border-color: var(--line);
+}
+:global([data-theme="dark"]) .cameraTag {
+  color: var(--muted);
+}
+:global([data-theme="dark"]) .emptyLabel {
+  background: color-mix(in srgb, var(--paper) 60%, transparent);
+}
+:global([data-theme="dark"]) .emptyLabel > span {
+  color: var(--accent);
+  background: var(--accent-pale);
+  border-color: var(--line);
+}
+:global([data-theme="dark"]) .history td {
+  border-color: var(--line);
+}

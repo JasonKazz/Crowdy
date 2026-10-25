@@ -221,3 +221,41 @@
     transition: none;
   }
 }
+
+:global([data-theme="dark"]) .signIn,
+:global([data-theme="dark"]) .accountButton {
+  color: var(--ink-soft);
+}
+
+:global([data-theme="dark"]) .signIn:hover,
+:global([data-theme="dark"]) .accountButton:hover {
+  color: var(--accent-dark);
+}
+
+:global([data-theme="dark"]) .createAccount:hover,
+:global([data-theme="dark"]) .accountButton:hover,
+:global([data-theme="dark"]) .signOut:hover {
+  background: var(--control-hover);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .loadingAvatar {
+  background: var(--control);
+}
+
+:global([data-theme="dark"]) .error {
+  color: var(--warning-text);
+}
+
+:global([data-theme="dark"]) .avatar {
+  background: var(--accent-pale);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .menu {
+  box-shadow: 0 8px 28px #0005;
+}
+
+:global([data-theme="dark"]) .storageNote {
+  border-color: var(--line);
+}

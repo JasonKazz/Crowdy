@@ -56,7 +56,7 @@ function PlanPreview({
             height="18"
             patternUnits="userSpaceOnUse"
           >
-            <circle cx="1" cy="1" r="0.65" fill="#cfd7c5" />
+            <circle cx="1" cy="1" r="0.65" fill="var(--plan-guide, #cfd7c5)" />
           </pattern>
         </defs>
         <rect
@@ -66,11 +66,11 @@ function PlanPreview({
           height="510"
           fill={`url(#workspace-grid-${pattern})`}
         />
-        <rect x="80" y="90" width="740" height="420" fill="#fcfdf9" />
+        <rect x="80" y="90" width="740" height="420" fill="var(--plan-floor, #fcfdf9)" />
         {sample && (
           <>
-            <rect x="610" y="90" width="210" height="145" fill="#f1f4eb" />
-            <rect x="565" y="355" width="248" height="148" fill="#f4f3eb" />
+            <rect x="610" y="90" width="210" height="145" fill="var(--plan-room, #f1f4eb)" />
+            <rect x="565" y="355" width="248" height="148" fill="var(--plan-lounge, #f4f3eb)" />
           </>
         )}
         {plan.items.map((item) => (
@@ -97,12 +97,12 @@ function PlanPreview({
                   rx={item.kind === "table" ? 12 : item.kind === "sofa" ? 6 : 2}
                   fill={
                     item.kind === "sofa"
-                      ? "#dce4d0"
+                      ? "var(--plan-sofa, #dce4d0)"
                       : item.kind === "obstacle"
-                        ? "#e6d9c8"
-                        : "#eae5d8"
+                        ? "var(--plan-furniture, #e6d9c8)"
+                        : "var(--plan-furniture, #eae5d8)"
                   }
-                  stroke={item.kind === "sofa" ? "#a6b696" : "#bdb7a8"}
+                  stroke={item.kind === "sofa" ? "var(--plan-seat-stroke, #a6b696)" : "var(--plan-furniture-stroke, #bdb7a8)"}
                   strokeWidth="1.5"
                 />
                 {item.kind === "desk" && (
@@ -113,12 +113,12 @@ function PlanPreview({
                       width="34"
                       height="15"
                       rx="2"
-                      fill="#d1dbce"
-                      stroke="#a5b19d"
+                      fill="var(--plan-seat, #d1dbce)"
+                      stroke="var(--plan-seat-stroke, #a5b19d)"
                     />
                     <path
                       d={`M${item.width / 2} 22v6m-7 0h14`}
-                      stroke="#a5b19d"
+                      stroke="var(--plan-seat-stroke, #a5b19d)"
                     />
                     <rect
                       x={item.width / 2 - 10}
@@ -126,8 +126,8 @@ function PlanPreview({
                       width="20"
                       height="18"
                       rx="5"
-                      fill="#edf0e6"
-                      stroke="#b7c0ac"
+                      fill="var(--plan-seat, #edf0e6)"
+                      stroke="var(--plan-seat-stroke, #b7c0ac)"
                     />
                   </>
                 )}
@@ -140,8 +140,8 @@ function PlanPreview({
                         width="16"
                         height="16"
                         rx="4"
-                        fill="#edf0e6"
-                        stroke="#b7c0ac"
+                        fill="var(--plan-seat, #edf0e6)"
+                        stroke="var(--plan-seat-stroke, #b7c0ac)"
                       />
                       <rect
                         x={x - 8}
@@ -149,8 +149,8 @@ function PlanPreview({
                         width="16"
                         height="16"
                         rx="4"
-                        fill="#edf0e6"
-                        stroke="#b7c0ac"
+                        fill="var(--plan-seat, #edf0e6)"
+                        stroke="var(--plan-seat-stroke, #b7c0ac)"
                       />
                     </g>
                   ))}
@@ -161,7 +161,7 @@ function PlanPreview({
                         ? `M${item.width / 3} 3v${item.height - 6}m${item.width / 3} ${-item.height + 6}v${item.height - 6}`
                         : `M3 ${item.height / 3}h${item.width - 6}M3 ${(item.height * 2) / 3}h${item.width - 6}`
                     }
-                    stroke="#b7b298"
+                    stroke="var(--plan-furniture-stroke, #b7b298)"
                     strokeWidth="3"
                   />
                 )}
@@ -169,7 +169,7 @@ function PlanPreview({
             )}
           </g>
         ))}
-        <g stroke="#727d65" strokeWidth="7" fill="none" strokeLinecap="square">
+        <g stroke="var(--plan-wall, #727d65)" strokeWidth="7" fill="none" strokeLinecap="square">
           {plan.walls.map((wall, index) => (
             <path
               key={index}

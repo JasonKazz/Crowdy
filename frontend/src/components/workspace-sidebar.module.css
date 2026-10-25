@@ -306,3 +306,48 @@
     border-right: 1px solid var(--line);
   }
 }
+
+:global([data-theme="dark"]) .headingIcon {
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .tabs {
+  background: var(--control);
+}
+
+:global([data-theme="dark"]) .tabs .tab,
+:global([data-theme="dark"]) .editingPanel :global(.source-image-controls) label,
+:global([data-theme="dark"]) .editingPanel :global(.occupancy-label),
+:global([data-theme="dark"]) .editingPanel :global(.field-label) {
+  color: var(--muted);
+}
+
+:global([data-theme="dark"]) .tabs .tab:hover {
+  color: var(--accent-dark);
+  background: var(--control-hover);
+}
+
+:global([data-theme="dark"]) .tabs .tab[aria-selected="true"] {
+  color: var(--accent);
+  border-color: var(--line);
+  background: var(--surface-raised);
+  box-shadow: 0 2px 4px #0002;
+}
+
+:global([data-theme="dark"]) .sidebar .panel {
+  scrollbar-color: var(--line) transparent;
+}
+
+:global([data-theme="dark"]) .editingPanel :global(.setup-section) {
+  background: var(--surface);
+}
+
+:global([data-theme="dark"]) .editingPanel :global(.section-heading) > svg:first-child {
+  color: var(--accent);
+}
+
+:global([data-theme="dark"]) .editingPanel :global(.scenario-section) fieldset > input[type="number"],
+:global([data-theme="dark"]) .editingPanel :global(.select-wrap) select {
+  color: var(--ink-soft);
+  background: var(--field);
+}

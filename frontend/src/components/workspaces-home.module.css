@@ -625,3 +625,71 @@
     transition: none;
   }
 }
+
+:global([data-theme="dark"]) .intro {
+  border-color: #51382b;
+  background: linear-gradient(110deg, #211d19 30%, #302219);
+}
+
+:global([data-theme="dark"]) :is(.orbit, .orbitInner) {
+  border-color: #c8864e26;
+}
+
+:global([data-theme="dark"]) .card {
+  background: var(--surface);
+}
+
+:global([data-theme="dark"]) .card:hover {
+  border-color: #82604c;
+  box-shadow: 0 8px 24px #0003;
+}
+
+:global([data-theme="dark"]) .preview {
+  background: var(--canvas);
+}
+
+:global([data-theme="dark"]) .sampleBadge {
+  color: var(--ink-soft);
+  background: #29231ff2;
+}
+
+:global([data-theme="dark"]) .newCard {
+  background: #211c17;
+  border-color: #594334;
+}
+
+:global([data-theme="dark"]) .newCard:hover {
+  background: var(--accent-pale);
+  border-color: var(--accent);
+}
+
+:global([data-theme="dark"]) :is(.nameInput, .template) {
+  background: var(--field);
+}
+
+:global([data-theme="dark"]) .selectedTemplate {
+  border-color: var(--accent);
+}
+
+:global([data-theme="dark"]) :is(.storageError, .formError) {
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  border-color: var(--warning-line);
+}
+
+:global([data-theme="dark"]) .storageError p {
+  color: var(--warning-text);
+}
+
+:global([data-theme="dark"]) .deleteButton:hover {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+}
+
+:global([data-theme="dark"]) .dialog {
+  box-shadow: 0 16px 80px #0008;
+}
+
+:global([data-theme="dark"]) .dialog::backdrop {
+  background: #0009;
+}

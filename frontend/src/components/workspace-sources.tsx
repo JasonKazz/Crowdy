@@ -44,24 +44,24 @@ function PlanThumbnail({ plan }: { plan: FloorPlan }) {
     >
       <defs>
         <pattern id={patternId} width="28" height="28" patternUnits="userSpaceOnUse">
-          <circle cx="1" cy="1" r="1.2" fill="#d5decb" />
+          <circle cx="1" cy="1" r="1.2" fill="var(--plan-guide, #d5decb)" />
         </pattern>
       </defs>
       <rect width={plan.width} height={plan.height} fill={`url(#${patternId})`} />
       {plan.native?.floors.map((points, index) => (
-        <polygon key={`floor-${index}`} points={points.map((point) => `${point.x},${point.y}`).join(" ")} fill="#fcfdf8" />
+        <polygon key={`floor-${index}`} points={points.map((point) => `${point.x},${point.y}`).join(" ")} fill="var(--plan-floor, #fcfdf8)" />
       ))}
       {plan.items.map((item) => item.polygon ? (
-        <polygon key={item.id} points={item.polygon.map((point) => `${item.x + point.x * item.width},${item.y + point.y * item.height}`).join(" ")} fill="#dce3d3" stroke="#aab79b" strokeWidth="2" />
+        <polygon key={item.id} points={item.polygon.map((point) => `${item.x + point.x * item.width},${item.y + point.y * item.height}`).join(" ")} fill="var(--plan-furniture, #dce3d3)" stroke="var(--plan-furniture-stroke, #aab79b)" strokeWidth="2" />
       ) : (
-        <rect key={item.id} x={item.x} y={item.y} width={item.width} height={item.height} rx={item.kind === "plant" ? 12 : 3} fill={item.kind === "plant" ? "#a0b18e" : "#e4e6d9"} stroke="#aab79b" strokeWidth="2" />
+        <rect key={item.id} x={item.x} y={item.y} width={item.width} height={item.height} rx={item.kind === "plant" ? 12 : 3} fill={item.kind === "plant" ? "#a0b18e" : "var(--plan-furniture, #e4e6d9)"} stroke="var(--plan-furniture-stroke, #aab79b)" strokeWidth="2" />
       ))}
-      <g stroke="#6a7a60" strokeWidth="7" strokeLinecap="square">
+      <g stroke="var(--plan-wall, #6a7a60)" strokeWidth="7" strokeLinecap="square">
         {plan.walls.map((wall, index) => (
           <line key={`wall-${index}`} x1={wall.x1} y1={wall.y1} x2={wall.x2} y2={wall.y2} />
         ))}
         {plan.native?.walls.map((points, index) => (
-          <polygon key={`native-${index}`} points={points.map((point) => `${point.x},${point.y}`).join(" ")} fill="#6a7a60" strokeWidth="0" />
+          <polygon key={`native-${index}`} points={points.map((point) => `${point.x},${point.y}`).join(" ")} fill="var(--plan-wall, #6a7a60)" strokeWidth="0" />
         ))}
       </g>
       {plan.exits.map((exit) => (

@@ -38,8 +38,22 @@
   top: -30.315%;
 }
 
+:global([data-theme="dark"]) .logo {
+  mix-blend-mode: normal;
+}
+
+:global([data-theme="dark"]) .logo > img {
+  filter: url(#crowdy-logo-cutout);
+}
+
 @media (max-width: 700px) {
   .wordmark {
     width: 118px;
+  }
+}
+
+@media (max-width: 380px) {
+  .wordmark {
+    width: 96px;
   }
 }

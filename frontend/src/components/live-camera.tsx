@@ -9,6 +9,7 @@ import {
 import { cameraErrorMessage, captureLiveFrame, LIVE_FRAME_INTERVAL_MS } from "@/lib/live-camera";
 import Icon from "./icon";
 import BrandLogo from "./brand-logo";
+import ThemeToggle from "./theme-toggle";
 import styles from "./live-camera.module.css";
 
 type Credentials = { session: string; token: string };
@@ -207,7 +208,13 @@ export default function LiveCamera() {
   const capturing = phase === "live";
   return (
     <main className={styles.page}>
-      <header className={styles.header}><Link href="/" className={styles.wordmark} aria-label="Crowdy home"><BrandLogo preload /><span> / live</span></Link><span className={styles.eyebrow}><span className={capturing ? styles.liveDot : styles.idleDot} />{capturing ? "CAMERA CONNECTED" : "VENUE CAMERA"}</span></header>
+      <header className={styles.header}>
+        <Link href="/" className={styles.wordmark} aria-label="Crowdy home"><BrandLogo preload /><span> / live</span></Link>
+        <div className={styles.headerActions}>
+          <ThemeToggle />
+          <span className={styles.eyebrow}><span className={capturing ? styles.liveDot : styles.idleDot} />{capturing ? "CAMERA CONNECTED" : "VENUE CAMERA"}</span>
+        </div>
+      </header>
       <div className={styles.content}>
         <div className={styles.intro}><span className={styles.eyebrow}>YOUR PHONE. A LIVE HEADCOUNT.</span><h1>See the crowd.<br /><span>Plan with the present.</span></h1><p>Point your camera at the venue. Live estimates appear in your Crowdy workspace.</p></div>
         <div className={styles.viewfinder}>

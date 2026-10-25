@@ -432,3 +432,88 @@
     transition: none;
   }
 }
+
+:global([data-theme="dark"]) .sectionIcon,
+:global([data-theme="dark"]) .uploadIcon {
+  color: var(--accent);
+}
+
+:global([data-theme="dark"]) .imageCount,
+:global([data-theme="dark"]) .planTag,
+:global([data-theme="dark"]) .estimateTop > span:first-child,
+:global([data-theme="dark"]) .previewBadge,
+:global([data-theme="dark"]) .estimateNumber span,
+:global([data-theme="dark"]) .estimateNote {
+  color: var(--muted);
+}
+
+:global([data-theme="dark"]) .imageCount,
+:global([data-theme="dark"]) .thumbnail {
+  background: var(--control);
+}
+
+:global([data-theme="dark"]) .planPreview {
+  background: var(--canvas);
+}
+
+:global([data-theme="dark"]) .planTag,
+:global([data-theme="dark"]) .previewBadge {
+  background: var(--surface-raised);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .planFacts > div + div {
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .planFacts dd,
+:global([data-theme="dark"]) .imageDetails p {
+  color: var(--ink-soft);
+}
+
+:global([data-theme="dark"]) .planButton,
+:global([data-theme="dark"]) .dropArea {
+  background: var(--control);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .planButton:hover:not(:disabled),
+:global([data-theme="dark"]) .dropArea:hover:not(.dropDisabled),
+:global([data-theme="dark"]) .dragging {
+  background: var(--control-hover);
+  border-color: var(--accent);
+}
+
+:global([data-theme="dark"]) .uploadIcon {
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .removeButton:hover:not(:disabled) {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+}
+
+:global([data-theme="dark"]) .estimateCard {
+  background: var(--accent-pale);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .estimateButton {
+  background: var(--control);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .estimateButton:hover:not(:disabled) {
+  background: var(--control-hover);
+  border-color: var(--accent);
+}
+
+:global([data-theme="dark"]) .error {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border-color: var(--danger-line);
+}
+
+:global([data-theme="dark"]) .status {
+  color: var(--success-text);
+}

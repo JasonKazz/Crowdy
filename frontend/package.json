@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:theme": "node --experimental-strip-types scripts/check-theme.mjs",
     "test:simulation": "node --experimental-strip-types scripts/check-simulation.mjs",
     "test:backend-simulation": "node --experimental-strip-types scripts/check-backend-simulation.mjs",
     "test:backend-api": "node --experimental-strip-types scripts/check-backend-api.mjs",
