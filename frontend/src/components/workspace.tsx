@@ -18,6 +18,7 @@ import WorkspaceSidebar from "./workspace-sidebar";
 import WorkspaceSources from "./workspace-sources";
 import {nativeLayout, type GeometrySelection, type GeometryTool} from "@/lib/native-editor";
 import { IMAGE_UPLOAD_SIZE_ERROR, prepareImageUpload } from "@/lib/image-upload";
+import pofaVerifiedDemo from "@/lib/demos/pofa-verified.json";
 import {
   SAMPLE_PLAN,
   getEvacuatedCount,
@@ -453,6 +454,12 @@ export default function Workspace({
       acceptImport(data);
     } catch(cause){setError(cause instanceof Error?cause.message:"Could not apply the measurement.");}
     finally{setBusy(false);}
+  }
+  function loadPofaDemo() {
+    if (busy) return;
+    acceptImport(pofaVerifiedDemo);
+    setScenario({occupancy:24,mobility:"standard",distribution:"normal",seed:42,bodyWidth:.46,behaviorMode:"idealized",blockedExitIds:[],population:{}});
+    setNotice("Verified POFA demo loaded: 15 mapped exits and 24 people. Uses the saved 100 m demo measurement; Edit scale to change it.");
   }
   async function checkLayout() {
     if(busy||!plan.native)return;
@@ -1727,6 +1734,10 @@ export default function Workspace({
               Import a frontend or backend Crowdy JSON layout, or extract an image.
               Uploading replaces your layout; Undo restores it. Imported furniture stays editable.
             </p>
+            <button className="button secondary" disabled={busy} onClick={loadPofaDemo}>
+              Load verified POFA demo
+            </button>
+            <p className="muted">Saved layout with 15 mapped exits, 24 people, and the 100 m demo measurement. Opens without a new AI extraction.</p>
             <label className="field-label" htmlFor="image-provider">Image extraction provider</label>
             <select id="image-provider" value={imageProvider} disabled={busy}
               aria-describedby={`image-provider-status${providerStatus[imageProvider]?.model ? " image-provider-model" : ""}${imageProvider === "gemini" && providerStatus.claude?.configured ? " image-provider-review" : ""}`}
