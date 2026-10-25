@@ -54,7 +54,9 @@ class EditorAdapterTests(unittest.TestCase):
             self.assertAlmostEqual(Polygon(exit.polygon).bounds[3] - Polygon(exit.polygon).bounds[1], 1.98)
 
     def test_86_person_queue_recovers_without_walking_to_back_of_line(self):
-        payload = copy.deepcopy(SAMPLE)
+        # Keep the original wide-door queue fixture: the smaller Berkeley
+        # sample has its own single-file passage and full-evacuation checks.
+        payload = json.loads((Path(__file__).parent / "fixtures/editor-wide-queue.json").read_text())
         payload['scenario']['occupancy'] = 86
         result = run_simulation(editor_to_scenario(payload['plan'], payload['scenario']))
         self.assertEqual(result['summary']['evacuated_count'], 86)

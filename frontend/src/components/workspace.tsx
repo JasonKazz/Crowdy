@@ -86,6 +86,12 @@ function WorkspaceContent({
   const router = useRouter();
   const viewId = useId();
   const [plan, setPlan] = useState<FloorPlan>(() => clonePlan(initialPlan));
+  const itemBounds = plan.id === SAMPLE_PLAN.id && plan.walls.length ? {
+    left: Math.min(...plan.walls.flatMap(wall => [wall.x1, wall.x2])) + 4,
+    right: Math.max(...plan.walls.flatMap(wall => [wall.x1, wall.x2])) - 4,
+    top: Math.min(...plan.walls.flatMap(wall => [wall.y1, wall.y2])) + 4,
+    bottom: Math.max(...plan.walls.flatMap(wall => [wall.y1, wall.y2])) - 4,
+  } : {left: 0, right: plan.width, top: 0, bottom: plan.height};
   const [scenario, setScenario] = useState<Scenario>(() => ({
     ...initialScenario,
     distribution: initialScenario.distribution === "rooms" || initialScenario.distribution === "workstations" ? "normal" : initialScenario.distribution,
@@ -403,14 +409,13 @@ function WorkspaceContent({
   function moveItem(id: string, x: number, y: number) {
     const item = plan.items.find((item) => item.id === id);
     if (!item) return;
-    const sample = plan.id === SAMPLE_PLAN.id;
     const nextX = Math.max(
-      sample ? 84 : 0,
-      Math.min((sample ? 816 : plan.width) - item.width, Math.round(x)),
+      itemBounds.left,
+      Math.min(itemBounds.right - item.width, Math.round(x)),
     );
     const nextY = Math.max(
-      sample ? 94 : 0,
-      Math.min((sample ? 506 : plan.height) - item.height, Math.round(y)),
+      itemBounds.top,
+      Math.min(itemBounds.bottom - item.height, Math.round(y)),
     );
     if (item.x === nextX && item.y === nextY) return;
     editPlan({
@@ -948,9 +953,9 @@ function WorkspaceContent({
                     <input
                       aria-label="Object X position"
                       type="number"
-                      min={plan.id === SAMPLE_PLAN.id ? 84 : 0}
+                      min={itemBounds.left}
                       max={
-                        (plan.id === SAMPLE_PLAN.id ? 816 : plan.width) -
+                        itemBounds.right -
                         selected.width
                       }
                       value={selected.x}
@@ -968,9 +973,9 @@ function WorkspaceContent({
                     <input
                       aria-label="Object Y position"
                       type="number"
-                      min={plan.id === SAMPLE_PLAN.id ? 94 : 0}
+                      min={itemBounds.top}
                       max={
-                        (plan.id === SAMPLE_PLAN.id ? 506 : plan.height) -
+                        itemBounds.bottom -
                         selected.height
                       }
                       value={selected.y}
@@ -1076,7 +1081,7 @@ function WorkspaceContent({
                 onChange={event => {const width=Number(event.target.value);if(Number.isInteger(width)&&width>=40&&width<=70)
                   setScenario({...scenario,bodyWidth:width/100});}} />
               <p className="field-note">Shoulder width and collision diameter use the same size. Default: 46 cm.
-                {plan.id === SAMPLE_PLAN.id && !plan.native ? " Sample exits are 1.75 m wide, so two abreast can fit in these wide openings." : " Check the drawing’s scale if doors look too wide."}</p>
+                {plan.id === SAMPLE_PLAN.id && plan.area === 76 && !plan.native ? " Sample exits are 0.875 m wide, so people pass single file at the default body width." : " Check the drawing’s scale if doors look too wide."}</p>
               <label className="field-label" htmlFor="mobility">
                 Walking profile
               </label>

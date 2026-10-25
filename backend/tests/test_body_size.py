@@ -6,10 +6,11 @@ import unittest
 from pathlib import Path
 
 from pydantic import ValidationError
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
 
 from app import api
 from app.schemas.layout import Layout
+from app.schemas.scenario import Occupant
 from app.services.floorplans.layout import compile_layout
 from app.simulation.editor_adapter import editor_to_scenario
 from app.simulation.engine import run_simulation
@@ -66,10 +67,51 @@ class BodySizeTests(unittest.TestCase):
                             distance=min(sum((p[i]-b.start[i])*b.outward[i] for i in range(2)) for p in exit.polygon)
                             self.assertAlmostEqual(distance,width/2+.02)
 
-    def test_sample_doorways_are_wide_not_standard_single_doors(self):
+    def test_sample_scale_keeps_real_bodies_and_single_door_openings(self):
         scenario=editor_to_scenario(SAMPLE["plan"],SAMPLE["scenario"])
         self.assertEqual(scenario.agent_defaults.radius,.23)
-        self.assertEqual([math.dist(b.start,b.end) for b in scenario.exit_boundaries],[1.75,1.75])
+        self.assertAlmostEqual(Polygon(scenario.walkable_areas[0].polygon).area,75.87890625)
+        self.assertEqual([math.dist(b.start,b.end) for b in scenario.exit_boundaries],[.875,.875])
+        self.assertLess(.875,4*scenario.agent_defaults.radius,
+                        "Two unchanged 46 cm bodies cannot cross this doorway abreast")
+
+    def test_sample_doorway_crossings_are_single_file_and_precede_removal(self):
+        scenario=editor_to_scenario(SAMPLE["plan"],{**SAMPLE["scenario"],"occupancy":2})
+        boundary=next(b for b in scenario.exit_boundaries if b.id=="exit-a")
+        x=boundary.start[0];y=(boundary.start[1]+boundary.end[1])/2
+        scenario.occupants=[Occupant(id="a",position=(x+1,y-.3)),
+                            Occupant(id="b",position=(x+1,y+.3))]
+        scenario.settings.sample_interval=.01
+        result=run_simulation(scenario)
+        self.assertEqual(result["status"],"completed")
+        simultaneous=max(sum(abs(p["x"]-x)<.025 for p in frame["agents"])
+                         for frame in result["frames"])
+        self.assertEqual(simultaneous,1)
+        crossings={event["agent_id"]:event for event in result["door_crossings"]}
+        self.assertEqual(set(crossings),{"a","b"})
+        for event in result["evacuations"]:
+            self.assertEqual(event["exit_id"],"exit-a")
+            self.assertLessEqual(crossings[event["agent_id"]]["time"],event["time"])
+
+    def test_sample_eighty_person_run_clears_furniture_and_both_doors(self):
+        scenario=editor_to_scenario(SAMPLE["plan"],{**SAMPLE["scenario"],"occupancy":80,"body_width":.46})
+        result=run_simulation(scenario)
+        self.assertEqual(result["status"],"completed")
+        self.assertEqual(result["summary"]["evacuated_count"],80)
+        self.assertEqual(result["summary"]["remaining_count"],0)
+        self.assertEqual(len({event["agent_id"] for event in result["door_crossings"]}),80)
+        self.assertTrue(all(count>0 for count in result["summary"]["per_exit_counts"].values()))
+        geometry=build_geometry(scenario)
+        for frame in result["frames"]:
+            for index,person in enumerate(frame["agents"]):
+                position=(person["x"],person["y"])
+                point=Point(position)
+                self.assertTrue(geometry.covers(point))
+                # Native movement can approach a corner within millimetres of
+                # the nominal radius; no frame may cut through an obstacle.
+                self.assertGreaterEqual(point.distance(geometry.boundary),.23-.01)
+                for other in frame["agents"][:index]:
+                    self.assertGreaterEqual(math.dist(position,(other["x"],other["y"])),.46-1e-6)
 
     def test_comparisons_reject_a_change_in_physical_body_size(self):
         payload=room_request()

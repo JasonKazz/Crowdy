@@ -42,10 +42,11 @@ function PlanPreview({
   sample?: boolean;
 }) {
   const pattern = useId().replaceAll(":", "");
+  const compact = plan.id === SAMPLE_PLAN.id && plan.area === 76;
   return (
     <div className={styles.preview}>
       <svg
-        viewBox="35 45 830 510"
+        viewBox={compact ? "242.5 172.5 415 255" : "35 45 830 510"}
         role="img"
         aria-label={`${plan.name} floor plan preview`}
       >
@@ -66,11 +67,11 @@ function PlanPreview({
           height="510"
           fill={`url(#workspace-grid-${pattern})`}
         />
-        <rect x="80" y="90" width="740" height="420" fill="var(--plan-floor, #fcfdf9)" />
-        {sample && (
+        <rect x={compact ? 265 : 80} y={compact ? 195 : 90} width={compact ? 370 : 740} height={compact ? 210 : 420} fill="var(--plan-floor, #fcfdf9)" />
+        {compact && (
           <>
-            <rect x="610" y="90" width="210" height="145" fill="var(--plan-room, #f1f4eb)" />
-            <rect x="565" y="355" width="248" height="148" fill="var(--plan-lounge, #f4f3eb)" />
+            <rect x="530" y="195" width="105" height="72.5" fill="var(--plan-room, #f1f4eb)" />
+            <rect x="507.5" y="327.5" width="124" height="74" fill="var(--plan-lounge, #f4f3eb)" />
           </>
         )}
         {plan.items.map((item) => (
@@ -107,19 +108,21 @@ function PlanPreview({
                 />
                 {item.kind === "desk" && (
                   <>
-                    <rect
-                      x={item.width / 2 - 17}
-                      y="7"
-                      width="34"
-                      height="15"
-                      rx="2"
-                      fill="var(--plan-seat, #d1dbce)"
-                      stroke="var(--plan-seat-stroke, #a5b19d)"
-                    />
-                    <path
-                      d={`M${item.width / 2} 22v6m-7 0h14`}
-                      stroke="var(--plan-seat-stroke, #a5b19d)"
-                    />
+                    <g transform={`translate(${item.width / 2} 0) scale(${Math.min(1, item.width / 110, item.height / 48)}) translate(${-item.width / 2} 0)`}>
+                      <rect
+                        x={item.width / 2 - 17}
+                        y="7"
+                        width="34"
+                        height="15"
+                        rx="2"
+                        fill="var(--plan-seat, #d1dbce)"
+                        stroke="var(--plan-seat-stroke, #a5b19d)"
+                      />
+                      <path
+                        d={`M${item.width / 2} 22v6m-7 0h14`}
+                        stroke="var(--plan-seat-stroke, #a5b19d)"
+                      />
+                    </g>
                     <rect
                       x={item.width / 2 - 10}
                       y={item.height + 5}
@@ -353,7 +356,21 @@ export default function WorkspacesHome() {
       if (!activeDialog.source && activeDialog.template === "empty") {
         plan.id = `empty-${crypto.randomUUID()}`;
         plan.items = [];
-        plan.walls = plan.walls.slice(0, 6);
+        // Keep the empty template's original envelope independent of the sample.
+        plan.area = 304;
+        plan.walls = [
+          {x1:80,y1:90,x2:820,y2:90},
+          {x1:80,y1:510,x2:820,y2:510},
+          {x1:80,y1:90,x2:80,y2:272},
+          {x1:80,y1:328,x2:80,y2:510},
+          {x1:820,y1:90,x2:820,y2:272},
+          {x1:820,y1:328,x2:820,y2:510},
+        ];
+        plan.exits = [
+          {id:"exit-a",label:"Exit A",x:80,y:300},
+          {id:"exit-b",label:"Exit B",x:820,y:300},
+        ];
+        plan.rooms = undefined;
       }
       const created = await createWorkspace(ownerId, {
         name: trimmedName,
