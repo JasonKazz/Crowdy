@@ -19,6 +19,7 @@ import httpx
 from dotenv import load_dotenv
 
 from app.schemas.extraction import ExtractedDrawing
+from app.services.floorplans.indexed_drawing import IndexedDrawing
 
 
 DEFAULT_MODELS = {"gemini": "gemini-3.8-flash", "claude": "claude-sonnet-5-5"}
@@ -267,7 +268,16 @@ def extraction_prompt(provider: str, width: int, height: int) -> str:
 
 def extract_drawing(provider: str, image: bytes, width: int, height: int, *, deadline: float | None = None) -> tuple[ExtractedDrawing, str]:
     options = {"deadline": deadline} if deadline is not None else {}
-    return extract_structured(provider, image, extraction_prompt(provider, width, height), ExtractedDrawing, **options)
+    prompt = (extraction_prompt(provider, width, height)
+        + "\nINTERIOR GEOMETRY WIRE FORMAT: return wall_runs instead of independent walls and doors. "
+        "Each run has ordered centerline points. Include the actual two jambs of each door as ADJACENT points "
+        "in that same run; the opening references their zero-based segment_index. This index is its parent "
+        "relationship, so never describe jamb coordinates separately or attach a room-front door to a nearby "
+        "corridor barrier. Follow actual corners/recesses with vertices, and split disconnected solid walls into "
+        "separate runs. Preserve real open passages. The existing instructions about walls/doors describe the "
+        "architecture; wall_runs is the representation to use in this response.")
+    drawing, model = extract_structured(provider, image, prompt, IndexedDrawing, **options)
+    return drawing.to_drawing(), model
 
 
 def gateway_text(response: dict) -> str:

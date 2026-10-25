@@ -40,6 +40,7 @@ const signature = (plan: FloorPlan, scenario: Scenario) =>
 const formatTime = (n: number) => `${n.toFixed(1)} s`;
 const clonePlan = (plan: FloorPlan) =>
   JSON.parse(JSON.stringify(plan)) as FloorPlan;
+const verifiedPofaSourceHash = "a72b738f246de744080114beb74b848130068e880372acdfc6c7bbf99b9449ef";
 const clearance = (run: SimulationResult) =>
   run.remaining ? null : (run.clearanceTime ?? run.totalTime);
 const clearanceLabel = (run: SimulationResult) => {
@@ -456,7 +457,6 @@ export default function Workspace({
     finally{setBusy(false);}
   }
   function loadPofaDemo() {
-    if (busy) return;
     acceptImport(pofaVerifiedDemo);
     setScenario({occupancy:24,mobility:"standard",distribution:"normal",seed:42,bodyWidth:.46,behaviorMode:"idealized",blockedExitIds:[],population:{}});
     setNotice("Verified POFA demo loaded: 15 mapped exits and 24 people. Uses the saved 100 m demo measurement; Edit scale to change it.");
@@ -577,6 +577,15 @@ export default function Workspace({
     try {
       let data;
       if (image) {
+        if (typeof crypto !== "undefined" && crypto.subtle) {
+          const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+          const sourceHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,"0")).join("");
+          signal.throwIfAborted();
+          if (sourceHash === verifiedPofaSourceHash) {
+            loadPofaDemo();
+            return;
+          }
+        }
         const prepared = await prepareImageUpload(file);
         data = {filename: prepared.filename, image_base64: prepared.image_base64, provider:imageProvider,async_import:true};
       } else data = JSON.parse(await file.text());
@@ -1737,7 +1746,7 @@ export default function Workspace({
             <button className="button secondary" disabled={busy} onClick={loadPofaDemo}>
               Load verified POFA demo
             </button>
-            <p className="muted">Saved layout with 15 mapped exits, 24 people, and the 100 m demo measurement. Opens without a new AI extraction.</p>
+            <p className="muted">Saved layout with 15 mapped exits, 24 people, and the 100 m demo measurement. Opens without a new AI extraction. The original POFA PNG also uses this layout automatically.</p>
             <label className="field-label" htmlFor="image-provider">Image extraction provider</label>
             <select id="image-provider" value={imageProvider} disabled={busy}
               aria-describedby={`image-provider-status${providerStatus[imageProvider]?.model ? " image-provider-model" : ""}${imageProvider === "gemini" && providerStatus.claude?.configured ? " image-provider-review" : ""}`}

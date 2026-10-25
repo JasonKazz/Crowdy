@@ -1,0 +1,49 @@
+{
+  "description": "Exact rejected production POFA parent relation from extraction331d5f091e474cbe8c9644fd6a90e1ee. Kept as source-coordinate evidence; no venue dimensions inferred.",
+  "provider": "gemini",
+  "source_size": [
+    2396,
+    1346
+  ],
+  "walls": [
+    {
+      "id": "wall_4",
+      "start": {
+        "x": 633.9999999999998,
+        "y": 386.0000000000001
+      },
+      "end": {
+        "x": 720.0,
+        "y": 444.0
+      },
+      "thickness": 4.0
+    }
+  ],
+  "doors": [
+    {
+      "id": "door_1",
+      "wall_id": "wall_4",
+      "start": {
+        "x": 651.0,
+        "y": 401.0
+      },
+      "end": {
+        "x": 662.0,
+        "y": 410.0
+      }
+    },
+    {
+      "id": "door_2",
+      "wall_id": "wall_4",
+      "start": {
+        "x": 680.0,
+        "y": 420.0
+      },
+      "end": {
+        "x": 691.0,
+        "y": 427.00000000000017
+      }
+    }
+  ],
+  "review_resolved": false
+}

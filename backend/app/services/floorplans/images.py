@@ -28,7 +28,7 @@ from app.services.floorplans.interactive import (
     review_interactive_structure, validate_interactive_observations,
 )
 from app.services.floorplans.interactive_exits import review_interactive_exits
-from app.services.floorplans.interactive_doors import review_interactive_doors
+from app.services.floorplans.interactive_doors import review_interactive_doors, validate_source_door_relationships
 from app.services.floorplans.calibration import calibrate, calibrate_drawing
 from app.services.floorplans.storage import read_artifact, write_artifact
 
@@ -389,6 +389,7 @@ def _extract_image(request: ExtractionRequest, root: Path, progress, *, mode: st
             check_extraction_time(deadline, cancelled)
             if mode == "interactive":
                 validate_interactive_observations(drawing)
+                validate_source_door_relationships(drawing, provider, (original.width_px, original.height_px))
             if request.meters_per_pixel is None:
                 source, reason = calibrate_drawing(original, drawing, provider)
                 if source is None:

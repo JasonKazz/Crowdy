@@ -62,6 +62,28 @@ def inconsistent_parents(drawing):
     return sorted(invalid)
 
 
+def validate_source_door_relationships(drawing, provider, size):
+    """Reject unresolved source geometry before asking for a measurement.
+
+    These checks use source pixels only. Physical doorway/body dimensions still
+    belong to the calibrated compiler and are not guessed from a default scale.
+    """
+    canonical = ExtractedDrawing.model_validate(to_pixels(drawing, provider, size))
+    walls = {wall.id: wall for wall in canonical.walls}
+    for door in canonical.doors:
+        wall = walls.get(door.wall_id)
+        if wall is None:
+            raise ValueError(f"Extracted door '{door.id}' has no matching wall. Retry extraction or correct its source observation.")
+        length = math.hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y)
+        if length < 1e-6:
+            raise ValueError(f"Extracted wall '{wall.id}' has no length. Retry extraction or correct its source observation.")
+        ux, uy = (wall.end.x - wall.start.x) / length, (wall.end.y - wall.start.y) / length
+        if any(abs((point.x - wall.start.x) * uy - (point.y - wall.start.y) * ux) > wall.thickness / 2 + 2
+               for point in (door.start, door.end)):
+            raise ValueError(f"Door '{door.id}' does not align with its observed parent wall. "
+                             "Source review could not resolve this relationship; retry extraction or correct it before setting scale.")
+
+
 def review_panels(source, doors, bounds):
     """One request sees context and readable original pixels for each door."""
     if len(doors) > MAX_REVIEW_DOORS:

@@ -83,15 +83,28 @@ def compile_layout(layout: Layout) -> Scenario:
         allowed_seam = region_to_polygon(threshold).intersection(floor)
         if shape.intersection(floor).difference(allowed_seam).area > 1e-7:
             raise ValueError(f"Exit '{door.id}' outside landing crosses the building beyond its doorway")
-        opening = region_to_polygon(threshold)
-        if any(opening.intersection(previous).area > 1e-9 for previous in thresholds):
-            raise ValueError("Exterior exit openings must not overlap; remove duplicate doors or split the entrance bank")
-        thresholds.append(opening)
+        boundary = exit_boundary(door, floors[door.floor_id])
+        opening = LineString([boundary.start, boundary.end])
+        # Compiler rectangles can share a tiny wedge where angled doors meet
+        # at one jamb. Their finite doorway segments remain distinct openings.
+        # Keep the independent outside-target collision checks below.
+        for previous_door, previous in thresholds:
+            # The edge's metric interval avoids roundoff in collinear angled
+            # segments constructed independently from different door offsets.
+            shared_edge = door.floor_id == previous_door.floor_id and door.edge_index == previous_door.edge_index
+            interval_overlap = (min(door.offset + door.width / 2, previous_door.offset + previous_door.width / 2)
+                                - max(door.offset - door.width / 2, previous_door.offset - previous_door.width / 2))
+            if ((shared_edge and interval_overlap > GEOMETRY_TOLERANCE)
+                    or opening.intersection(previous).length > GEOMETRY_TOLERANCE or opening.crosses(previous)):
+                raise ValueError("Exterior exit openings must not overlap: "
+                                 f"exit '{door.id}' conflicts with exit '{previous_door.id}'. "
+                                 "Remove duplicate doors or split the entrance bank")
+        thresholds.append((door, opening))
         if apron.id in floors:
             raise ValueError(f"Reserved floor ID '{apron.id}' conflicts with an exterior exit")
         walkable_areas.append(apron)
         exits.append(target)
-        exit_boundaries.append(exit_boundary(door, floors[door.floor_id]))
+        exit_boundaries.append(boundary)
         exit_openings.append((door.id, shape))
     walls = {wall.id: wall for wall in layout.walls}
     intervals = {wall.id: [] for wall in layout.walls}
@@ -102,8 +115,12 @@ def compile_layout(layout: Layout) -> Scenario:
         wall = walls[door.wall_id]
         start, end = door.offset - door.width / 2, door.offset + door.width / 2
         length = math.dist(wall.start, wall.end)
-        if start < 0 or end > length:
+        if start < -GEOMETRY_TOLERANCE or end > length + GEOMETRY_TOLERANCE:
             raise ValueError(f"Door '{door.id}' extends past the ends of wall '{wall.id}'")
+        # Indexed jambs can occupy the entire virtual parent. Dot products at
+        # angled walls differ from hypot by a few ulps; they must not create a
+        # degenerate solid sliver or reject an otherwise exact endpoint.
+        start, end = max(0.0, start), min(length, end)
         intervals[wall.id].append((start, end, door.id))
         door_shapes.append((door.id, region_to_polygon(Region(
             id=door.id, polygon=wall_polygon(wall, start, end),
@@ -132,13 +149,13 @@ def compile_layout(layout: Layout) -> Scenario:
         cursor = 0.0
         segments = []
         for start, end, door_id in sorted(intervals[wall.id]):
-            if start < cursor:
+            if start < cursor - GEOMETRY_TOLERANCE:
                 raise ValueError(f"Door '{door_id}' overlaps another door on wall '{wall.id}'")
-            if start > cursor:
+            if start - cursor > GEOMETRY_TOLERANCE:
                 segments.append((cursor, start))
-            cursor = end
+            cursor = max(cursor, end)
         length = math.dist(wall.start, wall.end)
-        if cursor < length:
+        if length - cursor > GEOMETRY_TOLERANCE:
             segments.append((cursor, length))
         for index, (start, end) in enumerate(segments):
             polygon = wall_polygon(wall, start, end)

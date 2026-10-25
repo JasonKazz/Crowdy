@@ -249,12 +249,42 @@ class ExteriorExitTests(unittest.TestCase):
     def test_duplicate_openings_and_obstructed_openings_are_rejected(self):
         layout = room()
         layout.exits.append(layout.exits[0].model_copy(update={"id": "second"}))
-        with self.assertRaisesRegex(ValueError, "openings must not overlap"):
+        with self.assertRaisesRegex(ValueError, "openings must not overlap: exit 'second' conflicts with exit 'east'"):
             compile_layout(layout)
         layout = room()
         layout.furniture.append(Region(id="blocked-door", polygon=[(9, 3.5), (10, 3.5), (10, 4.5), (9, 4.5)]))
         with self.assertRaisesRegex(ValueError, "opening is obstructed"):
             compile_layout(layout)
+
+    def test_angled_adjacent_doors_can_share_one_exact_jamb(self):
+        layout = room()
+        layout.walkable_areas[0].polygon = [(0, 0), (10, 0), (10, 5), (9.5, 10), (0, 10)]
+        layout.exits[0].offset = 4.4
+        layout.exits.append(layout.exits[0].model_copy(update={"id": "around-corner", "edge_index": 2, "offset": .6}))
+        original = layout.model_dump()
+        first, second = [exit_geometry(door, layout.walkable_areas[0], .2)[2] for door in layout.exits]
+        self.assertGreater(Polygon(first.polygon).intersection(Polygon(second.polygon)).area, 1e-9)
+        scenario = compile_layout(layout)
+        spans = [LineString([boundary.start, boundary.end]) for boundary in scenario.exit_boundaries]
+        self.assertEqual(spans[0].intersection(spans[1]).geom_type, "Point")
+        self.assertEqual(len(scenario.exits), 2)
+        self.assertEqual(layout.model_dump(), original)
+        self.assertFalse(Polygon(scenario.exits[0].polygon).intersects(Polygon(scenario.exits[1].polygon)))
+
+    def test_partial_duplicate_on_an_angled_edge_reports_both_door_ids(self):
+        layout = room()
+        layout.walkable_areas[0].polygon = [(0, 0), (10, 0), (12, 8), (2, 8)]
+        layout.exits.append(layout.exits[0].model_copy(update={"id": "partial-duplicate", "offset": 4.5}))
+        with self.assertRaisesRegex(ValueError, "exit 'partial-duplicate' conflicts with exit 'east'"):
+            compile_layout(layout)
+
+    def test_recorded_pofa_shared_jamb_preserves_all_twenty_openings(self):
+        layout = Layout.model_validate_json((Path(__file__).parent / 'fixtures/pofa-shared-jamb-layout.json').read_text())
+        original = layout.model_dump()
+        scenario = compile_layout(layout)
+        self.assertEqual(len(scenario.exits), 20)
+        self.assertEqual({door.id for door in layout.exits}, {region.id for region in scenario.exits})
+        self.assertEqual(layout.model_dump(), original)
 
     def test_adjacent_doors_can_share_outside_dispersal_space(self):
         layout=room()
