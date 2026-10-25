@@ -139,13 +139,8 @@ export default function LiveEvacuationAnalytics({ active, plan, scenario, busy, 
 
   return (
     <section id={id} role="tabpanel" aria-labelledby={labelledBy} className={styles.root} hidden={!active}>
-      <div className={styles.heading}>
-        <div><p className={styles.eyebrow}>LIVE EVACUATION ANALYTICS</p><h2>A forecast that follows your crowd.</h2><p>Live headcount, your floor plan, and a fresh evacuation estimate.</p></div>
-        <button type="button" className={styles.toggle} aria-pressed={automatic} onClick={() => setAutomatic(!automatic)}><Icon name={automatic ? "pause" : "play"} size={14} />{automatic ? "Pause analytics" : "Resume analytics"}</button>
-      </div>
-      {plan.capacity != null ? <p className={aboveCapacity ? styles.outdated : styles.explanation} role="status">
-        {plan.name.toUpperCase().includes("POFA") ? "POFA" : "Venue"} capacity: {plan.capacity.toLocaleString("en-US")} people.
-        {displayedCount === null ? " Waiting for a camera count." : aboveCapacity ? ` ${partialCount ? "At least " : ""}${(displayedCount - plan.capacity).toLocaleString("en-US")} above capacity. Analysis remains available.` : partialCount ? " Partial headcount; capacity status awaits a complete count." : displayedCount === plan.capacity ? " At capacity." : ` ${(plan.capacity - displayedCount).toLocaleString("en-US")} below capacity.`}
+      {aboveCapacity && plan.capacity != null && displayedCount !== null ? <p className={styles.outdated} role="status">
+        Above capacity by {partialCount ? "at least " : ""}{(displayedCount - plan.capacity).toLocaleString("en-US")} people.
       </p> : null}
       <div className={styles.metrics}>
         <div className={styles.metric}><span><Icon name="video" size={14} />Crowd now</span><p>{partialCount ? "≥ " : ""}{displayedCount?.toLocaleString("en-US") ?? "—"}<small>{feed.snapshot?.estimate?.method === "density" ? "estimated people" : "people"}</small></p><em>{partialCount ? "Partial count · waiting for complete data" : cameraIsLive ? feed.snapshot?.estimate?.method === "density" ? "Estimated from crowd density in the current view" : "Detected in the current view" : feed.observation.status === "disconnected" ? "No camera connected" : feed.count === null ? "Waiting for a camera frame" : "Last observed count"}</em></div>
@@ -154,7 +149,15 @@ export default function LiveEvacuationAnalytics({ active, plan, scenario, busy, 
       </div>
       <div className={styles.body}>
         <div className={styles.forecast}>
-          <div className={styles.sectionTop}><h3><Icon name="route" size={15} />Evacuation forecast</h3><span className={styles.runStatus}><span className={`${styles.statusDot} ${state.active ? styles.computing : current ? styles.ready : ""}`} />{status}</span></div>
+          <div className={styles.sectionTop}>
+            <h3><Icon name="route" size={15} />Evacuation forecast</h3>
+            <div className={styles.forecastControls}>
+              <span className={styles.runStatus}><span className={`${styles.statusDot} ${state.active ? styles.computing : current ? styles.ready : ""}`} />{status}</span>
+              <button type="button" className={styles.toggle} aria-label={automatic ? "Pause automatic estimates" : "Resume automatic estimates"} title={automatic ? "Pause automatic estimates" : "Resume automatic estimates"} onClick={() => setAutomatic(!automatic)}>
+                <Icon name={automatic ? "pause" : "play"} size={14} />
+              </button>
+            </div>
+          </div>
           <p className={styles.explanation} role="status">{!automatic ? "Automatic estimates are paused. Your camera can stay connected." : partialCount ? "The latest camera count is incomplete. Analytics waits for a complete count; the lower bound cannot start a forecast." : state.reason || (current ? "This forecast matches the latest headcount and layout settings." : "Connect your iPhone, then keep its camera page visible to start live analysis.")}</p>
           {state.error ? <div className={styles.error} role="alert">{state.error} Fresh inputs will retry after the update interval.</div> : null}
           {completion ? <>
