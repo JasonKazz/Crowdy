@@ -1721,7 +1721,7 @@ export default function Workspace({
             </p>
             <label className="field-label" htmlFor="image-provider">Image extraction provider</label>
             <select id="image-provider" value={imageProvider} disabled={busy}
-              aria-describedby={`image-provider-status${providerStatus[imageProvider]?.model ? " image-provider-model" : ""}`}
+              aria-describedby={`image-provider-status${providerStatus[imageProvider]?.model ? " image-provider-model" : ""}${imageProvider === "gemini" && providerStatus.claude?.configured ? " image-provider-review" : ""}`}
               onChange={e=>setImageProvider(e.target.value)}>
               <option value="claude">{providerLabel("claude", providerStatus.claude?.model)}</option>
               <option value="gemini">{providerLabel("gemini", providerStatus.gemini?.model)}</option>
@@ -1734,6 +1734,9 @@ export default function Workspace({
                   : providerStatus[imageProvider] ? "This provider is ready for an image." : "Checking provider status…")}
             </p>
             {providerStatus[imageProvider]?.model && <p id="image-provider-model" className="muted">Model: {providerStatus[imageProvider].model}</p>}
+            {imageProvider === "gemini" && providerStatus.claude?.configured && <p id="image-provider-review" className="muted">
+              Claude may check uncertain interior door mappings against a closer view of the source image. Import notes identify any corrections.
+            </p>}
             <p className="muted">Scale uses printed dimensions first, then an estimate from doors and furniture when several objects agree. You can adjust estimates with Edit scale. If neither is usable, mark a known distance. Images are resized to at most 3072 pixels per side before being sent to your selected provider.</p>
             </>}
             {pendingCalibration&&<ScaleCalibrator key={pendingCalibration.extraction_id} pending={pendingCalibration} busy={busy} onApply={finishScale}/>}

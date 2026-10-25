@@ -10,6 +10,19 @@ from app.simulation.geometry import build_geometry, region_to_polygon
 from app.simulation.routing import RoutePlanner, plan_routes
 
 
+def crossed_exit_threshold(previous, current, boundary):
+    """A real outward passage through this finite doorway, not its half-plane."""
+    before = sum((previous[i] - boundary.start[i]) * boundary.outward[i] for i in range(2))
+    after = sum((current[i] - boundary.start[i]) * boundary.outward[i] for i in range(2))
+    if not before <= 0 <= after or after <= before:
+        return False
+    fraction = -before / (after - before)
+    crossing = tuple(previous[i] + fraction * (current[i] - previous[i]) for i in range(2))
+    edge = tuple(boundary.end[i] - boundary.start[i] for i in range(2))
+    along = sum((crossing[i] - boundary.start[i]) * edge[i] for i in range(2))
+    return -1e-9 <= along <= sum(value * value for value in edge) + 1e-9
+
+
 def run_simulation(scenario: Scenario) -> dict:
     # Revalidate in case an interactive caller changed a model in place.
     scenario = Scenario.model_validate(scenario.model_dump())
@@ -105,6 +118,7 @@ def run_simulation(scenario: Scenario) -> dict:
     evacuations = []
     door_crossings = []
     crossed = set()
+    passed_threshold = set()
     boundaries = {boundary.id: boundary for boundary in scenario.exit_boundaries}
     steering_interval = max(1, round(.1 / settings.dt))
     from app.simulation.adaptive import AdaptiveExitChoices
@@ -116,7 +130,7 @@ def run_simulation(scenario: Scenario) -> dict:
         any_released = False
         if adaptive is not None and (step == 1 or step % decision_interval == 0):
             adaptive.reconsider(list(simulation.agents()),agent_ids,agent_exits,agent_paths,cursors,
-                                simulation.elapsed_time(),crossed | waiting)
+                                simulation.elapsed_time(),passed_threshold | crossed | waiting)
         for agent in simulation.agents():
             if agent_ids[agent.id] in trapped:
                 continue
@@ -137,6 +151,7 @@ def run_simulation(scenario: Scenario) -> dict:
         # regular 0.2 s sample interval can make a person walk before responding.
         if any_released and frames[-1]["time"] < round(simulation.elapsed_time(), 8):
             frames.append(capture_frame())
+        previous_positions = {agent.id: agent.position for agent in simulation.agents()}
         simulation.iterate()
 
         for agent in list(simulation.agents()):
@@ -146,11 +161,15 @@ def run_simulation(scenario: Scenario) -> dict:
             position = agent.position
             if boundary is not None and agent.id not in crossed:
                 outside_distance = sum((position[i] - boundary.start[i]) * boundary.outward[i] for i in range(2))
-                if outside_distance >= scenario.agent_defaults.radius:
+                if outside_distance < 0:
+                    passed_threshold.discard(agent.id)
+                elif crossed_exit_threshold(previous_positions[agent.id], position, boundary):
+                    passed_threshold.add(agent.id)
+                if agent.id in passed_threshold and outside_distance >= scenario.agent_defaults.radius:
                     crossed.add(agent.id)
                     door_crossings.append({"agent_id": agent_ids[agent.id], "exit_id": boundary.id,
                                            "time": round(simulation.elapsed_time(), 8)})
-            if exit_shapes[agent_exits[agent.id]].covers(Point(position)):
+            if (boundary is None or agent.id in crossed) and exit_shapes[agent_exits[agent.id]].covers(Point(position)):
                 evacuations.append({"agent_id": agent_ids[agent.id], "exit_id": agent_exits[agent.id],
                                     "time": round(simulation.elapsed_time(), 8)})
                 simulation.mark_agent_for_removal(agent.id)

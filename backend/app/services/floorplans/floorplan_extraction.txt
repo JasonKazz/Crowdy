@@ -15,6 +15,10 @@ box when the building is not rectangular. Polygons must not cross themselves; do
 the first vertex at the end. The outline supplies the exterior boundary; do not duplicate
 exterior walls as interior partitions.
 Represent each straight interior partition as a centerline with its visible thickness.
+Split a curved, stepped, or recessed partition into its actual straight segments, each
+with its own wall ID. Do not approximate several room fronts with one long diagonal
+wall across open floor. A nearby corridor barrier or railing is distinct from the
+room fronts behind it; a room door belongs to its own observed room-front segment.
 The full wall footprint (half the thickness on either side) must fit inside the floor.
 Where a partition reaches the floor boundary, reuse that boundary coordinate, with no
 overshoot or invented gap. Preserve visibly straight, parallel, and perpendicular edges;
@@ -25,6 +29,9 @@ Each interior wall MUST continue across its door openings: return one continuous
 wall through the opening, not two wall fragments ending at the door. Doors cut gaps in it.
 Each interior door references an existing wall_id. Its start and end mark the two jambs
 on that wall's centerline, within the parent's endpoints. Reuse the parent's line coordinate.
+Both jambs must belong to that SAME straight wall segment. Reuse shared geometry
+coordinates exactly. Do not attach a door to the nearest long wall when the source
+shows a different recessed or angled parent; trace the actual parent segment instead.
 Exclude the door leaf and swing arc from solid furniture and walls across the opening.
 An exterior entrance is also an evacuation opening. Identify CLEAR GAPS in the OUTER
 WALL connecting the interior to outside, even when no door leaf or swing arc is drawn.

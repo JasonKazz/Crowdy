@@ -1,7 +1,7 @@
 """Boundary door geometry shared by layout compilation and exterior-exit checks."""
 
 import math
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Polygon
 from shapely import union_all
 
 from app.schemas.layout import ExitDoor
@@ -57,11 +57,23 @@ def exit_geometry(door: ExitDoor, floor: Region, radius: float = .2,
     apron, target, threshold = _raw_geometry(door, floor, radius)
     building = Polygon(floor.polygon) if building is None else building
     raw = Polygon(apron.polygon)
-    seam = Polygon([apron.polygon[0], apron.polygon[1], apron.polygon[2], apron.polygon[-1]])
+    seam = Polygon(threshold.polygon)
     # Overlay arithmetic on angled walls can leave a microscopic crack
     # between the exterior polygon and its interior seam. A nanometre grid
     # joins that shared threshold without changing the building footprint.
-    fitted = union_all([raw.difference(building), seam.intersection(building)], grid_size=1e-9)
+    # An apron can wrap around the sidewalls of a recessed entrance. Merely
+    # subtracting the building lets the subsequent floor union open every
+    # touching sidewall as well as the measured doorway. A micrometre of
+    # separation preserves those implicit walls; only the actual threshold
+    # seam reconnects the outside space to the building.
+    outside = raw.difference(building.buffer(1e-6, join_style="mitre"))
+    # The overlap rectangle must not open the adjoining jamb sidewalls either.
+    # Keep contact with the finite threshold alone, including at concave corners.
+    doorway = LineString([tuple((threshold.polygon[0][i] + threshold.polygon[3][i]) / 2 for i in range(2)),
+                          tuple((threshold.polygon[1][i] + threshold.polygon[2][i]) / 2 for i in range(2))])
+    closed_boundary = building.boundary.difference(doorway.buffer(1e-8))
+    seam = seam.difference(closed_boundary.buffer(1e-6, join_style="mitre", cap_style="flat"))
+    fitted = union_all([outside, seam], grid_size=1e-9)
     safe_target = Polygon(target.polygon).difference(building.buffer(radius + .01, quad_segs=8))
     pieces = [safe_target] if isinstance(safe_target, Polygon) else [
         part for part in getattr(safe_target, "geoms", []) if isinstance(part, Polygon)]

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import unittest
 
-from shapely.geometry import Point, Polygon
+from shapely.geometry import LineString, Point, Polygon
 
 from app.schemas.extraction import ExtractedDrawing
 from app.schemas.layout import ExitDoor, Layout, load_layout, exit_from_marker
@@ -12,7 +12,7 @@ from app.services.floorplans.images import drawing_to_layout
 from app.services.floorplans.exits import exit_geometry
 from app.services.floorplans.layout import compile_layout
 from app.services.population.generate import resolve_population
-from app.simulation.engine import run_simulation
+from app.simulation.engine import crossed_exit_threshold, run_simulation
 from app.simulation.geometry import build_geometry
 from test_images import drawing_fixture, info, source
 
@@ -30,7 +30,63 @@ def room():
     })
 
 
+def recessed_room():
+    layout = room()
+    layout.walkable_areas[0].polygon = [(0, 0), (4, 0), (4, .8), (6, .8), (6, 0),
+                                       (10, 0), (10, 8), (0, 8)]
+    layout.exits = [ExitDoor(id="recess", floor_id="floor", edge_index=2, offset=1,
+                             width=2, landing_depth=2)]
+    layout.occupants[0].position = (2, .5)
+    return layout
+
+
 class ExteriorExitTests(unittest.TestCase):
+    def test_recess_apron_keeps_sidewalls_closed_and_only_joins_the_door(self):
+        layout = recessed_room()
+        floor = Polygon(layout.walkable_areas[0].polygon)
+        apron, _, threshold = exit_geometry(layout.exits[0], layout.walkable_areas[0],
+                                            layout.agent_defaults.radius)
+        # Boundary-only contact opens a wall when the floor and apron are
+        # united, even when the apron has zero area inside the building.
+        scenario = compile_layout(layout)
+        boundary = scenario.exit_boundaries[0]
+        contacts = Polygon(apron.polygon).intersection(floor.boundary)
+        self.assertLess(contacts.difference(LineString([boundary.start, boundary.end]).buffer(1e-7)).length, 1e-8)
+        geometry = build_geometry(scenario)
+        self.assertFalse(geometry.covers(LineString([(3.6, .4), (4.4, .4)])))
+        self.assertFalse(geometry.covers(LineString([(3, -.2), (3, .2)])))
+        self.assertTrue(geometry.covers(LineString([(5, .5), (5, 1.1)])))
+
+    def test_outside_half_plane_is_not_a_finite_doorway_crossing(self):
+        boundary = compile_layout(recessed_room()).exit_boundaries[0]
+        self.assertFalse(crossed_exit_threshold((2, .5), (2.1, .5), boundary))
+        self.assertFalse(crossed_exit_threshold((3, 1), (3, .6), boundary))
+        self.assertFalse(crossed_exit_threshold((5, .6), (5, 1), boundary))
+        self.assertTrue(crossed_exit_threshold((5, 1), (5, .6), boundary))
+
+    def test_recessed_exit_is_reached_through_its_actual_doorway(self):
+        layout = recessed_room()
+        result = run_simulation(compile_layout(layout))
+        self.assertEqual(result["summary"]["evacuated_count"], 1)
+        self.assertEqual(len(result["door_crossings"]), 1)
+        crossing = result["door_crossings"][0]
+        # This start is already in the doorway's outward half-plane while
+        # still inside the building, over 2 m to the left of the actual door.
+        self.assertGreater(crossing["time"], 1)
+        self.assertLess(crossing["time"], result["evacuations"][0]["time"])
+        floor = Polygon(layout.walkable_areas[0].polygon)
+        positions = [(a["x"], a["y"]) for frame in result["frames"] for a in frame["agents"]]
+        first_outside = next(p for p in positions if not floor.covers(Point(p)))
+        self.assertTrue(4 < first_outside[0] < 6)
+        self.assertLess(first_outside[1], .8)
+
+    def test_narrow_body_clear_door_still_evacuates_without_larger_route_margin(self):
+        layout = room()
+        layout.exits[0].width = .48
+        result = run_simulation(compile_layout(layout))
+        self.assertEqual(result["summary"]["evacuated_count"], 1)
+        self.assertEqual(len(result["door_crossings"]), 1)
+
     def test_exit_is_outside_and_only_the_doorway_opens_the_boundary(self):
         scenario = compile_layout(room())
         target = Polygon(scenario.exits[0].polygon)
