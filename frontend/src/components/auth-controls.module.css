@@ -22,24 +22,24 @@
 }
 
 .signIn {
-  color: #536648;
+  color: #67594e;
   padding: 7px 2px;
 }
 
 .signIn:hover {
-  color: #35572c;
+  color: var(--accent-dark);
 }
 
 .createAccount {
-  border: 1px solid #d9e2cf;
+  border: 1px solid var(--line);
   padding: 7px 11px;
-  color: #426b37;
-  background: #f4f7ee;
+  color: var(--accent);
+  background: var(--accent-pale);
 }
 
 .createAccount:hover {
-  background: #eaf0e2;
-  border-color: #b9caa9;
+  background: #ffe4d2;
+  border-color: #e6baa0;
 }
 
 .loading {
@@ -47,7 +47,7 @@
   align-items: center;
   gap: 8px;
   min-height: 33px;
-  color: #69775e;
+  color: var(--muted);
   font-size: 10px;
   white-space: nowrap;
 }
@@ -55,9 +55,9 @@
 .loadingAvatar {
   height: 27px;
   width: 27px;
-  border: 1px solid #e2e8da;
+  border: 1px solid var(--line);
   border-radius: 50%;
-  background: #f1f4ec;
+  background: #f5ece3;
 }
 
 .error {
@@ -79,12 +79,12 @@
   min-height: 35px;
   padding: 2px;
   border-radius: 5px;
-  color: #5c6f4f;
+  color: #67594e;
 }
 
 .accountButton:hover {
-  color: #35572c;
-  background: #f6f8f2;
+  color: var(--accent-dark);
+  background: #fff4ea;
 }
 
 .avatar {
@@ -94,10 +94,10 @@
   flex-shrink: 0;
   width: 29px;
   height: 29px;
-  border: 1px solid #d3dec6;
+  border: 1px solid #edcfba;
   border-radius: 50%;
-  background: #eaf0e1;
-  color: #536c3f;
+  background: #fff0e5;
+  color: var(--accent);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: -0.3px;
@@ -115,7 +115,7 @@
 .chevron,
 .chevronOpen {
   display: inline-flex;
-  color: #7a896c;
+  color: var(--muted);
 }
 
 .chevron {
@@ -134,10 +134,10 @@
   width: 246px;
   max-width: calc(100vw - 34px);
   padding: 6px;
-  border: 1px solid #dce4d3;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fffffc;
-  box-shadow: 0 4px 20px #35472b0d;
+  background: var(--surface);
+  box-shadow: 0 4px 20px #4c2b180d;
 }
 
 .identity {
@@ -151,22 +151,22 @@
 .identity strong {
   font-size: 12px;
   font-weight: 600;
-  color: #3d5032;
+  color: var(--ink);
 }
 
 .identity > span {
   font-size: 10px;
   line-height: 1.5;
-  color: #697a5a;
+  color: var(--muted);
 }
 
 .storageNote {
   margin: 0 10px 10px;
   padding-top: 9px;
-  border-top: 1px solid #edf0e6;
+  border-top: 1px solid #f0e7df;
   font-size: 10px;
   line-height: 1.6;
-  color: #697a5a;
+  color: var(--muted);
 }
 
 .signOut {
@@ -176,14 +176,14 @@
   min-height: 35px;
   padding: 8px 10px;
   border-radius: 3px;
-  background: #f4f7ee;
+  background: var(--accent-pale);
   font-size: 11px;
-  color: #536b40;
+  color: var(--accent);
 }
 
 .signOut:hover {
-  background: #e9f0df;
-  color: #35572c;
+  background: #ffe4d2;
+  color: var(--accent-dark);
 }
 
 @media (max-width: 700px) {
@@ -220,4 +220,42 @@
   .createAccount {
     transition: none;
   }
+}
+
+:global([data-theme="dark"]) .signIn,
+:global([data-theme="dark"]) .accountButton {
+  color: var(--ink-soft);
+}
+
+:global([data-theme="dark"]) .signIn:hover,
+:global([data-theme="dark"]) .accountButton:hover {
+  color: var(--accent-dark);
+}
+
+:global([data-theme="dark"]) .createAccount:hover,
+:global([data-theme="dark"]) .accountButton:hover,
+:global([data-theme="dark"]) .signOut:hover {
+  background: var(--control-hover);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .loadingAvatar {
+  background: var(--control);
+}
+
+:global([data-theme="dark"]) .error {
+  color: var(--warning-text);
+}
+
+:global([data-theme="dark"]) .avatar {
+  background: var(--accent-pale);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .menu {
+  box-shadow: 0 8px 28px #0005;
+}
+
+:global([data-theme="dark"]) .storageNote {
+  border-color: var(--line);
 }

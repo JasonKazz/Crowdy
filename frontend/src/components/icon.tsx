@@ -27,6 +27,8 @@ export type IconName =
   | "clock"
   | "pin"
   | "video"
+  | "sun"
+  | "moon"
   | "external";
 const paths: Record<IconName, ReactNode> = {
   arrow: <path d="M4 12h15m-6-6 6 6-6 6" />,
@@ -98,6 +100,8 @@ const paths: Record<IconName, ReactNode> = {
   ),
   pin: <path d="m15 3 6 6-4 1-4 6-3-3-6 7m1-15 4-1 6 6-1 4-9-9Z" />,
   video: <><rect x="3" y="6" width="12" height="12" rx="2" /><path d="m15 10 6-4v12l-6-4Z" /></>,
+  sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></>,
+  moon: <path d="M20.8 13A9 9 0 0 1 11 3.2 9 9 0 1 0 20.8 13Z" />,
   external: <path d="M14 3h7v7m0-7L10 14M9 3H3v18h18v-6" />,
 };
 export default function Icon({

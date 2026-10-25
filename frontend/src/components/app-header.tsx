@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AuthControls from "./auth-controls";
+import BrandLogo from "./brand-logo";
 import Icon from "./icon";
+import ThemeToggle from "./theme-toggle";
 
 export default function AppHeader({
   workspaceName,
@@ -27,13 +29,7 @@ export default function AppHeader({
           if (await onNavigate()) router.push("/");
         }}
       >
-        <span className="brand-symbol">
-          <i />
-          <i />
-          <i />
-          <i />
-        </span>
-        crowdy<span className="brand-period">.</span>
+        <BrandLogo alt="" preload />
       </Link>
       <span className="header-divider" />
       <nav className="breadcrumb" aria-label="Breadcrumb">
@@ -64,6 +60,7 @@ export default function AppHeader({
             <Icon name="help" />
           </button>
         )}
+        <ThemeToggle />
         <AuthControls />
       </div>
     </header>

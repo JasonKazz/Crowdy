@@ -1,6 +1,6 @@
 .panel {
   padding: 18px 18px 24px;
-  color: #35412e;
+  color: var(--ink);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -8,7 +8,7 @@
 .section + .section {
   margin-top: 26px;
   padding-top: 23px;
-  border-top: 1px solid #e3e8da;
+  border-top: 1px solid var(--line);
 }
 
 .sectionHeading {
@@ -22,17 +22,17 @@
   font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.2px;
-  color: #35442c;
+  color: var(--ink);
 }
 
 .sectionIcon {
   display: inline-flex;
-  color: #7a8e66;
+  color: #b97450;
 }
 
 .sectionNumber {
   margin-left: auto;
-  color: #9ba88e;
+  color: var(--muted);
   font-family: var(--font-ibm-mono), monospace;
   font-size: 10px;
 }
@@ -41,27 +41,27 @@
   display: grid;
   place-items: center;
   margin-left: auto;
-  background: #ecf0e5;
-  border: 1px solid #e0e6d7;
+  background: #f5ece3;
+  border: 1px solid var(--line);
   border-radius: 4px;
   min-width: 21px;
   padding: 1px 5px;
   font-size: 10px;
-  color: #6b8058;
+  color: #786b60;
 }
 
 .planCard {
   overflow: hidden;
-  border: 1px solid #dfe6d6;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fffefa;
+  background: var(--surface);
 }
 
 .planPreview {
   position: relative;
   height: 102px;
-  background: #f2f5ec;
-  border-bottom: 1px solid #e3e9db;
+  background: #f7f2eb;
+  border-bottom: 1px solid var(--line);
   padding: 10px 14px;
 }
 
@@ -78,9 +78,9 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  color: #698052;
-  background: #fcfdf7f2;
-  border: 1px solid #e1e8d6;
+  color: #786b60;
+  background: #fffaf5f2;
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 3px 6px;
   font-size: 9px;
@@ -104,7 +104,7 @@
   white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
-  color: #425237;
+  color: var(--ink);
 }
 
 .planFacts {
@@ -115,13 +115,13 @@
 }
 
 .planFacts > div + div {
-  border-left: 1px solid #e8ecdf;
+  border-left: 1px solid #eee4db;
   padding-left: 14px;
 }
 
 .planFacts dt {
   font-size: 10px;
-  color: #68765d;
+  color: var(--muted);
   margin-bottom: 3px;
 }
 
@@ -129,13 +129,13 @@
   margin: 0;
   font-family: var(--font-ibm-mono), monospace;
   font-size: 13px;
-  color: #566b43;
+  color: #67594e;
 }
 
 .planFacts dd span {
   font-family: var(--font-dm-sans), sans-serif;
   font-size: 11px;
-  color: #68765d;
+  color: var(--muted);
 }
 
 .planButton {
@@ -146,17 +146,17 @@
   width: 100%;
   min-height: 36px;
   padding: 8px;
-  border: 1px solid #dbe4ce;
+  border: 1px solid #ead8c9;
   border-radius: 5px;
-  background: #f5f8ee;
-  color: #627c4b;
+  background: #fff5ec;
+  color: var(--accent);
   font-size: 11px;
   font-weight: 500;
 }
 
 .planButton:hover:not(:disabled) {
-  background: #ecf2e2;
-  border-color: #bbcea4;
+  background: var(--accent-pale);
+  border-color: #e6baa0;
 }
 
 .scaleControls {
@@ -164,7 +164,7 @@
 }
 
 .sectionDescription {
-  color: #68765d;
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.65;
   margin: -3px 0 13px;
@@ -175,20 +175,20 @@
 }
 
 .dropArea {
-  border: 1px dashed #c5d4b2;
+  border: 1px dashed #ddc8b7;
   border-radius: 7px;
-  background: #f7f9f1;
+  background: #fffbf6;
   transition: border-color 0.15s, background 0.15s;
 }
 
 .dropArea:hover:not(.dropDisabled),
 .dragging {
-  border-color: #789b57;
-  background: #eff5e5;
+  border-color: var(--accent);
+  background: #fff0e5;
 }
 
 .dropArea:focus-within {
-  outline: 2px solid #6b8c4b;
+  outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
 
@@ -211,27 +211,27 @@
   place-items: center;
   height: 32px;
   width: 32px;
-  border: 1px solid #dbe5cc;
+  border: 1px solid #efd9c9;
   border-radius: 7px;
-  color: #89a669;
-  background: #edf3e3;
+  color: #ba744d;
+  background: var(--accent-pale);
   margin-bottom: 9px;
 }
 
 .dropLabel {
-  color: #6c8552;
+  color: var(--accent);
   font-weight: 500;
   font-size: 12px;
 }
 
 .dropHint {
-  color: #69795c;
+  color: var(--muted);
   font-size: 11px;
   margin-top: 4px;
 }
 
 .fileTypes {
-  color: #69795c;
+  color: var(--muted);
   text-align: center;
   font-size: 10px;
   padding: 8px 7px 13px;
@@ -250,8 +250,8 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  background: #fffefa;
-  border: 1px solid #e2e8d9;
+  background: var(--surface);
+  border: 1px solid var(--line);
   padding: 7px;
   border-radius: 6px;
   min-width: 0;
@@ -264,7 +264,7 @@
   height: 42px;
   object-fit: cover;
   border-radius: 4px;
-  background: #eef1e7;
+  background: #f5eee7;
 }
 
 .imageDetails {
@@ -278,12 +278,12 @@
   white-space: nowrap;
   font-weight: 500;
   font-size: 11px;
-  color: #5d6f4c;
+  color: #67594e;
 }
 
 .imageDetails > span {
   display: block;
-  color: #69795c;
+  color: var(--muted);
   margin-top: 3px;
   font-size: 10px;
   white-space: nowrap;
@@ -302,7 +302,7 @@
   width: 32px;
   padding: 0;
   border-radius: 4px;
-  color: #9ba58e;
+  color: var(--muted);
 }
 
 .removeButton:hover:not(:disabled) {
@@ -313,9 +313,9 @@
 .estimateCard {
   padding: 13px;
   margin-top: 14px;
-  border: 1px solid #d9e3c9;
+  border: 1px solid #f0d3bb;
   border-radius: 7px;
-  background: #f1f5e9;
+  background: #fff4ea;
 }
 
 .estimateTop {
@@ -330,21 +330,21 @@
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  color: #60754c;
+  color: #786b60;
 }
 
 .previewBadge {
   font-size: 9px;
   padding: 2px 5px;
-  border: 1px solid #d4dfc4;
+  border: 1px solid #efd9c9;
   border-radius: 3px;
-  color: #637750;
-  background: #f7faef;
+  color: #786b60;
+  background: #fffaf5;
 }
 
 .estimateNumber {
   margin-top: 9px;
-  color: #56773c;
+  color: var(--accent);
   font-family: var(--font-ibm-mono), monospace;
   font-size: 30px;
   line-height: 1.2;
@@ -354,12 +354,12 @@
 .estimateNumber span {
   font-family: var(--font-dm-sans), sans-serif;
   font-size: 11px;
-  color: #637750;
+  color: #786b60;
   letter-spacing: 0;
 }
 
 .estimateNote {
-  color: #637750;
+  color: #786b60;
   font-size: 11px;
   line-height: 1.6;
   margin-top: 6px;
@@ -373,17 +373,17 @@
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
-  border: 1px solid #ccdbb8;
+  border: 1px solid #e9c6ad;
   border-radius: 4px;
-  background: #e8f0dc;
-  color: #678647;
+  background: #ffe7d6;
+  color: var(--accent);
   font-size: 11px;
   font-weight: 500;
 }
 
 .estimateButton:hover:not(:disabled) {
-  border-color: #acbf91;
-  background: #deebcd;
+  border-color: #dba889;
+  background: #ffdcc5;
 }
 
 .error,
@@ -408,7 +408,7 @@
 }
 
 .loading {
-  color: #8d9b7e;
+  color: var(--muted);
 }
 
 .emptyStatus {
@@ -431,4 +431,89 @@
   .dropArea {
     transition: none;
   }
+}
+
+:global([data-theme="dark"]) .sectionIcon,
+:global([data-theme="dark"]) .uploadIcon {
+  color: var(--accent);
+}
+
+:global([data-theme="dark"]) .imageCount,
+:global([data-theme="dark"]) .planTag,
+:global([data-theme="dark"]) .estimateTop > span:first-child,
+:global([data-theme="dark"]) .previewBadge,
+:global([data-theme="dark"]) .estimateNumber span,
+:global([data-theme="dark"]) .estimateNote {
+  color: var(--muted);
+}
+
+:global([data-theme="dark"]) .imageCount,
+:global([data-theme="dark"]) .thumbnail {
+  background: var(--control);
+}
+
+:global([data-theme="dark"]) .planPreview {
+  background: var(--canvas);
+}
+
+:global([data-theme="dark"]) .planTag,
+:global([data-theme="dark"]) .previewBadge {
+  background: var(--surface-raised);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .planFacts > div + div {
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .planFacts dd,
+:global([data-theme="dark"]) .imageDetails p {
+  color: var(--ink-soft);
+}
+
+:global([data-theme="dark"]) .planButton,
+:global([data-theme="dark"]) .dropArea {
+  background: var(--control);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .planButton:hover:not(:disabled),
+:global([data-theme="dark"]) .dropArea:hover:not(.dropDisabled),
+:global([data-theme="dark"]) .dragging {
+  background: var(--control-hover);
+  border-color: var(--accent);
+}
+
+:global([data-theme="dark"]) .uploadIcon {
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .removeButton:hover:not(:disabled) {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+}
+
+:global([data-theme="dark"]) .estimateCard {
+  background: var(--accent-pale);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .estimateButton {
+  background: var(--control);
+  border-color: var(--line);
+}
+
+:global([data-theme="dark"]) .estimateButton:hover:not(:disabled) {
+  background: var(--control-hover);
+  border-color: var(--accent);
+}
+
+:global([data-theme="dark"]) .error {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  border-color: var(--danger-line);
+}
+
+:global([data-theme="dark"]) .status {
+  color: var(--success-text);
 }

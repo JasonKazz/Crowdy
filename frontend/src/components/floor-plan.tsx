@@ -54,8 +54,8 @@ function Chair({
     <g transform={`translate(${x} ${y}) rotate(${rotation})`}>
       <path
         d="M-11 3v6q0 4 4 4H7q4 0 4-4V3"
-        fill="#e0e5df"
-        stroke="#aab4a9"
+        fill="var(--plan-seat, #e0e5df)"
+        stroke="var(--plan-seat-stroke, #aab4a9)"
         strokeWidth="1"
       />
       <rect
@@ -64,13 +64,13 @@ function Chair({
         width="18"
         height="15"
         rx="4"
-        fill="#edf0eb"
-        stroke="#aab4a9"
+        fill="var(--plan-seat, #edf0eb)"
+        stroke="var(--plan-seat-stroke, #aab4a9)"
         strokeWidth="1"
       />
       <path
         d="M-12-2v9m24-9v9"
-        stroke="#aab4a9"
+        stroke="var(--plan-seat-stroke, #aab4a9)"
         strokeWidth="1.5"
         strokeLinecap="round"
       />
@@ -81,12 +81,12 @@ function Chair({
 function Furniture({ item }: { item: PlanItem }) {
   const { width: w, height: h } = item;
   if (item.polygon) return <polygon points={item.polygon.map(p=>`${p.x*w},${p.y*h}`).join(" ")}
-    fill="#dce2d7" stroke="#7f8d77" strokeWidth="1.2" />;
+    fill="var(--plan-furniture, #dce2d7)" stroke="var(--plan-furniture-stroke, #7f8d77)" strokeWidth="1.2" />;
   if (item.kind === "plant") {
     const r = Math.min(w, h) / 2;
     return (
       <g transform={`translate(${w / 2} ${h / 2})`}>
-        <circle r={r * 0.75} fill="#e9e5db" stroke="#c1bfb3" strokeWidth="1" />
+        <circle r={r * 0.75} fill="var(--plan-furniture, #e9e5db)" stroke="var(--plan-furniture-stroke, #c1bfb3)" strokeWidth="1" />
         {[0, 60, 120, 180, 240, 300].map((rotation, index) => (
           <ellipse
             key={rotation}
@@ -108,13 +108,13 @@ function Furniture({ item }: { item: PlanItem }) {
     const horizontal = w >= h;
     return (
       <g>
-        <rect x="1" y="2" width={w} height={h} rx="2" fill="#dde1d8" />
+        <rect x="1" y="2" width={w} height={h} rx="2" fill="var(--plan-room, #dde1d8)" />
         <rect
           width={w}
           height={h}
           rx="2"
-          fill="#ece8dd"
-          stroke="#b6b2a3"
+          fill="var(--plan-furniture, #ece8dd)"
+          stroke="var(--plan-furniture-stroke, #b6b2a3)"
           strokeWidth="1.2"
         />
         {Array.from(
@@ -127,7 +127,7 @@ function Furniture({ item }: { item: PlanItem }) {
               width={horizontal ? 7 : w - 10}
               height={horizontal ? h - 10 : 7}
               rx="0.8"
-              fill={["#b4b9a3", "#c0ac8e", "#d4c6ae", "#a4b3ae"][i % 4]}
+              fill={["var(--plan-seat-stroke, #b4b9a3)", "var(--plan-furniture-stroke, #c0ac8e)", "var(--plan-furniture-stroke, #d4c6ae)", "var(--plan-seat-stroke, #a4b3ae)"][i % 4]}
             />
           ),
         )}
@@ -138,13 +138,13 @@ function Furniture({ item }: { item: PlanItem }) {
     const vertical = h > w;
     return (
       <g>
-        <rect x="1" y="2" width={w} height={h} rx="7" fill="#dce0d8" />
+        <rect x="1" y="2" width={w} height={h} rx="7" fill="var(--plan-room, #dce0d8)" />
         <rect
           width={w}
           height={h}
           rx="7"
-          fill="#d5ddcd"
-          stroke="#9fae94"
+          fill="var(--plan-sofa, #d5ddcd)"
+          stroke="var(--plan-seat-stroke, #9fae94)"
           strokeWidth="1.2"
         />
         <rect
@@ -153,42 +153,42 @@ function Furniture({ item }: { item: PlanItem }) {
           width={w - 12}
           height={h - 12}
           rx="4"
-          fill="#e3e8dd"
-          stroke="#aebaa3"
+          fill="var(--plan-seat, #e3e8dd)"
+          stroke="var(--plan-seat-stroke, #aebaa3)"
           strokeWidth="0.8"
         />
         {vertical ? (
           <>
             <path
               d={`M6 ${h / 2}h${w - 12}M${w - 10} 7v${h - 14}`}
-              stroke="#b0bba6"
+              stroke="var(--plan-seat-stroke, #b0bba6)"
               strokeWidth="1"
             />
-            <rect x="2" y="3" width={w - 4} height="7" rx="3" fill="#c5d0bb" />
+            <rect x="2" y="3" width={w - 4} height="7" rx="3" fill="var(--plan-sofa, #c5d0bb)" />
             <rect
               x="2"
               y={h - 10}
               width={w - 4}
               height="7"
               rx="3"
-              fill="#c5d0bb"
+              fill="var(--plan-sofa, #c5d0bb)"
             />
           </>
         ) : (
           <>
             <path
               d={`M${w / 3} 7v${h - 14}M${(w * 2) / 3} 7v${h - 14}M7 10h${w - 14}`}
-              stroke="#b0bba6"
+              stroke="var(--plan-seat-stroke, #b0bba6)"
               strokeWidth="1"
             />
-            <rect x="3" y="2" width="8" height={h - 4} rx="3" fill="#c5d0bb" />
+            <rect x="3" y="2" width="8" height={h - 4} rx="3" fill="var(--plan-sofa, #c5d0bb)" />
             <rect
               x={w - 11}
               y="2"
               width="8"
               height={h - 4}
               rx="3"
-              fill="#c5d0bb"
+              fill="var(--plan-sofa, #c5d0bb)"
             />
           </>
         )}
@@ -204,13 +204,13 @@ function Furniture({ item }: { item: PlanItem }) {
         <Chair x={w * 0.75} y={h + 12} />
         <Chair x={-12} y={h / 2} rotation={90} />
         <Chair x={w + 12} y={h / 2} rotation={-90} />
-        <rect x="1" y="2" width={w} height={h} rx="15" fill="#e3e0d8" />
+        <rect x="1" y="2" width={w} height={h} rx="15" fill="var(--plan-room, #e3e0d8)" />
         <rect
           width={w}
           height={h}
           rx="15"
-          fill="#eee8dc"
-          stroke="#c3b9a7"
+          fill="var(--plan-furniture, #eee8dc)"
+          stroke="var(--plan-furniture-stroke, #c3b9a7)"
           strokeWidth="1.2"
         />
         <rect
@@ -219,8 +219,8 @@ function Furniture({ item }: { item: PlanItem }) {
           width="18"
           height="13"
           rx="1"
-          fill="#fbfaf5"
-          stroke="#c9c6bc"
+          fill="var(--plan-furniture-stroke, #fbfaf5)"
+          stroke="var(--plan-guide, #c9c6bc)"
           strokeWidth="0.7"
           transform={`rotate(-8 ${w * 0.58} ${h * 0.24})`}
         />
@@ -239,13 +239,13 @@ function Furniture({ item }: { item: PlanItem }) {
     return (
       <g>
         <Chair x={w / 2} y={h + 12} />
-        <rect x="1" y="2" width={w} height={h} rx="3" fill="#e3e1d7" />
+        <rect x="1" y="2" width={w} height={h} rx="3" fill="var(--plan-room, #e3e1d7)" />
         <rect
           width={w}
           height={h}
           rx="3"
-          fill="#eee8dc"
-          stroke="#c3b9a7"
+          fill="var(--plan-furniture, #eee8dc)"
+          stroke="var(--plan-furniture-stroke, #c3b9a7)"
           strokeWidth="1.2"
         />
         <rect
@@ -254,8 +254,8 @@ function Furniture({ item }: { item: PlanItem }) {
           width="34"
           height="17"
           rx="2"
-          fill="#d3d9d3"
-          stroke="#a4ada5"
+          fill="var(--plan-seat, #d3d9d3)"
+          stroke="var(--plan-seat-stroke, #a4ada5)"
           strokeWidth="0.9"
         />
         <rect
@@ -264,11 +264,11 @@ function Furniture({ item }: { item: PlanItem }) {
           width="28"
           height="12"
           rx="1"
-          fill="#e5eae4"
+          fill="var(--plan-guide, #e5eae4)"
         />
         <path
           d={`M${w / 2} 24v4m-7 0h14`}
-          stroke="#9ca59b"
+          stroke="var(--plan-furniture-stroke, #9ca59b)"
           strokeWidth="1.4"
           strokeLinecap="round"
         />
@@ -278,16 +278,16 @@ function Furniture({ item }: { item: PlanItem }) {
           width="24"
           height="5"
           rx="1"
-          fill="#d3d6ce"
-          stroke="#babeb3"
+          fill="var(--plan-seat, #d3d6ce)"
+          stroke="var(--plan-seat-stroke, #babeb3)"
           strokeWidth="0.6"
         />
         <circle
           cx={w - 13}
           cy="13"
           r="4"
-          fill="#f8f7f1"
-          stroke="#bcbbaa"
+          fill="var(--plan-furniture-stroke, #f8f7f1)"
+          stroke="var(--plan-guide, #bcbbaa)"
           strokeWidth="0.8"
         />
       </g>
@@ -299,13 +299,13 @@ function Furniture({ item }: { item: PlanItem }) {
         width={w}
         height={h}
         rx="2"
-        fill="#e9ded2"
-        stroke="#b7a28c"
+        fill="var(--plan-furniture, #e9ded2)"
+        stroke="var(--plan-furniture-stroke, #b7a28c)"
         strokeWidth="1.2"
       />
       <path
         d={`M4 4L${w - 4} ${h - 4}M${w - 4} 4L4 ${h - 4}`}
-        stroke="#cbb9a5"
+        stroke="var(--plan-furniture-stroke, #cbb9a5)"
         strokeWidth="0.8"
       />
     </g>
@@ -474,17 +474,17 @@ export default function FloorPlanView({
       >
         {isSample ? (
           <>
-            <rect x="80" y="90" width="740" height="420" fill="#fbfcfa" />
-            <path d="M610 90h210v145H610z" fill="#f3f5ef" />
-            <path d="M561 355h251v147H561z" fill="#f6f5ef" />
-            <g fill="none" stroke="#c9cfc5" strokeWidth="0.8">
+            <rect x="80" y="90" width="740" height="420" fill="var(--plan-floor, #fbfcfa)" />
+            <path d="M610 90h210v145H610z" fill="var(--plan-room, #f3f5ef)" />
+            <path d="M561 355h251v147H561z" fill="var(--plan-lounge, #f6f5ef)" />
+            <g fill="none" stroke="var(--plan-guide, #c9cfc5)" strokeWidth="0.8">
               <path d="M80 68h740M80 62v12m740-12v12M57 90v420M51 90h12m-12 420h12" />
             </g>
-            <rect x="424" y="58" width="54" height="18" fill="#f7f8f4" />
+            <rect x="424" y="58" width="54" height="18" fill="var(--plan-floor, #f7f8f4)" />
             <text
               x="450"
               y="71"
-              fill="#67765d"
+              fill="var(--plan-label, #67765d)"
               fontSize="10"
               textAnchor="middle"
               fontFamily="var(--font-ibm-mono), monospace"
@@ -494,7 +494,7 @@ export default function FloorPlanView({
             <text
               x="46"
               y="300"
-              fill="#67765d"
+              fill="var(--plan-label, #67765d)"
               fontSize="9"
               textAnchor="middle"
               transform="rotate(-90 46 300)"
@@ -503,7 +503,7 @@ export default function FloorPlanView({
               13.1 m
             </text>
             <g
-              fill="#67765d"
+              fill="var(--plan-label, #67765d)"
               fontSize="10"
               letterSpacing="1.2"
               fontWeight="500"
@@ -521,16 +521,16 @@ export default function FloorPlanView({
           </>
         ) : plan.native ? (
           <g aria-label="Imported floor outline">{plan.native.floors.map((points,index)=><polygon key={index}
-            points={points.map(p=>`${p.x},${p.y}`).join(" ")} fill="#fbfcfa" stroke="#79866e" strokeWidth="1.5" />)}</g>
+            points={points.map(p=>`${p.x},${p.y}`).join(" ")} fill="var(--plan-floor, #fbfcfa)" stroke="var(--plan-wall, #79866e)" strokeWidth="1.5" />)}</g>
         ) : (
           <rect
             x="1"
             y="1"
             width={viewWidth - 2}
             height={viewHeight - 2}
-            fill="#fbfcfa"
+            fill="var(--plan-floor, #fbfcfa)"
             fillOpacity={reference ? 0.25 : 1}
-            stroke="#e0e4db"
+            stroke="var(--plan-guide, #e0e4db)"
             strokeWidth="1"
           />
         )}
@@ -652,7 +652,7 @@ export default function FloorPlanView({
                       height={item.height + 10}
                       rx="3"
                       fill="none"
-                      stroke="#3e7656"
+                      stroke="var(--plan-selection, #3e7656)"
                       strokeWidth="1.3"
                       strokeDasharray="3 2"
                     />
@@ -670,7 +670,7 @@ export default function FloorPlanView({
                         height="5"
                         rx="0.7"
                         fill="#fff"
-                        stroke="#3e7656"
+                        stroke="var(--plan-selection, #3e7656)"
                         strokeWidth="1"
                       />
                     ))}
@@ -700,7 +700,7 @@ export default function FloorPlanView({
 
         <g
           fill="none"
-          stroke="#65705f"
+          stroke="var(--plan-wall, #65705f)"
           strokeWidth="7"
           strokeLinecap="square"
           strokeLinejoin="miter"
@@ -716,11 +716,11 @@ export default function FloorPlanView({
             />
           ))}
           {plan.native?.walls.map((points,index)=><polygon key={`native-${index}`} points={points.map(p=>`${p.x},${p.y}`).join(" ")}
-            fill="#65705f" strokeWidth="0" />)}
+            fill="var(--plan-wall, #65705f)" strokeWidth="0" />)}
         </g>
 
         {isSample ? (
-          <g fill="none" stroke="#b9c4b2" strokeWidth="1">
+          <g fill="none" stroke="var(--plan-guide, #b9c4b2)" strokeWidth="1">
             <path d="M680 235v-47a47 47 0 0 1 47 47" />
             <path d="M80 272h28a28 28 0 0 1-28 28m740 0h-28a28 28 0 0 0 28 28" />
           </g>
@@ -734,10 +734,10 @@ export default function FloorPlanView({
             const label=`Exit ${index+1}`;
             return <g key={`opening:${exit.id}`} aria-label={`${label}, ${exit.width.toFixed(2)} meters wide`}>
               <title>{`${label} · ${exit.width.toFixed(2)} m wide`}</title>
-              <line x1={ends[0].x} y1={ends[0].y} x2={ends[1].x} y2={ends[1].y} stroke="#fbfcfa" strokeWidth="6" />
-              <line x1={ends[0].x} y1={ends[0].y} x2={ends[1].x} y2={ends[1].y} stroke="#397b51" strokeWidth="3" />
+              <line x1={ends[0].x} y1={ends[0].y} x2={ends[1].x} y2={ends[1].y} stroke="var(--plan-floor, #fbfcfa)" strokeWidth="6" />
+              <line x1={ends[0].x} y1={ends[0].y} x2={ends[1].x} y2={ends[1].y} stroke="var(--plan-exit-line, #397b51)" strokeWidth="3" />
               {mode!=="layout"&&<text x={(ends[0].x+ends[1].x)/2+8} y={(ends[0].y+ends[1].y)/2-8}
-                fontSize="9" fill="#315f45">{label}</text>}
+                fontSize="9" fill="var(--plan-exit-label, #315f45)">{label}</text>}
             </g>;
           })}
           {plan.native ? (result?.exitZones ?? plan.native.exit_zones).map(zone=><polygon key={zone.id} points={zone.polygon.map(p=>`${p.x},${p.y}`).join(" ")}
@@ -779,7 +779,7 @@ export default function FloorPlanView({
                     x="0"
                     y="26"
                     textAnchor="middle"
-                    fill="#526f4f"
+                    fill="var(--plan-exit-label, #526f4f)"
                     fontSize="8"
                     fontWeight="600"
                   >
@@ -817,13 +817,13 @@ export default function FloorPlanView({
                 rx={metre * personRadius * .68}
                 ry={metre * personRadius}
                 fill={
-                  agent.outcome === "trapped" ? "#b64235" : measuredPeople && time < agent.delay ? "#b98a3e" : agent.id % 7 === 0
-                    ? "#2356c4"
+                  agent.outcome === "trapped" ? "var(--plan-trapped, #b64235)" : measuredPeople && time < agent.delay ? "var(--plan-responding, #b98a3e)" : agent.id % 7 === 0
+                    ? "var(--plan-person, #2356c4)"
                     : agent.id % 3 === 0
-                      ? "#007185"
-                      : "#1746a2"
+                      ? "var(--plan-person-alt, #007185)"
+                      : "var(--plan-person, #1746a2)"
                 }
-                stroke="#14213d"
+                stroke="var(--plan-person-outline, #14213d)"
                 strokeWidth={metre * personRadius * .12}
               />
               <path d={`M ${metre*personRadius*.4} ${-metre*personRadius*.24} L ${metre*personRadius*.4} ${metre*personRadius*.24}`}
@@ -835,7 +835,7 @@ export default function FloorPlanView({
 
         <g
           transform={`translate(96 ${viewHeight - 47}) scale(${metre/32})`}
-          fill="#67765d"
+          fill="var(--plan-label, #67765d)"
           fontSize="10"
           fontFamily="var(--font-ibm-mono), monospace"
           aria-label="Scale: four meters"
@@ -843,7 +843,7 @@ export default function FloorPlanView({
           <path
             d="M0 0h128M0-3v6m64-6v6m64-6v6"
             fill="none"
-            stroke="#8b9586"
+            stroke="var(--plan-guide, #8b9586)"
             strokeWidth="0.8"
           />
           <text y="16">0</text>
@@ -856,12 +856,12 @@ export default function FloorPlanView({
         </g>
         <g
           transform={`translate(${viewWidth - 99} ${viewHeight - 43})`}
-          fill="#67765d"
+          fill="var(--plan-label, #67765d)"
           fontSize="8"
           textAnchor="middle"
           aria-hidden="true"
         >
-          <path d="M0-13-4-1 0-3 4-1z" fill="#7b8e76" />
+          <path d="M0-13-4-1 0-3 4-1z" fill="var(--plan-label, #7b8e76)" />
           <text y="10">N</text>
         </g>
       </g>
