@@ -31,7 +31,7 @@ assert.ok(
 for (const agent of sample.agents) {
   const point = agent.points[0];
   assert.ok(
-    point.x > 80 && point.x < 820 && point.y > 90 && point.y < 510,
+    point.x > 265 && point.x < 635 && point.y > 195 && point.y < 405,
     "Sample placements must stay inside the floor",
   );
   assert.ok(
@@ -106,19 +106,19 @@ blockedPlan.items.push(
   {
     id: "block-a",
     label: "Blocked A",
-    x: 60,
-    y: 260,
+    x: 245,
+    y: 280,
     width: 45,
-    height: 80,
+    height: 40,
     kind: "obstacle",
   },
   {
     id: "block-b",
     label: "Blocked B",
-    x: 800,
-    y: 260,
+    x: 615,
+    y: 280,
     width: 45,
-    height: 80,
+    height: 40,
     kind: "obstacle",
   },
 );

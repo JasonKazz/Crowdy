@@ -37,7 +37,7 @@ function PlanThumbnail({ plan }: { plan: FloorPlan }) {
   const patternId = `source-grid-${useId().replaceAll(":", "")}`;
   return (
     <svg
-      viewBox={`0 0 ${plan.width} ${plan.height}`}
+      viewBox={plan.id === "berkeley-studio" && plan.area === 76 ? "225 150 450 300" : `0 0 ${plan.width} ${plan.height}`}
       role="img"
       aria-label={`${plan.name} floor plan preview`}
       className={styles.planDrawing}

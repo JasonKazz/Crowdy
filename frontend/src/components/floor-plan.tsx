@@ -45,13 +45,15 @@ function Chair({
   x,
   y,
   rotation = 0,
+  scale = 1,
 }: {
   x: number;
   y: number;
   rotation?: number;
+  scale?: number;
 }) {
   return (
-    <g transform={`translate(${x} ${y}) rotate(${rotation})`}>
+    <g transform={`translate(${x} ${y}) rotate(${rotation}) scale(${scale})`}>
       <path
         d="M-11 3v6q0 4 4 4H7q4 0 4-4V3"
         fill="var(--plan-seat, #e0e5df)"
@@ -196,12 +198,13 @@ function Furniture({ item }: { item: PlanItem }) {
     );
   }
   if (item.kind === "table") {
+    const chairScale = Math.min(1, w / 48);
     return (
       <g>
-        <Chair x={w * 0.25} y={-12} rotation={180} />
-        <Chair x={w * 0.75} y={-12} rotation={180} />
-        <Chair x={w * 0.25} y={h + 12} />
-        <Chair x={w * 0.75} y={h + 12} />
+        <Chair x={w * 0.25} y={-12} rotation={180} scale={chairScale} />
+        <Chair x={w * 0.75} y={-12} rotation={180} scale={chairScale} />
+        <Chair x={w * 0.25} y={h + 12} scale={chairScale} />
+        <Chair x={w * 0.75} y={h + 12} scale={chairScale} />
         <Chair x={-12} y={h / 2} rotation={90} />
         <Chair x={w + 12} y={h / 2} rotation={-90} />
         <rect x="1" y="2" width={w} height={h} rx="15" fill="var(--plan-room, #e3e0d8)" />
@@ -236,6 +239,7 @@ function Furniture({ item }: { item: PlanItem }) {
     );
   }
   if (item.kind === "desk") {
+    const detailScale = Math.min(1, w / 110, h / 48);
     return (
       <g>
         <Chair x={w / 2} y={h + 12} />
@@ -248,48 +252,50 @@ function Furniture({ item }: { item: PlanItem }) {
           stroke="var(--plan-furniture-stroke, #c3b9a7)"
           strokeWidth="1.2"
         />
-        <rect
-          x={w / 2 - 17}
-          y="7"
-          width="34"
-          height="17"
-          rx="2"
-          fill="var(--plan-seat, #d3d9d3)"
-          stroke="var(--plan-seat-stroke, #a4ada5)"
-          strokeWidth="0.9"
-        />
-        <rect
-          x={w / 2 - 14}
-          y="9"
-          width="28"
-          height="12"
-          rx="1"
-          fill="var(--plan-guide, #e5eae4)"
-        />
-        <path
-          d={`M${w / 2} 24v4m-7 0h14`}
-          stroke="var(--plan-furniture-stroke, #9ca59b)"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-        />
-        <rect
-          x={w / 2 - 12}
-          y="31"
-          width="24"
-          height="5"
-          rx="1"
-          fill="var(--plan-seat, #d3d6ce)"
-          stroke="var(--plan-seat-stroke, #babeb3)"
-          strokeWidth="0.6"
-        />
-        <circle
-          cx={w - 13}
-          cy="13"
-          r="4"
-          fill="var(--plan-furniture-stroke, #f8f7f1)"
-          stroke="var(--plan-guide, #bcbbaa)"
-          strokeWidth="0.8"
-        />
+        <g transform={`translate(${w / 2} 0) scale(${detailScale}) translate(${-w / 2} 0)`}>
+          <rect
+            x={w / 2 - 17}
+            y="7"
+            width="34"
+            height="17"
+            rx="2"
+            fill="var(--plan-seat, #d3d9d3)"
+            stroke="var(--plan-seat-stroke, #a4ada5)"
+            strokeWidth="0.9"
+          />
+          <rect
+            x={w / 2 - 14}
+            y="9"
+            width="28"
+            height="12"
+            rx="1"
+            fill="var(--plan-guide, #e5eae4)"
+          />
+          <path
+            d={`M${w / 2} 24v4m-7 0h14`}
+            stroke="var(--plan-furniture-stroke, #9ca59b)"
+            strokeWidth="1.4"
+            strokeLinecap="round"
+          />
+          <rect
+            x={w / 2 - 12}
+            y="31"
+            width="24"
+            height="5"
+            rx="1"
+            fill="var(--plan-seat, #d3d6ce)"
+            stroke="var(--plan-seat-stroke, #babeb3)"
+            strokeWidth="0.6"
+          />
+          <circle
+            cx={w / 2 + 42}
+            cy="13"
+            r="4"
+            fill="var(--plan-furniture-stroke, #f8f7f1)"
+            stroke="var(--plan-guide, #bcbbaa)"
+            strokeWidth="0.8"
+          />
+        </g>
       </g>
     );
   }
@@ -340,7 +346,7 @@ export default function FloorPlanView({
   const [geometryPreview,setGeometryPreview]=useState<FloorPlan|null>(null);
   const [imageError,setImageError]=useState<string|null>(null);
   const plan=geometryPreview??inputPlan;
-  const isSample = plan.id === "berkeley-studio";
+  const isSample = plan.id === "berkeley-studio" && plan.area === 76;
   const viewWidth = plan.width || 900;
   const viewHeight = plan.height || 600;
   const metre = plan.native?.transform.pixels_per_metre ?? 32;
@@ -459,7 +465,7 @@ export default function FloorPlanView({
     <svg
       ref={svgRef}
       className="floorplan-svg"
-      viewBox={`0 0 ${viewWidth} ${viewHeight}`}
+      viewBox={isSample ? "225 150 450 300" : `0 0 ${viewWidth} ${viewHeight}`}
       preserveAspectRatio="xMidYMid meet"
       role="group"
       aria-label={`${plan.name} floor plan. ${mode === "layout" ? "Select furniture to edit. Use arrow keys to move selected furniture, or drag." : "Simulation spatial view."}`}
@@ -474,47 +480,47 @@ export default function FloorPlanView({
       >
         {isSample ? (
           <>
-            <rect x="80" y="90" width="740" height="420" fill="var(--plan-floor, #fbfcfa)" />
-            <path d="M610 90h210v145H610z" fill="var(--plan-room, #f3f5ef)" />
-            <path d="M561 355h251v147H561z" fill="var(--plan-lounge, #f6f5ef)" />
+            <rect x="265" y="195" width="370" height="210" fill="var(--plan-floor, #fbfcfa)" />
+            <path d="M530 195h105v72.5H530z" fill="var(--plan-room, #f3f5ef)" />
+            <path d="M505.5 327.5h125.5V401H505.5z" fill="var(--plan-lounge, #f6f5ef)" />
             <g fill="none" stroke="var(--plan-guide, #c9cfc5)" strokeWidth="0.8">
-              <path d="M80 68h740M80 62v12m740-12v12M57 90v420M51 90h12m-12 420h12" />
+              <path d="M265 184h370M265 181v6m370-6v6M253.5 195v210M250.5 195h6m-6 210h6" />
             </g>
-            <rect x="424" y="58" width="54" height="18" fill="var(--plan-floor, #f7f8f4)" />
+            <rect x="424" y="175" width="54" height="18" fill="var(--plan-floor, #f7f8f4)" />
             <text
               x="450"
-              y="71"
+              y="187"
               fill="var(--plan-label, #67765d)"
               fontSize="10"
               textAnchor="middle"
               fontFamily="var(--font-ibm-mono), monospace"
             >
-              23.1 m
+              11.6 m
             </text>
             <text
-              x="46"
+              x="248"
               y="300"
               fill="var(--plan-label, #67765d)"
               fontSize="9"
               textAnchor="middle"
-              transform="rotate(-90 46 300)"
+              transform="rotate(-90 248 300)"
               fontFamily="var(--font-ibm-mono), monospace"
             >
-              13.1 m
+              6.6 m
             </text>
             <g
               fill="var(--plan-label, #67765d)"
-              fontSize="10"
-              letterSpacing="1.2"
+              fontSize="8"
+              letterSpacing="0.6"
               fontWeight="500"
             >
-              <text x="178" y="121">
+              <text x="314" y="210.5">
                 WORKSTATIONS
               </text>
-              <text x="670" y="111">
+              <text x="550" y="205.5">
                 MEETING ROOM
               </text>
-              <text x="632" y="484">
+              <text x="541" y="392">
                 LOUNGE
               </text>
             </g>
@@ -721,8 +727,8 @@ export default function FloorPlanView({
 
         {isSample ? (
           <g fill="none" stroke="var(--plan-guide, #b9c4b2)" strokeWidth="1">
-            <path d="M680 235v-47a47 47 0 0 1 47 47" />
-            <path d="M80 272h28a28 28 0 0 1-28 28m740 0h-28a28 28 0 0 0 28 28" />
+            <path d="M565 267.5V244a23.5 23.5 0 0 1 23.5 23.5" />
+            <path d="M265 286h14a14 14 0 0 1-14 14m370 0h-14a14 14 0 0 0 14 14" />
           </g>
         ) : null}
 
@@ -748,9 +754,9 @@ export default function FloorPlanView({
                 <title>{`${exit.label}${result?.exitWidths?.[exit.id] === undefined ? "" : `: ${result.exitWidths[exit.id].toFixed(2)} m wide`}`}</title>
                 <line
                   x1={exit.x}
-                  y1={exit.y - 23}
+                  y1={exit.y - (isSample ? 14 : 23)}
                   x2={exit.x}
-                  y2={exit.y + 23}
+                  y2={exit.y + (isSample ? 14 : 23)}
                   stroke="#8eae8d"
                   strokeWidth="3"
                 />
@@ -834,7 +840,7 @@ export default function FloorPlanView({
         ) : null}
 
         <g
-          transform={`translate(96 ${viewHeight - 47}) scale(${metre/32})`}
+          transform={`translate(${isSample ? 450 : 96} ${isSample ? 426.5 : viewHeight - 47}) scale(${metre/32})`}
           fill="var(--plan-label, #67765d)"
           fontSize="10"
           fontFamily="var(--font-ibm-mono), monospace"
@@ -855,7 +861,7 @@ export default function FloorPlanView({
           </text>
         </g>
         <g
-          transform={`translate(${viewWidth - 99} ${viewHeight - 43})`}
+          transform={`translate(${isSample ? 625.5 : viewWidth - 99} ${isSample ? 428.5 : viewHeight - 43})`}
           fill="var(--plan-label, #67765d)"
           fontSize="8"
           textAnchor="middle"

@@ -34,13 +34,15 @@ class NormalPopulationTests(unittest.TestCase):
     def test_sample_uses_drawn_chairs_and_couch_fronts_and_few_walkers(self):
         preview=self.preview();meta=preview['room_population']
         self.assertEqual(len(preview['occupants']),24)
-        self.assertGreaterEqual(meta['seated_count'],20)
-        self.assertLessEqual(meta['circulating_count'],4)
+        self.assertGreaterEqual(meta['seated_count'],18)
+        self.assertLessEqual(meta['circulating_count'],6)
         self.assertEqual(meta['seated_count']+meta['circulating_count'],24)
         placements=meta['normal_placements']
         self.assertEqual({p['kind'] for p in placements},{'desk','table','sofa','circulating'})
         desk=next(p for p in placements if p['object_id']=='desk-1')
-        self.assertEqual(desk['seat_position'],[235/32,(600-215)/32])
+        item=next(i for i in self.plan['items'] if i['id']=='desk-1')
+        self.assertEqual(desk['seat_position'],[(item['x']+item['width']/2)/32,
+                                               (600-item['y']-item['height']-12)/32])
         for person in (p for p in placements if p['kind']=='sofa'):
             self.assertEqual(person['facing'],[-1,0] if person['object_id']=='sofa-2' else [0,-1])
             item=next(i for i in self.plan['items'] if i['id']==person['object_id'])

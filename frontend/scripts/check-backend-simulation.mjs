@@ -13,6 +13,10 @@ import {
 } from "../src/lib/simulation.ts";
 import {headingAt} from "../src/lib/person-heading.ts";
 
+const editorSample = JSON.parse(readFileSync(new URL("../../backend/tests/fixtures/editor-sample.json", import.meta.url), "utf8"));
+assert.deepEqual(SAMPLE_PLAN, editorSample.plan,
+  "The backend physical-clearance regressions must exercise the current Berkeley sample");
+
 const scenario = { occupancy: 2, mobility: "mixed", distribution: "workstations" };
 const point = (id, x, y) => ({ id, x, y });
 const fixture = {
