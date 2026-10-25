@@ -17,6 +17,15 @@ export type RoomSummary = {id: string; label: string; room_type: RoomType; sourc
 export type PopulationPreview = {key: string; radius: number; people: Point[];
   rooms: RoomSummary[]; buildingType?: string; activity?: string; warnings: string[];
   displayPeople?: Point[]; facingAngles?: number[]; seatedCount?: number; circulatingCount?: number};
+export type PopulationPlacementStatus = {key: string; loading: boolean; error: string};
+
+export function populationPreviewState(key: string, preview: PopulationPreview | null, status: PopulationPlacementStatus) {
+  const current = status.key === key;
+  const error = current ? status.error : "";
+  const loading = !current || status.loading;
+  return {error, loading, preview: current && !loading && !error && preview?.key === key ? preview : null};
+}
+
 export const ACTIVITY_LABELS: Record<typeof ACTIVITIES[number], string> = {
   auto: "Automatic activity", workday: "Workday · at desks", meeting: "Meeting time", lunch: "Lunch / break",
   class_time: "During class", passing_period: "Between classes", assembly: "Assembly", event: "Event in progress",

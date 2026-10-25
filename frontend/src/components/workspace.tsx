@@ -10,7 +10,7 @@ import { runBackendSimulation, sameStartingPopulation } from "@/lib/backend-simu
 import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
 import FloorPlanView from "./floor-plan";
 import RoomPopulationPanel from "./room-population-panel";
-import {adaptPopulationPreview, placementKey, startingPopulation, type PopulationPreview} from "@/lib/room-population";
+import {adaptPopulationPreview, placementKey, populationPreviewState, startingPopulation, type PopulationPreview} from "@/lib/room-population";
 import Icon, { type IconName } from "./icon";
 import ScaleCalibrator, {type PendingCalibration} from "./scale-calibrator";
 import GeometryPanel from "./geometry-panel";
@@ -88,8 +88,10 @@ export default function Workspace({
   const [baseline, setBaseline] = useState<SimulationResult | null>(null);
   const [populationPreview, setPopulationPreview] = useState<PopulationPreview | null>(null);
   const [placementStatus, setPlacementStatus] = useState({key:"",loading:false,error:""});
+  const [placementRetry, setPlacementRetry] = useState(0);
   const populationKey = useMemo(()=>placementKey(plan,scenario,baseline),[plan,scenario,baseline]);
-  const currentPopulation = populationPreview?.key === populationKey ? populationPreview : null;
+  const placement = populationPreviewState(populationKey, populationPreview, placementStatus);
+  const currentPopulation = placement.preview;
   const [runCount, setRunCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState(false);
@@ -134,6 +136,7 @@ export default function Workspace({
   const currentTime = useRef(0);
   const uploadRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const geometryPanelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -234,7 +237,7 @@ export default function Workspace({
       }
     }, 350);
     return () => {clearTimeout(timer);controller.abort();};
-  }, [plan, scenario, baseline, populationKey, mode]);
+  }, [plan, scenario, baseline, populationKey, mode, placementRetry]);
 
   async function saveCopy() {
     const controller = accountController.current;
@@ -339,7 +342,8 @@ export default function Workspace({
       JSON.stringify(baseline.scenario) === JSON.stringify(result.scenario),
   );
   const shownPlan = mode === "layout" ? plan : (result?.plan ?? plan);
-  const shownResult = mode === "layout" ? (!stale && result ? result : null) : result;
+  // Layout uses validated starting placement; recorded runs belong to playback.
+  const shownResult = mode === "layout" ? null : result;
   const evacuated = result ? getEvacuatedCount(result, time) : 0;
   const responding = result?.agents.filter(agent => agent.outcome !== "trapped" && time < agent.delay).length ?? 0;
   const duration = Math.max(
@@ -460,6 +464,21 @@ export default function Workspace({
       setNotice(checked.native?.issues?.length?"Review the layout issues below.":"Geometry checks passed. Ready to simulate.");
     }catch(cause){setRunError(cause instanceof Error?cause.message:"Could not check the layout.");}
     finally{setBusy(false);}
+  }
+
+  function inspectPlacementGeometry() {
+    setSidebarTab("editing");
+    setPlaying(false);
+    setSelectedId(null);
+    const wallId = /Wall '([^']+)'/.exec(placement.error)?.[1];
+    if (plan.native && wallId && nativeLayout(plan).walls.some(wall => wall.id === wallId)) {
+      setGeometrySelection({kind: "wall", id: wallId});
+      setGeometryTool("select");
+    }
+    requestAnimationFrame(() => {
+      geometryPanelRef.current?.scrollIntoView({block: "nearest"});
+      geometryPanelRef.current?.querySelector<HTMLElement>("select, button")?.focus();
+    });
   }
   async function run() {
     if (busy && !running) return;
@@ -831,9 +850,9 @@ export default function Workspace({
               <span className="section-count">{plan.items.length} objects</span>
             </div>
             <p className="helper">Select furniture on the plan to move it.</p>
-            {mode==="layout"&&<GeometryPanel plan={plan} selection={geometrySelection} tool={geometryTool} busy={busy}
+            {mode==="layout"&&<div ref={geometryPanelRef}><GeometryPanel plan={plan} selection={geometrySelection} tool={geometryTool} busy={busy}
               onChange={editPlan} onSelect={selection=>{setGeometrySelection(selection);setSelectedId(null);}} onTool={setGeometryTool} onCheck={checkLayout}
-              overlay={showReference} onOverlay={setShowReference} opacity={referenceOpacity} onOpacity={setReferenceOpacity}/>}
+              overlay={showReference} onOverlay={setShowReference} opacity={referenceOpacity} onOpacity={setReferenceOpacity}/></div>}
             <div className="layout-buttons">
               <button
                 className="button subtle"
@@ -994,8 +1013,8 @@ export default function Workspace({
                 <Icon name="chevron" size={13} />
               </div>
               {(scenario.distribution === "rooms" || scenario.distribution === "normal") && <RoomPopulationPanel plan={plan} scenario={scenario}
-                preview={currentPopulation ?? populationPreview} loading={placementStatus.key !== populationKey || placementStatus.loading}
-                error={placementStatus.key === populationKey ? placementStatus.error : ""}
+                preview={currentPopulation} loading={placement.loading}
+                error={placement.error}
                 onChange={next=>{setScenario(next);setMode("layout");setPlaying(false);}} />}
               <label className="field-label" htmlFor="body-width">Body width (cm)</label>
               <input id="body-width" type="number" min="40" max="70" step="1" value={Math.round((scenario.bodyWidth ?? .46)*100)}
@@ -1061,8 +1080,8 @@ export default function Workspace({
           </section>
           <div className="setup-bottom">
             <span>
-              <Icon name="check" size={14} />
-              Scenario ready
+              <Icon name={placement.error || placement.loading ? "clock" : "check"} size={14} />
+              {placement.error ? "Placement unavailable" : placement.loading ? "Checking placement…" : "Scenario ready"}
             </span>
             <button
               className="text-button muted"
@@ -1124,14 +1143,14 @@ export default function Workspace({
                 {busy
                   ? "Computing crowd movement"
                   : mode === "layout"
-                    ? "Editing layout · live placement preview"
+                    ? placement.error ? "Placement unavailable · review layout" : placement.loading ? "Preparing placement preview" : "Editing layout · placement preview"
                     : playing
                       ? "Playing simulation"
                       : "Simulation paused"}
               </span>
               {mode === "layout" ? (
                 <span>
-                  {scenario.occupancy} people{" "}
+                  {scenario.occupancy} people requested{" "}
                   <span className="caption-dot">·</span> {plan.exits.length}{" "}
                   exits
                 </span>
@@ -1226,6 +1245,18 @@ export default function Workspace({
               </div>
             )}
           </div>
+          {mode === "layout" && placement.error && (
+            <div className="placement-preview-error" role="alert">
+              <p><strong>People preview unavailable.</strong> {scenario.occupancy} requested; no people placed. Review the layout or retry.</p>
+              <div>
+                <button type="button" className="text-button" disabled={busy} onClick={inspectPlacementGeometry}>{plan.native ? "Check walls & doors" : "Review layout"}</button>
+                <button type="button" className="text-button" disabled={busy} onClick={() => {
+                  setPlacementStatus({key: populationKey, loading: true, error: ""});
+                  setPlacementRetry(previous => previous + 1);
+                }}>Retry preview</button>
+              </div>
+            </div>
+          )}
           <div className="layers-bar">
             <div className="layers-label">
               <Icon name="layers" size={15} />
@@ -1282,7 +1313,7 @@ export default function Workspace({
                   {mode === "layout" ? "Starting placement" : "Playback"}
                 </strong>
                 <span>
-                  {mode === "layout" ? currentPopulation ? `${currentPopulation.people.length} people placed${result ? " · Play shows the recorded run" : ""}` : "Run a scenario to inspect movement" : result
+                  {mode === "layout" ? currentPopulation ? `${currentPopulation.people.length} people placed${result ? " · Play shows the recorded run" : ""}` : placement.error ? `No people placed · ${scenario.occupancy} requested` : "Preparing placement preview…" : result
                     ? `${evacuated} / ${result.scenario.occupancy} exited${responding ? ` · ${responding} responding` : ""}`
                     : "Run a scenario to inspect movement"}
                 </span>

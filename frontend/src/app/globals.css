@@ -2771,4 +2771,8 @@ input::-webkit-inner-spin-button {
 .room-count-controls input { width: 70px; min-height: 31px; padding: 5px 7px; border: 1px solid #d5ddcd; border-radius: 5px; background: white; font-size: 13px; }
 .room-count-controls .text-button { font-size: 11px; }
 .room-placement-error { color: #9b382c; background: #fff0e9; border-radius: 6px; padding: 8px; font-size: 12px; line-height: 1.5; }
+.placement-preview-error { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 16px; color: #843c2f; background: #fff3ea; border-top: 1px solid #ebd4c5; font-size: 12px; line-height: 1.5; }
+.placement-preview-error p { margin: 0; }
+.placement-preview-error > div { display: flex; flex-wrap: wrap; gap: 16px; }
+.placement-preview-error button { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .room-placement-warning { color: #786239; }
