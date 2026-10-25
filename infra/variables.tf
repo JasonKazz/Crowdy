@@ -65,6 +65,13 @@ variable "anthropic_api_key" {
   default     = ""
 }
 
+variable "ai_gateway_api_key" {
+  description = "Optional server-side Vercel AI Gateway key for Gemini and Claude floor-plan extraction. Never exposed to the browser."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "create_budget" {
   description = "Create resource group cost alerts. Alerts do not impose a spending cap or shut resources down."
   type        = bool

@@ -18,8 +18,20 @@ Terraform supplies these backend settings:
 | `AZURE_CLIENT_ID` | The user-assigned managed identity's client ID. |
 | `GEMINI_API_KEY` | Optional secret; enables Gemini floor-plan extraction. |
 | `ANTHROPIC_API_KEY` | Optional secret; enables Claude floor-plan extraction. |
+| `AI_GATEWAY_API_KEY` | Optional Vercel AI Gateway secret; enables Gemini and Claude and takes precedence over native keys. |
 
-The initial Azure deployment has no image extraction provider keys. Add the desired provider's key through Terraform's sensitive variables before production image extraction. Provider model IDs must be available to that account. Sample and JSON simulations do not need provider credentials. `CLAUDE_API_KEY` remains accepted when `ANTHROPIC_API_KEY` is absent.
+Configure `TF_VAR_ai_gateway_api_key` for both providers through Vercel AI Gateway,
+or `TF_VAR_gemini_api_key` / `TF_VAR_anthropic_api_key` for direct provider access.
+The deploy script privately preserves all three in ignored
+`infra/secrets.auto.tfvars.json`; omitted exports retain saved keys. Gateway
+requests use the fixed `https://ai-gateway.vercel.sh/v1/chat/completions` endpoint.
+Its defaults are `google/gemini-3.8-flash` and `anthropic/claude-sonnet-5.5`, with
+separate backend `AI_GATEWAY_GEMINI_MODEL` / `AI_GATEWAY_ANTHROPIC_MODEL` overrides.
+Native `GEMINI_MODEL` / `ANTHROPIC_MODEL` settings remain independent, and
+`CLAUDE_API_KEY` is accepted when `ANTHROPIC_API_KEY` is absent. Models must be
+available to the credential's account. Sample and JSON simulations need no
+provider credentials. Keep extraction keys only on the Python backend; the
+frontend server still uses its separate backend bearer token.
 
 Azure storage is authoritative when configured. Storage failures are reported instead of falling back to ephemeral files. Local development without Azure settings uses `data/editor/` for artifacts and `data/persistent/` for account workspaces relative to the backend working directory; `CROWDY_STORAGE_DIR` overrides that local root. Legacy `BLOB_READ_WRITE_TOKEN` support remains for older Vercel artifact deployments, but is not the Azure persistence configuration.
 
@@ -103,3 +115,5 @@ The Vercel frontend's 4.5 MB request/response limit still applies. Image uploads
 Simulation requests retain a 55-second frontend timeout. Large playback trajectories can exceed Vercel's response allowance even when the backend succeeds; reduce occupancy or use hosting with a larger response allowance. Image imports run as background jobs on the persistent Azure process with progress polling. Job state, active provider work, and simulation locks remain process-local: the deployment fixes the backend at one replica, and interrupted jobs should be retried after a restart or redeployment. Multiple replicas require a durable job queue and coordinated work scheduling.
 
 Run the [integration checks](integration.md#validation), frontend build/lint, and backend tests before deploying. Unit tests mock cloud calls; a live private Blob round trip verifies managed identity and deployed storage access. Provider fixture tests do not verify a live account's model access.
+
+Interactive floor-plan imports use the full canonical image with at most one conditional structural follow-up, rather than automatically starting tiled extraction. The API starts a 90-second worker budget before image decoding/storage; provider calls have a 75-second cap within an 85-second extraction scope. The floor-plan proxy allows 105 seconds, its Vercel duration is 110 seconds, and browser preparation/upload/polling share a 110-second limit. Keep `CROWDY_FLOORPLAN_EXTRACTION_MODE` unset or `interactive` in production. `diagnostic_staged` is for explicit offline evaluation and still inherits the API budget when invoked through HTTP.

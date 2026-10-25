@@ -2,7 +2,7 @@
 
 import math
 
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
 from app.schemas.layout import ExitDoor, Layout, Wall
@@ -20,6 +20,27 @@ def wall_polygon(wall: Wall, start: float, end: float) -> list[tuple[float, floa
     b = (wall.start[0] + ux * end, wall.start[1] + uy * end)
     return [(a[0] + nx, a[1] + ny), (b[0] + nx, b[1] + ny),
             (b[0] - nx, b[1] - ny), (a[0] - nx, a[1] - ny)]
+
+
+def _only_boundary_endcaps_protrude(wall: Wall, footprint, floor) -> bool:
+    """Allow a local thickness overhang where an interior wall meets an edge."""
+    centerline = LineString([wall.start, wall.end])
+    if not floor.buffer(GEOMETRY_TOLERANCE).covers(centerline):
+        return False
+    endpoints = [Point(wall.start), Point(wall.end)]
+    contacts = [point for point in endpoints
+                if point.distance(floor.boundary) <= wall.thickness / 2 + GEOMETRY_TOLERANCE]
+    if not contacts:
+        return False
+    # A centerline on the exterior edge is still an invalid interior wall.
+    # Intermediate boundary contacts (including a concave notch) need review.
+    endpoint_tolerance = unary_union([point.buffer(GEOMETRY_TOLERANCE) for point in endpoints])
+    if not centerline.intersection(floor.boundary).difference(endpoint_tolerance).is_empty:
+        return False
+    # Reject long strips along a nearby boundary. Clipping is limited to one
+    # physical wall thickness around an endpoint whose thickness reaches an edge.
+    caps = unary_union([point.buffer(wall.thickness + GEOMETRY_TOLERANCE) for point in contacts])
+    return caps.covers(footprint.difference(floor.buffer(GEOMETRY_TOLERANCE)))
 
 
 def compile_layout(layout: Layout) -> Scenario:
@@ -93,8 +114,10 @@ def compile_layout(layout: Layout) -> Scenario:
         full_wall = region_to_polygon(Region(
             id=wall.id, polygon=wall_polygon(wall, 0, math.dist(wall.start, wall.end)),
         ))
-        if not floor.covers(full_wall) and not floor.buffer(GEOMETRY_TOLERANCE).covers(full_wall):
-            raise ValueError(f"Wall '{wall.id}' extends outside the floor")
+        clip_endcaps = not floor.covers(full_wall) and not floor.buffer(GEOMETRY_TOLERANCE).covers(full_wall)
+        if clip_endcaps and not _only_boundary_endcaps_protrude(wall, full_wall, floor):
+            raise ValueError(f"Wall '{wall.id}' extends outside the floor. "
+                             "Move or remove this wall in Walls & doors, or correct the floor outline.")
         cursor = 0.0
         segments = []
         for start, end, door_id in sorted(intervals[wall.id]):
@@ -107,11 +130,19 @@ def compile_layout(layout: Layout) -> Scenario:
         if cursor < length:
             segments.append((cursor, length))
         for index, (start, end) in enumerate(segments):
+            polygon = wall_polygon(wall, start, end)
+            if clip_endcaps:
+                solid = Polygon(polygon).intersection(floor)
+                # Region cannot represent holes or disconnected pieces. Keep
+                # those cases explicit instead of silently filling/dropping area.
+                if not isinstance(solid, Polygon) or solid.is_empty or solid.interiors:
+                    raise ValueError(f"Wall '{wall.id}' boundary clipping needs review: wall solids must remain single polygons without holes")
+                polygon = list(solid.exterior.coords)[:-1]
             identifier = f"wall:{wall.id}:{index}"
             while identifier in used_ids:
                 identifier = "_" + identifier
             used_ids.add(identifier)
-            obstacles.append(Region(id=identifier, polygon=wall_polygon(wall, start, end)))
+            obstacles.append(Region(id=identifier, polygon=polygon))
 
     scenario = Scenario.model_validate({
         "name": layout.name, "units": layout.units,
@@ -130,6 +161,8 @@ def compile_layout(layout: Layout) -> Scenario:
             raise ValueError(f"Exit '{exit_id}' opening is obstructed by furniture or a wall")
     for door_id, shape in door_shapes:
         # A piece of furniture or a crossing wall must not silently fill a door.
+        # A clipped boundary endcap has no doorway area outside the original floor.
+        shape = shape.intersection(floor)
         if shape.intersection(walkable).area < shape.area - 1e-9:
             raise ValueError(f"Door '{door_id}' is obstructed by furniture or another wall")
     for index, exit_region in enumerate(scenario.exits):

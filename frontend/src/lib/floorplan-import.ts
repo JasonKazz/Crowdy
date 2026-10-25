@@ -12,6 +12,10 @@ type ImportResult = {
   warnings?: string[];
 };
 
+export const FLOOR_PLAN_IMPORT_TIMEOUT_MS = 110_000;
+export const FLOOR_PLAN_IMPORT_TIMEOUT_MESSAGE =
+  "Image extraction reached its time limit. Your current layout is unchanged. Try the other provider or crop to one floor plan.";
+
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -49,42 +53,51 @@ export async function awaitFloorPlanImport(
 ) {
   if (!/^[a-f0-9]{32}$/.test(jobId)) throw new Error("Invalid import job reference.");
   signal?.throwIfAborted();
-  const deadline = Date.now() + 15 * 60_000;
-  while (Date.now() < deadline) {
+  const deadline = AbortSignal.timeout(FLOOR_PLAN_IMPORT_TIMEOUT_MS);
+  const importSignal = AbortSignal.any([...(signal ? [signal] : []), deadline]);
+  try {
+    while (true) {
+      importSignal.throwIfAborted();
+      const pollDeadline = AbortSignal.timeout(20_000);
+      const requestSignal = AbortSignal.any([importSignal, pollDeadline]);
+      let response: Response;
+      try {
+        response = await fetch(`/api/floorplans?job_id=${jobId}`, {cache: "no-store", signal: requestSignal});
+      } catch {
+        importSignal.throwIfAborted();
+        if (pollDeadline.aborted) throw new Error("The floor plan service took too long to respond. Check its status before retrying.");
+        throw new Error("Could not reach the floor plan service to check import progress. Check the connection and try again.");
+      }
+      let data: unknown;
+      try {
+        data = await response.json();
+        requestSignal.throwIfAborted();
+      } catch {
+        importSignal.throwIfAborted();
+        if (pollDeadline.aborted) throw new Error("The floor plan service took too long to respond. Check its status before retrying.");
+        throw new Error("The floor plan service returned an unreadable import response. Check its status and try again.");
+      }
+      if (!record(data))
+        throw new Error("The floor plan service returned an unreadable import response. Check its status and try again.");
+      if (!response.ok) throw new Error(serviceMessage(data.error, "Could not check image import progress. Check the floor plan service and try again."));
+      if (data.status === "complete") return completeResult(data.result);
+      if (data.status === "failed") throw new Error(serviceMessage(data.error, "Image import failed. Check the floor plan service and try again."));
+      if (data.status !== "running") throw new Error("The floor plan service returned an invalid import status. Check its status and try again.");
+      if ((data.progress !== undefined && typeof data.progress !== "string") ||
+        (data.elapsed_seconds !== undefined &&
+          (typeof data.elapsed_seconds !== "number" || !Number.isFinite(data.elapsed_seconds) || data.elapsed_seconds < 0)))
+        throw new Error("The floor plan service returned unreadable import progress. Check its status and try again.");
+      onProgress(`${data.progress || "Reading floor plan"} · ${data.elapsed_seconds ?? 0}s`);
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => {clearTimeout(timer); reject(importSignal.reason);};
+        const timer = setTimeout(() => {importSignal.removeEventListener("abort", abort); resolve();}, 2000);
+        if (importSignal.aborted) abort();
+        else importSignal.addEventListener("abort", abort, {once: true});
+      });
+    }
+  } catch (error) {
     signal?.throwIfAborted();
-    const requestSignal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(20_000)]);
-    let response: Response;
-    try {
-      response = await fetch(`/api/floorplans?job_id=${jobId}`, {cache: "no-store", signal: requestSignal});
-    } catch {
-      requestSignal.throwIfAborted();
-      throw new Error("Could not reach the floor plan service to check import progress. Check the connection and try again.");
-    }
-    let data: unknown;
-    try {
-      data = await response.json();
-    } catch {
-      requestSignal.throwIfAborted();
-      throw new Error("The floor plan service returned an unreadable import response. Check its status and try again.");
-    }
-    requestSignal.throwIfAborted();
-    if (!record(data))
-      throw new Error("The floor plan service returned an unreadable import response. Check its status and try again.");
-    if (!response.ok) throw new Error(serviceMessage(data.error, "Could not check image import progress. Check the floor plan service and try again."));
-    if (data.status === "complete") return completeResult(data.result);
-    if (data.status === "failed") throw new Error(serviceMessage(data.error, "Image import failed. Check the floor plan service and try again."));
-    if (data.status !== "running") throw new Error("The floor plan service returned an invalid import status. Check its status and try again.");
-    if ((data.progress !== undefined && typeof data.progress !== "string") ||
-      (data.elapsed_seconds !== undefined &&
-        (typeof data.elapsed_seconds !== "number" || !Number.isFinite(data.elapsed_seconds) || data.elapsed_seconds < 0)))
-      throw new Error("The floor plan service returned unreadable import progress. Check its status and try again.");
-    onProgress(`${data.progress || "Reading floor plan"} · ${data.elapsed_seconds ?? 0}s`);
-    await new Promise<void>((resolve, reject) => {
-      const abort = () => {clearTimeout(timer); reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));};
-      const timer = setTimeout(() => {signal?.removeEventListener("abort", abort); resolve();}, 2000);
-      if (signal?.aborted) abort();
-      else signal?.addEventListener("abort", abort, {once: true});
-    });
+    if (deadline.aborted) throw new Error(FLOOR_PLAN_IMPORT_TIMEOUT_MESSAGE);
+    throw error;
   }
-  throw new Error("This import is taking too long. The provider may still be finishing; check its status before retrying.");
 }

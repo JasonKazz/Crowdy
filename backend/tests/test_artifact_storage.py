@@ -158,7 +158,8 @@ class DurableImportTests(unittest.TestCase):
             (directory / "overview.png").write_bytes(image_bytes())
             return ExtractedDrawing.model_validate(drawing), "staged-test-model"
 
-        with patch("app.services.floorplans.staged.extract_staged", side_effect=staged) as provider:
+        with patch.dict(os.environ, {"CROWDY_FLOORPLAN_EXTRACTION_MODE": "diagnostic_staged"}), \
+                patch("app.services.floorplans.staged.extract_staged", side_effect=staged) as provider:
             response = self.client.post("/api/floorplans", json={
                 "filename": "large-plan.png", "image_base64": base64.b64encode(image_bytes((1600, 800))).decode(),
                 "provider": "claude", "async_import": True,
@@ -197,7 +198,8 @@ class DurableImportTests(unittest.TestCase):
             (directory / "report.json").write_text('{"failures": ["Missing detail region"]}')
             raise ProviderError("No complete layout was imported")
 
-        with patch("app.services.floorplans.staged.extract_staged", side_effect=failed):
+        with patch.dict(os.environ, {"CROWDY_FLOORPLAN_EXTRACTION_MODE": "diagnostic_staged"}), \
+                patch("app.services.floorplans.staged.extract_staged", side_effect=failed):
             response = self.client.post("/api/floorplans", json={
                 "filename": "large-plan.png", "image_base64": base64.b64encode(image_bytes((1600, 800))).decode(),
                 "provider": "claude",

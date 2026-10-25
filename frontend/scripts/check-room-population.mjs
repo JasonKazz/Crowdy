@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {SAMPLE_PLAN} from '../src/lib/simulation.ts';
 import {simulationRequest} from '../src/lib/simulation-request.ts';
-import {validPopulationSettings,placementKey,startingPopulation,adaptPopulationPreview} from '../src/lib/room-population.ts';
+import {validPopulationSettings,placementKey,populationPreviewState,startingPopulation,adaptPopulationPreview} from '../src/lib/room-population.ts';
 
 const scenario={occupancy:40,mobility:'standard',distribution:'rooms',seed:42,bodyWidth:.46,
   population:{activity:'workday',roomCounts:{'meeting-room':7}}};
@@ -20,7 +20,20 @@ assert.deepEqual(startingPopulation(baseline).population_config,request.scenario
 const adapted=adaptPopulationPreview({radius:.23,occupants:[{position:[4,5]}]},SAMPLE_PLAN,'key');
 assert.deepEqual(adapted.people,[{x:128,y:440}]);
 assert.throws(()=>adaptPopulationPreview({radius:0,occupants:[]},SAMPLE_PLAN,'key'));
-console.log('Room placement contracts passed: presets, overrides, baseline configuration, preview coordinates and stable placement keys.');
+const nineteen = adaptPopulationPreview({radius:.23,occupants:Array.from({length:19},(_,i)=>({position:[4+i,5]}))},SAMPLE_PLAN,'current');
+assert.equal(populationPreviewState('current',nineteen,{key:'current',loading:false,error:''}).preview.people.length,19);
+const rejected = populationPreviewState('current',nineteen,{key:'current',loading:false,error:"Wall 'structure_review:w1:0' extends outside the floor"});
+assert.equal(rejected.preview,null,'An occupancy count or previous preview cannot substitute for rejected physical placement');
+assert.match(rejected.error,/extends outside/);
+const retrying = populationPreviewState('current',nineteen,{key:'current',loading:true,error:''});
+assert.equal(retrying.preview,null,'Retry must wait for actual backend positions');
+assert.equal(retrying.loading,true);
+const changed = populationPreviewState('new-layout',nineteen,{key:'current',loading:false,error:'Old layout error'});
+assert.equal(changed.error,'','A previous layout error must not follow corrected geometry');
+assert.equal(changed.preview,null,'Positions from another layout cannot be drawn');
+assert.equal(changed.loading,true);
+assert.equal(populationPreviewState('current',nineteen,{key:'current',loading:false,error:''}).preview,nineteen,'Successful retry restores the real backend positions');
+console.log('Room placement contracts passed: presets, overrides, baseline configuration, preview coordinates, failed/retried placement states, requested-vs-placed counts and stable placement keys.');
 
 if(process.env.ROOM_POPULATION_HTTP==='1') {
   const base=process.env.BACKEND_TEST_APP_URL||'http://localhost:3000';

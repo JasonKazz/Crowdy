@@ -96,9 +96,11 @@ From the repository root:
 cp infra/terraform.tfvars.example infra/terraform.tfvars
 # Replace tenant_id with the student subscription's owning tenant.
 
-# Optional image interpretation keys; omit providers you do not use.
-export TF_VAR_gemini_api_key="$GEMINI_API_KEY"
-export TF_VAR_anthropic_api_key="$ANTHROPIC_API_KEY"
+# Shared Vercel AI Gateway key enables both Gemini and Claude extraction.
+export TF_VAR_ai_gateway_api_key="$AI_GATEWAY_API_KEY"
+# For direct access instead, omit the Gateway export and supply desired keys:
+# export TF_VAR_gemini_api_key="$GEMINI_API_KEY"
+# export TF_VAR_anthropic_api_key="$ANTHROPIC_API_KEY"
 
 ./infra/scripts/check.sh
 # This student subscription requires a running local Docker daemon for builds.
@@ -144,7 +146,8 @@ Terraform's default is foundation-only and a plan can propose removing the app.
 The script's `plan` mode refuses to plan an existing app if this file is missing.
 On an already deployed environment, run `deploy` to build and publish an update.
 
-Provided `TF_VAR_gemini_api_key` and `TF_VAR_anthropic_api_key` values are saved
+Provided `TF_VAR_ai_gateway_api_key`, `TF_VAR_gemini_api_key`, and
+`TF_VAR_anthropic_api_key` values are saved
 atomically to ignored `infra/secrets.auto.tfvars.json` with owner-only permissions
 (`0600`). An omitted variable preserves its saved value. Supplying an explicitly
 empty variable removes that provider's secret on the next apply. This file
@@ -152,6 +155,17 @@ contains credentials: keep it private with the Terraform state and never commit
 or print it. Retaining it ensures later plans do not silently remove API keys
 when a new terminal has no `TF_VAR_` exports. Environment exports supplied to the
 script update this saved configuration before the plan is created.
+
+The Gateway key is a sensitive Terraform variable, stored in the backend's
+`ai-gateway-api-key` Container Apps secret and exposed only as backend environment
+variable `AI_GATEWAY_API_KEY`. It enables both provider choices through Vercel's
+fixed `https://ai-gateway.vercel.sh/v1/chat/completions` endpoint and takes
+precedence over native keys. The frontend needs no provider credential. Native
+Gemini and Anthropic secrets remain independent and are preserved when omitted.
+Gateway defaults are `google/gemini-3.8-flash` and `anthropic/claude-sonnet-5.5`;
+the backend supports `AI_GATEWAY_GEMINI_MODEL` and `AI_GATEWAY_ANTHROPIC_MODEL`
+overrides separately from native `GEMINI_MODEL` and `ANTHROPIC_MODEL`. The Gateway
+endpoint cannot be overridden. See [provider setup](../docs/image-extraction.md).
 
 ## Deploy the independent crowd-estimation service
 
@@ -265,6 +279,7 @@ AZURE_CLIENT_ID=<managed identity client ID>
 CROWDY_BACKEND_TOKEN=<Container Apps secret>
 GEMINI_API_KEY=<optional Container Apps secret>
 ANTHROPIC_API_KEY=<optional Container Apps secret>
+AI_GATEWAY_API_KEY=<optional Container Apps secret for both providers>
 ```
 
 ## State, validation, and operations

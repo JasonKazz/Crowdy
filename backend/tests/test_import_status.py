@@ -59,6 +59,18 @@ class ImportStatusTests(unittest.TestCase):
         with patch("app.api.import_floorplan", return_value={"ok": True}):
             self.assertEqual(self.client.post("/api/floorplans", json=image).status_code, 200)
 
+    def test_omitted_provider_uses_claude_and_explicit_gemini_is_retained(self):
+        image = {"filename": "test.png", "image_base64": "test-only-image"}
+        with patch("app.api.import_floorplan", side_effect=lambda payload: {"provider": payload.provider}):
+            response = self.client.post("/api/floorplans", json=image)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["provider"], "claude")
+            self.assertFalse(api.import_status()["claude"]["busy"])
+            response = self.client.post("/api/floorplans", json={**image, "provider": "gemini"})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["provider"], "gemini")
+            self.assertFalse(api.import_status()["gemini"]["busy"])
+
     def test_invalid_upload_does_not_take_a_slot(self):
         response = self.client.post("/api/floorplans", json={"provider": "gemini"})
         self.assertEqual(response.status_code, 422)

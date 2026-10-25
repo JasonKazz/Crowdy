@@ -61,7 +61,7 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 values = json.loads(path.read_text()) if path.exists() else {}
-allowed = {'gemini_api_key', 'anthropic_api_key'}
+allowed = {'gemini_api_key', 'anthropic_api_key', 'ai_gateway_api_key'}
 if not isinstance(values, dict) or not set(values).issubset(allowed):
     raise SystemExit('The local secrets file must contain only supported API-key variables.')
 if any(not isinstance(value, str) for value in values.values()):

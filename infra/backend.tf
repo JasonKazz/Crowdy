@@ -37,6 +37,14 @@ resource "azurerm_container_app" "backend" {
     }
   }
 
+  dynamic "secret" {
+    for_each = nonsensitive(var.ai_gateway_api_key != "") ? [1] : []
+    content {
+      name  = "ai-gateway-api-key"
+      value = var.ai_gateway_api_key
+    }
+  }
+
   ingress {
     external_enabled           = true
     target_port                = 8000
@@ -90,6 +98,13 @@ resource "azurerm_container_app" "backend" {
         content {
           name        = "ANTHROPIC_API_KEY"
           secret_name = "anthropic-api-key"
+        }
+      }
+      dynamic "env" {
+        for_each = nonsensitive(var.ai_gateway_api_key != "") ? [1] : []
+        content {
+          name        = "AI_GATEWAY_API_KEY"
+          secret_name = "ai-gateway-api-key"
         }
       }
 

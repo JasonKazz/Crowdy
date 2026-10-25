@@ -1,7 +1,9 @@
 import copy
+from contextvars import ContextVar
 import io
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +16,8 @@ from app.services.floorplans.images import drawing_to_layout
 from app.services.floorplans.providers import ProviderError, output_schema
 from app.services.floorplans.staged import (Structure, Details, ScaleReadings, to_pixels,
     for_provider, merge, tiles, same_wall, extract_staged)
+from app.services.floorplans.structure_pass import StructuralDrawing, DoorReview
+from app.services.floorplans.entrance_review import EntranceSurvey
 from test_images import point, region, drawing_fixture
 
 
@@ -144,6 +148,43 @@ class StagedExtractionTests(unittest.TestCase):
             report=json.loads((Path(directory)/'report.json').read_text())
             self.assertTrue(report['failures'])
             self.assertFalse((Path(directory)/'canonical.json').exists())
+
+    def test_diagnostic_crop_and_door_workers_inherit_the_import_context(self):
+        marker = ContextVar('diagnostic-import-test', default=None)
+        token = marker.set('shared-import-context')
+        self.addCleanup(marker.reset, token)
+        calls = []
+
+        def provider(_provider, _image, _prompt, schema):
+            calls.append((schema, threading.current_thread().name, marker.get()))
+            if schema is Structure:
+                observed = Structure.model_validate(structure_fixture())
+            elif schema is StructuralDrawing:
+                observed = StructuralDrawing(wall_paths=[{'id':'partition','points':[point(500,100),point(500,350)],'thickness':10}],
+                                             openings=[],exits=[],coverage='complete',warnings=[])
+            elif schema is Details:
+                observed = Details.model_validate(detail_fixture())
+            elif schema is ScaleReadings:
+                observed = ScaleReadings(scale_references=[],warnings=[])
+            elif schema is DoorReview:
+                observed = DoorReview(doors=[],warnings=[])
+            elif schema is EntranceSurvey:
+                observed = EntranceSurvey(boundary_path=[],openings=[],warnings=[])
+            else:
+                self.fail(f'Unexpected stage schema {schema}')
+            return observed, 'fake-test-model'
+
+        image=Image.new('RGB',(1000,500),'white');stream=io.BytesIO();image.save(stream,'PNG')
+        with tempfile.TemporaryDirectory() as directory, \
+                patch('app.services.floorplans.staged.extract_structured',side_effect=provider), \
+                patch('app.services.floorplans.staged.verify_wall_pixels',return_value={}):
+            extract_staged('claude',stream.getvalue(),1000,500,Path(directory))
+        self.assertTrue(any(schema is Details for schema,_,_ in calls))
+        self.assertTrue(any(schema is DoorReview for schema,_,_ in calls))
+        worker_calls = [value for _,name,value in calls if name.startswith('ThreadPoolExecutor')]
+        self.assertTrue(worker_calls)
+        self.assertTrue(all(value == 'shared-import-context' for value in worker_calls),
+                        'Deadline/cancellation context must reach every crop and door-review HTTP call')
 
 
 if __name__=='__main__':unittest.main()

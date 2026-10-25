@@ -118,7 +118,7 @@ class ImageUpload(InputModel):
 
 class ExtractionRequest(InputModel):
     image_id: str = Field(pattern=r"^[a-f0-9]{32}$")
-    provider: Literal["gemini", "claude", "both"]
+    provider: Literal["gemini", "claude", "both"] = "claude"
     meters_per_pixel: float | None = Field(default=None, gt=0, le=100)
     scale_confirmed: bool = False
     people_count: int = Field(default=40, ge=1, le=5000)

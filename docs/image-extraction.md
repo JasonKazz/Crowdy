@@ -9,13 +9,31 @@ From `backend/`, activate `.venv` and install `requirements.txt`. Pillow decodes
 Keep real credentials in the repository root `.env`, which Git ignores:
 
 ```dotenv
-GEMINI_API_KEY=replace_locally
-ANTHROPIC_API_KEY=replace_locally
-GEMINI_MODEL=your-available-gemini-model
-ANTHROPIC_MODEL=your-available-claude-model
+AI_GATEWAY_API_KEY=replace_locally
+# Optional Gateway model overrides; these are the service defaults.
+AI_GATEWAY_GEMINI_MODEL=google/gemini-3.8-flash
+AI_GATEWAY_ANTHROPIC_MODEL=anthropic/claude-sonnet-5.5
 ```
 
-Choose model IDs with image and structured-output support available to your account. `CLAUDE_API_KEY` is accepted as an alias when `ANTHROPIC_API_KEY` is absent. One provider key is enough for its individual extraction button; comparison requires both. `.env.example` must contain placeholders only. Existing environment variables take precedence. Restart locally after changing keys or model names; Vercel environment changes require a new backend deployment. Keys stay in request headers on the server and are not sent to the browser, saved in artifacts, or included in upstream error messages. Production provider credentials are not configured yet.
+One Vercel AI Gateway key enables both extraction buttons and comparison. When
+`AI_GATEWAY_API_KEY` is configured, it takes precedence over native provider keys
+and uses the fixed OpenAI-compatible
+`https://ai-gateway.vercel.sh/v1/chat/completions` endpoint. No endpoint override is
+supported. Choose models with image and structured-output support available to
+your Gateway account.
+
+For direct access instead, omit the Gateway key and set `GEMINI_API_KEY` and/or
+`ANTHROPIC_API_KEY`. `CLAUDE_API_KEY` remains an alias when `ANTHROPIC_API_KEY` is
+absent. One native key enables its extraction button; direct comparison requires
+both native keys. Native `GEMINI_MODEL` / `ANTHROPIC_MODEL` settings are independent
+of the Gateway model overrides above.
+
+`.env.example` must contain placeholders only. Existing environment variables
+take precedence. Restart locally after changing keys or model names. In Azure,
+pass the Gateway key through Terraform's sensitive `ai_gateway_api_key` variable
+and redeploy the backend. Keys stay in server request headers and are not sent to
+the browser, saved in artifacts, or included in upstream error messages. The
+frontend never needs a provider key.
 
 Run `python -m app.simulation.editor` and open its printed `http://127.0.0.1:...` address. `--env-file /absolute/path/to/.env` selects another local configuration file. Opening `editor.html` directly cannot use these endpoints.
 
@@ -23,9 +41,11 @@ Run `python -m app.simulation.editor` and open its printed `http://127.0.0.1:...
 
 ### Main website
 
-Choose **Upload floor plan**, pick a provider, and upload the image. There is no up-front scale field. The model returns explicit dimension/scale-bar observations (endpoints, value, units, visible label); Python validates bounds, converts units, checks agreement, and uses the longest agreeing reference. When no printed references are returned, the backend tries an object-size estimate. Short/unreadable or conflicting printed evidence still opens the measurement tool; it is never silently overridden by an object guess. Insufficient or conflicting objects also open that tool. Mark two endpoints and enter the distance in metres, centimetres, millimetres, feet, or inches. The saved extraction is reused, without another model request.
+Choose **Upload floor plan** and upload the image. Claude is selected by default; Gemini remains available in the provider selector. API imports that omit `provider` also use Claude. There is no up-front scale field. The model returns explicit dimension/scale-bar observations (endpoints, value, units, visible label); Python validates bounds, converts units, checks agreement, and uses the longest agreeing reference. When no printed references are returned, the backend tries an object-size estimate. Short/unreadable or conflicting printed evidence still opens the measurement tool; it is never silently overridden by an object guess. Insufficient or conflicting objects also open that tool. Mark two endpoints and enter the distance in metres, centimetres, millimetres, feet, or inches. The saved extraction is reused, without another model request.
 
 Source files may be PNG/JPEG/WebP up to 10 MiB and 30 million pixels. Before sending, the browser corrects orientation, adds a white background, and resizes to at most 3072 pixels per side. It uses PNG when possible, then JPEG if needed, within a 3 MiB encoded-image budget so the base64 JSON fits Vercel's 4.5 MB request limit. A file that cannot fit is rejected before upload. The backend stores the resulting processed image as PNG.
+
+Interactive extraction sends the full canonical image once, using low reasoning effort on the supported default Gemini 3.8 Flash and Claude Sonnet 5.5 models. If exits are absent or rooms have no partitions, one additional whole-frame structural check is allowed within the same deadline. The importer does not launch wall/furniture tile batches based on image size. Provider calls have a 75-second cap and share an 85-second extraction budget; the API checks a 90-second import budget and the browser limits preparation, upload and polling to 110 seconds. Timeouts leave the current layout unchanged. Model IDs are visible in the provider selector. All returned geometry still needs visual review; observations are never invented to satisfy a structural count.
 
 The plan shows the calibration evidence beside its scale. **Estimated scale** marks object-based estimates, with a note beside simulation results as well. **Edit scale** accepts either a two-point known measurement or the full source-image width in meters (including image margins), without another provider request or loss of furniture/structural edits. Entering a manual value replaces the estimate and removes its badge. Agent size and walking speed remain physical simulation settings when the drawing scale changes.
 
@@ -51,7 +71,7 @@ The **Source image overlay** is the original processed image at the exact image-
 
 1. Upload an image up to 10 MiB. PDF input is not supported yet; export one page as PNG or JPEG first. Images above 30 million pixels are rejected.
 2. Enter a known real-world length, select **Mark two points to set scale**, and click its endpoints. Use a printed dimension or a distance you know; the model does not invent a building scale.
-3. Choose Gemini or Claude and **Extract layout**. **Compare both models** extracts sequentially with both providers against exactly the same processed image. Transient HTTP failures (408, 429, 500, 502, 503, 504, 529) get up to two retries with exponential backoff and jitter, within a shared 175-second request budget. Numeric `Retry-After` headers are honored when they fit in the budget. Invalid-key, access, and malformed-request errors are not retried. Network timeouts are not retried because the POST might already have been processed. There is no hidden fallback to the other provider. For a first test, `examples/sample_floorplan.png` has an 18-meter dimension marked along its top edge.
+3. Choose Gemini or Claude and **Extract layout**. **Compare both models** extracts sequentially with both providers against exactly the same processed image. Transient HTTP failures (408, 429, 500, 502, 503, 504, 529) get up to two retries with exponential backoff and jitter, within a 75-second provider cap and the shared extraction deadline. Numeric `Retry-After` headers are honored when they fit in the budget. Invalid-key, access, and malformed-request errors are not retried. Network timeouts are not retried because the POST might already have been processed. There is no hidden fallback to the other provider. For a first test, `examples/sample_floorplan.png` has an 18-meter dimension marked along its top edge.
 4. For a comparison, choose **Use Gemini layout** or **Use Claude layout** to inspect that candidate. The cards show model names, wall/door/furniture counts, time, model notes, and geometry issues. These are observations and checks, not an accuracy score.
 5. Edit the clean geometry view. **Compare with original image (fixed reference)** shows the source pixels for alignment checks; printed tables, door swings, and walls cannot move with the editable objects. The reference hides when you edit to avoid leaving apparent duplicates behind. Correct furniture, wall endpoints, door offsets/widths, exterior exits, or polygon corners. Unrecognized exits remain empty; add exterior exit doors manually.
 6. Check the layout, set population/settings, and run. Image-derived layouts require a confirmed scale or an explicit estimated calibration, and a selected extraction, before simulation. Normal geometry and population checks still apply.
@@ -70,7 +90,7 @@ Room labels do not change population placement, which remains uniform in the sel
 
 Calibration rescales geometric coordinates, wall thicknesses, door openings, and explicit occupant positions. Physical outside-landing settings are retained. It leaves agent radius, walking speed, and simulation time settings unchanged. Recalibrating after extraction uses the same image alignment.
 
-Small images are presented at a longest side of 1000 pixels. Larger uploads preserve a canonical frame up to 3072 pixels and use separate overview, scale and overlapping detail passes; every provider observation maps back into that frame. Individual provider inputs stay at or below 1092 pixels per side. Upscaling improves symbol presentation but does not recover missing source detail. See [staged extraction and evaluation](staged-extraction.md) for bounds, saved artifacts and the supplied venue-image results.
+Small images are presented at a longest side of 1000 pixels. Larger uploads preserve a canonical frame up to 3072 pixels; the whole-plan request and optional structural check use that same full frame. Upscaling does not recover missing source detail. The slower tiled path is an explicit diagnostic opt-in; see [diagnostic extraction and historical evaluations](staged-extraction.md).
 
 Extraction includes clear outer-wall entrances without drawn door leaves, using wall endpoints as evidence and labels only as corroboration. Repeated desk units and substantial tables, counters, cabinets, and sofas take priority over small chairs. A closed cavity bounded entirely by touching furniture is joined into one solid editable furniture item, with a warning; this avoids treating a sink or inaccessible cabinet interior as a separate spawn room. Open U-shaped counter work areas and wall-bounded rooms are not filled. Automatic editor placement uses the same body-clear connected regions as routing, and places occupants only in regions connected to an exit. Results report the excluded region area and display a review note when any area was excluded. A fully enclosed room or a pocket behind a gap narrower than a person therefore receives no automatic starting occupants; this is a placement assumption, not proof that the room is safe. Explicitly supplied trapped occupants are retained, reported as trapped, and kept visible; they are never silently moved.
 

@@ -4,13 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppHeader from "./app-header";
 import AppFooter from "./app-footer";
-import { awaitFloorPlanImport } from "@/lib/floorplan-import";
+import { awaitFloorPlanImport, FLOOR_PLAN_IMPORT_TIMEOUT_MS, FLOOR_PLAN_IMPORT_TIMEOUT_MESSAGE } from "@/lib/floorplan-import";
 import { validatePlan } from "@/lib/plan-validation";
 import { runBackendSimulation, sameStartingPopulation } from "@/lib/backend-simulation";
 import { createWorkspace, updateWorkspace } from "@/lib/workspace-store";
 import FloorPlanView from "./floor-plan";
 import RoomPopulationPanel from "./room-population-panel";
-import {adaptPopulationPreview, placementKey, startingPopulation, type PopulationPreview} from "@/lib/room-population";
+import {adaptPopulationPreview, placementKey, populationPreviewState, startingPopulation, type PopulationPreview} from "@/lib/room-population";
 import Icon, { type IconName } from "./icon";
 import ScaleCalibrator, {type PendingCalibration} from "./scale-calibrator";
 import GeometryPanel from "./geometry-panel";
@@ -28,7 +28,12 @@ import {
 } from "@/lib/simulation";
 
 type Mode = "layout" | "simulation" | "compare";
-type ProviderStatus = Record<string, {configured: boolean; busy: boolean; elapsed_seconds: number}>;
+type ProviderStatus = Record<string, {configured: boolean; busy: boolean; elapsed_seconds: number; model?: string}>;
+function providerLabel(provider: string, model?: string) {
+  if (model === "google/gemini-3.8-flash" || model === "gemini-3.8-flash") return "Gemini 3.8 Flash";
+  if (model === "anthropic/claude-sonnet-5.5" || model === "claude-sonnet-5.5" || model === "claude-sonnet-5-5") return "Claude Sonnet 5.5";
+  return provider === "gemini" ? "Gemini" : "Claude";
+}
 const signature = (plan: FloorPlan, scenario: Scenario) =>
   JSON.stringify({ plan, scenario });
 const formatTime = (n: number) => `${n.toFixed(1)} s`;
@@ -83,8 +88,10 @@ export default function Workspace({
   const [baseline, setBaseline] = useState<SimulationResult | null>(null);
   const [populationPreview, setPopulationPreview] = useState<PopulationPreview | null>(null);
   const [placementStatus, setPlacementStatus] = useState({key:"",loading:false,error:""});
+  const [placementRetry, setPlacementRetry] = useState(0);
   const populationKey = useMemo(()=>placementKey(plan,scenario,baseline),[plan,scenario,baseline]);
-  const currentPopulation = populationPreview?.key === populationKey ? populationPreview : null;
+  const placement = populationPreviewState(populationKey, populationPreview, placementStatus);
+  const currentPopulation = placement.preview;
   const [runCount, setRunCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState(false);
@@ -99,7 +106,7 @@ export default function Workspace({
   });
   const [modal, setModal] = useState<"upload" | "help" | "reset" | null>(null);
   const [error, setError] = useState("");
-  const [imageProvider, setImageProvider] = useState("gemini");
+  const [imageProvider, setImageProvider] = useState("claude");
   const [providerStatus, setProviderStatus] = useState<ProviderStatus>({});
   const [providerStatusError, setProviderStatusError] = useState("");
   const [pendingCalibration,setPendingCalibration]=useState<PendingCalibration|null>(null);
@@ -129,6 +136,7 @@ export default function Workspace({
   const currentTime = useRef(0);
   const uploadRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const geometryPanelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -229,7 +237,7 @@ export default function Workspace({
       }
     }, 350);
     return () => {clearTimeout(timer);controller.abort();};
-  }, [plan, scenario, baseline, populationKey, mode]);
+  }, [plan, scenario, baseline, populationKey, mode, placementRetry]);
 
   async function saveCopy() {
     const controller = accountController.current;
@@ -334,7 +342,8 @@ export default function Workspace({
       JSON.stringify(baseline.scenario) === JSON.stringify(result.scenario),
   );
   const shownPlan = mode === "layout" ? plan : (result?.plan ?? plan);
-  const shownResult = mode === "layout" ? (!stale && result ? result : null) : result;
+  // Layout uses validated starting placement; recorded runs belong to playback.
+  const shownResult = mode === "layout" ? null : result;
   const evacuated = result ? getEvacuatedCount(result, time) : 0;
   const responding = result?.agents.filter(agent => agent.outcome !== "trapped" && time < agent.delay).length ?? 0;
   const duration = Math.max(
@@ -456,6 +465,21 @@ export default function Workspace({
     }catch(cause){setRunError(cause instanceof Error?cause.message:"Could not check the layout.");}
     finally{setBusy(false);}
   }
+
+  function inspectPlacementGeometry() {
+    setSidebarTab("editing");
+    setPlaying(false);
+    setSelectedId(null);
+    const wallId = /Wall '([^']+)'/.exec(placement.error)?.[1];
+    if (plan.native && wallId && nativeLayout(plan).walls.some(wall => wall.id === wallId)) {
+      setGeometrySelection({kind: "wall", id: wallId});
+      setGeometryTool("select");
+    }
+    requestAnimationFrame(() => {
+      geometryPanelRef.current?.scrollIntoView({block: "nearest"});
+      geometryPanelRef.current?.querySelector<HTMLElement>("select, button")?.focus();
+    });
+  }
   async function run() {
     if (busy && !running) return;
     if (runController.current) {
@@ -518,30 +542,32 @@ export default function Workspace({
       return;
     }
     const controller = new AbortController();
+    const deadline = image ? AbortSignal.timeout(FLOOR_PLAN_IMPORT_TIMEOUT_MS) : null;
+    const signal = deadline ? AbortSignal.any([controller.signal, deadline]) : controller.signal;
     importController.current = controller;
     setBusy(true);
     setError("");
     setPendingCalibration(null);
     setCalibratingExisting(false);
-    setNotice(image ? "Extracting the image. This can take a few minutes…" : "Importing floor plan…");
+    setNotice(image ? `Reading your floor plan with ${providerLabel(imageProvider, providerStatus[imageProvider]?.model)}…` : "Importing floor plan…");
     try {
       let data;
       if (image) {
         const prepared = await prepareImageUpload(file);
         data = {filename: prepared.filename, image_base64: prepared.image_base64, provider:imageProvider,async_import:true};
       } else data = JSON.parse(await file.text());
-      controller.signal.throwIfAborted();
+      signal.throwIfAborted();
       const raw = data.plan ?? data;
       let warnings: string[] = [];
       if (image || raw.walkable_areas) {
         const response = await fetch("/api/floorplans",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify(image ? data : {layout:raw}), signal:controller.signal});
+          body:JSON.stringify(image ? data : {layout:raw}), signal});
         if (response.status === 413) throw new Error(IMAGE_UPLOAD_SIZE_ERROR);
         let imported = await response.json().catch(() => null);
         if (!imported || typeof imported !== "object") throw new Error("The floor plan service returned an unreadable response. Try again shortly.");
         if(!response.ok) throw new Error(imported.error || "The floor plan could not be imported.");
-        if (imported.job_id) imported = await awaitFloorPlanImport(imported.job_id, setNotice, controller.signal);
-        controller.signal.throwIfAborted();
+        if (imported.job_id) imported = await awaitFloorPlanImport(imported.job_id, setNotice, signal);
+        signal.throwIfAborted();
         if(imported.needs_scale){setPendingCalibration(imported);setNotice("");return;}
         data = imported; warnings=imported.warnings ?? [];
       }
@@ -549,7 +575,9 @@ export default function Workspace({
     } catch (cause) {
       if (controller.signal.aborted) return;
       setError(
-        cause instanceof SyntaxError
+        deadline?.aborted
+          ? FLOOR_PLAN_IMPORT_TIMEOUT_MESSAGE
+          : cause instanceof SyntaxError
           ? "This file is not valid JSON. Choose a Crowdy floor plan or download the sample below."
           : cause instanceof Error
             ? cause.message
@@ -822,9 +850,9 @@ export default function Workspace({
               <span className="section-count">{plan.items.length} objects</span>
             </div>
             <p className="helper">Select furniture on the plan to move it.</p>
-            {mode==="layout"&&<GeometryPanel plan={plan} selection={geometrySelection} tool={geometryTool} busy={busy}
+            {mode==="layout"&&<div ref={geometryPanelRef}><GeometryPanel plan={plan} selection={geometrySelection} tool={geometryTool} busy={busy}
               onChange={editPlan} onSelect={selection=>{setGeometrySelection(selection);setSelectedId(null);}} onTool={setGeometryTool} onCheck={checkLayout}
-              overlay={showReference} onOverlay={setShowReference} opacity={referenceOpacity} onOpacity={setReferenceOpacity}/>}
+              overlay={showReference} onOverlay={setShowReference} opacity={referenceOpacity} onOpacity={setReferenceOpacity}/></div>}
             <div className="layout-buttons">
               <button
                 className="button subtle"
@@ -985,8 +1013,8 @@ export default function Workspace({
                 <Icon name="chevron" size={13} />
               </div>
               {(scenario.distribution === "rooms" || scenario.distribution === "normal") && <RoomPopulationPanel plan={plan} scenario={scenario}
-                preview={currentPopulation ?? populationPreview} loading={placementStatus.key !== populationKey || placementStatus.loading}
-                error={placementStatus.key === populationKey ? placementStatus.error : ""}
+                preview={currentPopulation} loading={placement.loading}
+                error={placement.error}
                 onChange={next=>{setScenario(next);setMode("layout");setPlaying(false);}} />}
               <label className="field-label" htmlFor="body-width">Body width (cm)</label>
               <input id="body-width" type="number" min="40" max="70" step="1" value={Math.round((scenario.bodyWidth ?? .46)*100)}
@@ -1052,8 +1080,8 @@ export default function Workspace({
           </section>
           <div className="setup-bottom">
             <span>
-              <Icon name="check" size={14} />
-              Scenario ready
+              <Icon name={placement.error || placement.loading ? "clock" : "check"} size={14} />
+              {placement.error ? "Placement unavailable" : placement.loading ? "Checking placement…" : "Scenario ready"}
             </span>
             <button
               className="text-button muted"
@@ -1115,14 +1143,14 @@ export default function Workspace({
                 {busy
                   ? "Computing crowd movement"
                   : mode === "layout"
-                    ? "Editing layout · live placement preview"
+                    ? placement.error ? "Placement unavailable · review layout" : placement.loading ? "Preparing placement preview" : "Editing layout · placement preview"
                     : playing
                       ? "Playing simulation"
                       : "Simulation paused"}
               </span>
               {mode === "layout" ? (
                 <span>
-                  {scenario.occupancy} people{" "}
+                  {scenario.occupancy} people requested{" "}
                   <span className="caption-dot">·</span> {plan.exits.length}{" "}
                   exits
                 </span>
@@ -1217,6 +1245,18 @@ export default function Workspace({
               </div>
             )}
           </div>
+          {mode === "layout" && placement.error && (
+            <div className="placement-preview-error" role="alert">
+              <p><strong>People preview unavailable.</strong> {scenario.occupancy} requested; no people placed. Review the layout or retry.</p>
+              <div>
+                <button type="button" className="text-button" disabled={busy} onClick={inspectPlacementGeometry}>{plan.native ? "Check walls & doors" : "Review layout"}</button>
+                <button type="button" className="text-button" disabled={busy} onClick={() => {
+                  setPlacementStatus({key: populationKey, loading: true, error: ""});
+                  setPlacementRetry(previous => previous + 1);
+                }}>Retry preview</button>
+              </div>
+            </div>
+          )}
           <div className="layers-bar">
             <div className="layers-label">
               <Icon name="layers" size={15} />
@@ -1273,7 +1313,7 @@ export default function Workspace({
                   {mode === "layout" ? "Starting placement" : "Playback"}
                 </strong>
                 <span>
-                  {mode === "layout" ? currentPopulation ? `${currentPopulation.people.length} people placed${result ? " · Play shows the recorded run" : ""}` : "Run a scenario to inspect movement" : result
+                  {mode === "layout" ? currentPopulation ? `${currentPopulation.people.length} people placed${result ? " · Play shows the recorded run" : ""}` : placement.error ? `No people placed · ${scenario.occupancy} requested` : "Preparing placement preview…" : result
                     ? `${evacuated} / ${result.scenario.occupancy} exited${responding ? ` · ${responding} responding` : ""}`
                     : "Run a scenario to inspect movement"}
                 </span>
@@ -1673,16 +1713,20 @@ export default function Workspace({
               Uploading replaces your layout; Undo restores it. Imported furniture stays editable.
             </p>
             <label className="field-label" htmlFor="image-provider">Image extraction provider</label>
-            <select id="image-provider" value={imageProvider} disabled={busy} onChange={e=>setImageProvider(e.target.value)}>
-              <option value="gemini">Gemini</option><option value="claude">Claude</option>
+            <select id="image-provider" value={imageProvider} disabled={busy}
+              aria-describedby={`image-provider-status${providerStatus[imageProvider]?.model ? " image-provider-model" : ""}`}
+              onChange={e=>setImageProvider(e.target.value)}>
+              <option value="claude">{providerLabel("claude", providerStatus.claude?.model)}</option>
+              <option value="gemini">{providerLabel("gemini", providerStatus.gemini?.model)}</option>
             </select>
-            <p className="muted" role="status">
+            <p id="image-provider-status" className="muted" role="status">
               {providerStatusError || (providerStatus[imageProvider]?.busy
-                ? `${imageProvider === "gemini" ? "Gemini" : "Claude"} is processing an image (${providerStatus[imageProvider].elapsed_seconds}s elapsed). Large plans use several structure, scale and detail passes. ${busy ? "Wait for this request to finish." : "Choose the other provider or import JSON while this image is processing."}`
+                ? `${providerLabel(imageProvider, providerStatus[imageProvider]?.model)} is processing an image (${providerStatus[imageProvider].elapsed_seconds}s elapsed). ${busy ? "Your current layout stays in place until the import finishes." : "Choose the other provider or import JSON while this image is processing."}`
                 : providerStatus[imageProvider]?.configured === false
-                  ? "This provider needs an API key in the server’s .env file."
+                  ? "This provider is not configured for this deployment."
                   : providerStatus[imageProvider] ? "This provider is ready for an image." : "Checking provider status…")}
             </p>
+            {providerStatus[imageProvider]?.model && <p id="image-provider-model" className="muted">Model: {providerStatus[imageProvider].model}</p>}
             <p className="muted">Scale uses printed dimensions first, then an estimate from doors and furniture when several objects agree. You can adjust estimates with Edit scale. If neither is usable, mark a known distance. Images are resized to at most 3072 pixels per side before being sent to your selected provider.</p>
             </>}
             {pendingCalibration&&<ScaleCalibrator key={pendingCalibration.extraction_id} pending={pendingCalibration} busy={busy} onApply={finishScale}/>}
@@ -1724,7 +1768,7 @@ export default function Workspace({
               Download sample JSON
             </button>
             <p className="dialog-note">
-              PNG, JPEG, and WebP extraction uses your server’s provider key.
+              PNG, JPEG, and WebP images are read with the selected model.
               Export PDF pages as images first. Imported walls, doors, exits, and furniture can be corrected in this workspace.
             </p>
             </>}

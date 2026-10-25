@@ -1,6 +1,6 @@
 # Staged floor-plan extraction
 
-Large uploads now keep a canonical image up to 3072 pixels on its longest side. Images larger than 1092 pixels use the staged pipeline. Compact images retain the existing single-call path. No new packages or environment variables are required.
+Normal website imports keep a canonical image up to 3072 pixels on its longest side and use bounded whole-plan extraction, with at most one structural check for missing exits or partitions. This document describes the slower diagnostic pipeline and its historical evaluations. It runs only when `CROWDY_FLOORPLAN_EXTRACTION_MODE=diagnostic_staged` is explicitly set; leave that unset or `interactive` for production uploads.
 
 1. **Structure:** a common overview establishes the concave building boundary, room labels, major partitions, exterior openings and promising dimension regions.
 2. **Scale:** enlarged crops include the complete dimension span and a generous surrounding margin. A reading must explicitly have legible units and two visible endpoints; crop-edge/partial spans are rejected. Existing agreement checks still decide calibration. If the overview misses dimension windows, one independent full-image scale reading is attempted.
@@ -10,7 +10,7 @@ Large uploads now keep a canonical image up to 3072 pixels on its longest side. 
 6. **Image support:** staged wall proposals must follow contrasting neutral linework. Small endpoint corrections are bounded to four source pixels; unsupported proposals are excluded with an explicit coverage warning and retained in raw stage artifacts. Colored annotations and uniform access shading cannot support a wall. Explicit door gaps are excluded from solid-wall pixel checks. When verified walls have no interior doors, a separate doorway-only pass checks their parent IDs and jamb alignment; it does not invent gaps to make rooms connect. This remains a heuristic and can reject faint/occluded real walls.
 7. **Validation:** the existing layout compiler checks the converted metric geometry. Its issues remain visible in the editor. A candidate with compiler issues is a draft, not a simulation-ready result.
 
-The website submits an asynchronous import and polls progress, avoiding the old long HTTP request timeout. One job per provider may run at a time; each job makes at most two simultaneous provider calls. There are at most 16 wall crops, 16 furniture crops, two scale crops (or one full-image scale scan), one overview, one structure review, four entrance surveys, and 16 doorway-only reviews. No new stage starts after ten minutes; an already-running provider request may take up to its existing 175-second limit to finish. Failed detail regions prevent a supposedly complete import. A failed scale pass can still lead to the existing measurement tool. Provider transport retry limits and credential/error sanitization remain unchanged.
+The diagnostic path permits at most two simultaneous provider calls, up to 16 wall crops, 16 furniture crops, two scale crops (or one full-image scan), one overview, one structure review, four entrance surveys and 16 doorway-only reviews. Offline diagnostic extraction shares a ten-minute absolute deadline; each provider call is capped at 75 seconds and worker contexts propagate the remaining deadline to queued tasks. API imports additionally inherit the 90-second worker budget. This mode is intended for explicit offline evaluation, not interactive latency. Failed detail regions prevent an apparently complete import; scale failures may still open the measurement tool.
 
 Jobs are process-local and bounded to 32 results. A backend restart loses polling IDs, while images and stage observations persist on disk. Run one backend worker, as required by the existing process-local provider and simulator locks. This is not a durable distributed job queue.
 
@@ -21,7 +21,7 @@ Imported plans can now contain up to 1200 editable furniture items. Complex body
 From `backend/`, using the project's activated Python environment:
 
 ```sh
-python scripts/evaluate_extraction.py /path/to/floorplan.png --provider claude
+CROWDY_FLOORPLAN_EXTRACTION_MODE=diagnostic_staged python scripts/evaluate_extraction.py /path/to/floorplan.png --provider claude
 ```
 
 Add `--env /path/to/.env` when credentials are stored elsewhere. This sends the image to the selected configured provider and incurs its normal usage. Artifacts stay in ignored `data/pipeline-evaluation/`:
@@ -59,6 +59,6 @@ A fresh Claude run on the supplied Fine Arts image and a replay of its saved obs
 
 The 118-person, 300-second idealized run evacuated **104**, with **14 still moving at the time limit** and no geometrically trapped people. Interior door verification still returned zero confidently identified jamb pairs. Visual inspection still finds missing/obscured partitions and approximate outlines; these results must not be interpreted as complete architectural recognition or validated evacuation times. The importer exposes its uncertainty rather than inventing doors or deleting disconnected rooms to force a pass.
 
-A fresh compact import of the original office image recovered four walls, three interior doors, 33 furniture items and the left Welcome exit, with no compiler issues. Its automatic object-scale estimate allowed a full **80/80 evacuation in 58.64 simulated seconds**. Compact images keep their existing extraction path; the staged pixel-support heuristic is not applied to them.
+A fresh compact import of the original office image recovered four walls, three interior doors, 33 furniture items and the left Welcome exit, with no compiler issues. Its automatic object-scale estimate allowed a full **80/80 evacuation in 58.64 simulated seconds**. Interactive imports now use the whole-plan path at every image size; the diagnostic pixel-support heuristic is not automatically selected.
 
 The Next.js proxy permits simulation responses up to 16 MiB (other JSON responses retain their 4 MiB limit). This fixes the supplied venue run being rejected after successful backend execution without discarding trajectory samples or changing physical results. Larger recorded runs can still exceed this bounded transfer limit.

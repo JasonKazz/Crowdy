@@ -1,6 +1,6 @@
 import {failure, forwardBackend, forwardBackendImage, readBackendBody} from "@/lib/backend-proxy";
 
-export const maxDuration = 200;
+export const maxDuration = 110;
 
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     return failure("Choose an image or Crowdy JSON floor plan.", 415);
   try {
     const body = await readBackendBody(request, 14 * 1024 * 1024);
-    return await forwardBackend(request, "/api/floorplans", body, 190_000);
+    return await forwardBackend(request, "/api/floorplans", body, 105_000);
   } catch (error) {
     return failure(error instanceof RangeError ? "Choose an image smaller than 10 MB." :
       "The floor plan request could not be read.", error instanceof RangeError ? 413 : 400);

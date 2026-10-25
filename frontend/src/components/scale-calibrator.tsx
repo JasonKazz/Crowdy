@@ -25,7 +25,7 @@ export default function ScaleCalibrator({pending,busy,onApply}: {pending: Pendin
         Apply image width</button>
       <p>Or use a measurement between two points below.</p>
     </div>}
-    <p>Click the two ends of a known measurement, then enter its length. Your extraction is saved; this does not call the model again.</p>
+    <p>Use a verified real-world distance, such as a wall length from a dimensioned plan. Click its two ends, then enter the length and units. Your extraction is saved; this does not call the model again.</p>
     <svg viewBox={`0 0 ${pending.width_px} ${pending.height_px}`} className="calibration-image"
       role="group" aria-label="Mark measurement endpoints on the source image"
       onPointerDown={event=>{
