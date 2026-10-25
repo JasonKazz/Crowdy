@@ -2741,6 +2741,7 @@ input::-webkit-inner-spin-button {
 .scale-width-adjustment label { display: grid; gap: 5px; font-size: 12px; }
 .scale-width-adjustment input { width: 100%; padding: 7px; background: white; border: 1px solid #cbd3c5; border-radius: 4px; }
 .scale-calibrator { border: 1px solid #cbd8c3; background: #f5f8f1; border-radius: 8px; padding: 14px; margin: 14px 0; }
+.scale-preview { border-left: 3px solid #78986a; padding: 8px 10px; background: #eaf0e4; color: #3e5834; font-size: 12px; line-height: 1.5; }
 .calibration-image { display: block; width: 100%; max-height: 320px; background: white; cursor: crosshair; touch-action: none; }
 .measurement-points, .measurement-input { display: flex; gap: 12px; margin: 12px 0; }
 .measurement-points fieldset { display: flex; gap: 8px; min-width: 0; flex: 1; border: 0; padding: 0; }
@@ -2774,5 +2775,6 @@ input::-webkit-inner-spin-button {
 .placement-preview-error { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 16px; color: #843c2f; background: #fff3ea; border-top: 1px solid #ebd4c5; font-size: 12px; line-height: 1.5; }
 .placement-preview-error p { margin: 0; }
 .placement-preview-error > div { display: flex; flex-wrap: wrap; gap: 16px; }
+.placement-preview-error > .placement-preview-message { display: grid; gap: 3px; flex: 1 1 320px; overflow-wrap: anywhere; }
 .placement-preview-error button { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .room-placement-warning { color: #786239; }

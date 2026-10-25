@@ -7,7 +7,7 @@ import { headingAt } from "@/lib/person-heading";
 import type { AgentPath, FloorPlan, PlanItem, Point, SimulationResult } from "@/lib/simulation";
 import type {PopulationPreview} from "@/lib/room-population";
 import GeometryEditorLayer from "./geometry-editor-layer";
-import type {GeometrySelection, GeometryTool} from "@/lib/native-editor";
+import {exitDoorEnds, nativeLayout, pixelPoint, type GeometrySelection, type GeometryTool} from "@/lib/native-editor";
 
 type Props = {
   plan: FloorPlan;
@@ -727,6 +727,19 @@ export default function FloorPlanView({
         ) : null}
 
         <g aria-label="Exits">
+          {plan.native && nativeLayout(plan).exits.map((exit,index)=>{
+            if("polygon" in exit)return null;
+            const ends=exitDoorEnds(nativeLayout(plan),exit).map(point=>pixelPoint(plan,point));
+            if(ends.length!==2)return null;
+            const label=`Exit ${index+1}`;
+            return <g key={`opening:${exit.id}`} aria-label={`${label}, ${exit.width.toFixed(2)} meters wide`}>
+              <title>{`${label} · ${exit.width.toFixed(2)} m wide`}</title>
+              <line x1={ends[0].x} y1={ends[0].y} x2={ends[1].x} y2={ends[1].y} stroke="#fbfcfa" strokeWidth="6" />
+              <line x1={ends[0].x} y1={ends[0].y} x2={ends[1].x} y2={ends[1].y} stroke="#397b51" strokeWidth="3" />
+              {mode!=="layout"&&<text x={(ends[0].x+ends[1].x)/2+8} y={(ends[0].y+ends[1].y)/2-8}
+                fontSize="9" fill="#315f45">{label}</text>}
+            </g>;
+          })}
           {plan.native ? (result?.exitZones ?? plan.native.exit_zones).map(zone=><polygon key={zone.id} points={zone.polygon.map(p=>`${p.x},${p.y}`).join(" ")}
             fill="#b9dcc1" stroke="#4d7750" strokeWidth="1"><title>{`${zone.id}${result?.exitWidths?.[zone.id] === undefined ? "" : `: ${result.exitWidths[zone.id].toFixed(2)} m wide`}`}</title></polygon>) : plan.exits.map((exit) => {
             const left = exit.x < viewWidth / 2;

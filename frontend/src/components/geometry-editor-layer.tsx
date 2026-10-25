@@ -101,11 +101,17 @@ export default function GeometryEditorLayer({plan,selection,tool,onSelect,onChan
       </g>;
     })}
     {layout.exits.map((exit,index)=>{if("polygon" in exit)return null;const edge=exitEdge(layout,exit);if(!edge)return null;
-      const p=pixelPoint(plan,along(edge.a,edge.b,exit.offset));return <g key={exit.id} role="button" tabIndex={0}
+      const p=pixelPoint(plan,along(edge.a,edge.b,exit.offset));
+      const selected=selection?.kind==="exit"&&selection.id===exit.id;
+      const label=`Exit ${index+1}`;
+      return <g key={exit.id} role="button" tabIndex={0}
         aria-label={`Select exterior exit ${index+1}`} aria-pressed={selection?.kind==="exit"&&selection.id===exit.id}
         onPointerDown={e=>begin(e,{kind:"exit",id:exit.id})} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onSelect({kind:"exit",id:exit.id});}}}>
-        <circle cx={p.x} cy={p.y} r="8" fill="#e5f5df" stroke={selection?.id===exit.id?"#245dca":"#4d7750"} strokeWidth="2" cursor="move"/>
-        <text x={p.x+11} y={p.y-9} fontSize="10" fill="#315f45" pointerEvents="none">Exit {index+1}</text>
+        <title>{`${label} · ${exit.width.toFixed(2)} m wide. Drag along the outline to move.`}</title>
+        <circle cx={p.x} cy={p.y} r="10" fill="transparent" cursor="move"/>
+        <circle cx={p.x} cy={p.y} r={selected?5:3} fill={selected?"#245dca":"#397b51"} stroke="white" strokeWidth="1.5" pointerEvents="none"/>
+        <text x={p.x+8} y={p.y-9} fontSize="9" fill="#315f45" stroke="#fbfcfa" strokeWidth="3" paintOrder="stroke" pointerEvents="none">
+          {label}{selected?` · ${exit.width.toFixed(2)} m`:""}</text>
       </g>;})}
     {start&&cursor&&(()=>{const a=pixelPoint(plan,start),b=pixelPoint(plan,cursor);return <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
       stroke="#245dca" strokeWidth="3" strokeDasharray="5 3" pointerEvents="none"/>;})()}

@@ -49,6 +49,16 @@ def replace_boundary_section(drawing, path, image_size):
     if any(Point(p).distance(line)>max_shift for p in path):
         return False
     begin,end=line.project(Point(path[0])),line.project(Point(path[-1]))
+    # A survey endpoint can land a fraction of a source pixel beside an
+    # existing corner. A tiny connector back to the old ring then crosses the
+    # adjacent edge and makes the whole otherwise valid survey self-intersect.
+    # Join only these endpoint roundoffs to the original ring. Door jambs and
+    # the surveyed boundary between the endpoints remain authoritative.
+    path=list(path)
+    for index,station in ((0,begin),(-1,end)):
+        seam=line.interpolate(station)
+        if Point(path[index]).distance(seam)<=2:
+            path[index]=seam.coords[0]
     forward=(end-begin)%line.length
     if forward>line.length/2:
         path=list(reversed(path));begin,end=end,begin;forward=line.length-forward
@@ -117,13 +127,19 @@ def apply_survey(drawing, marker_id, survey, size, offset, native_size, provider
 def install_openings(drawing, marker_id, path, openings):
     """Replace overlapping coarse bank markers, never unrelated entrances."""
     observed=LineString(path)
-    positions=[observed.project(Point(p)) for pair in openings for p in pair]
-    lower,upper=min(positions),max(positions)
+    intervals=[sorted(observed.project(Point(p)) for p in pair) for pair in openings]
     kept=[]
     for marker in drawing.exits:
         shape=Polygon([(p.x,p.y) for p in marker.polygon]);center=shape.centroid
-        distance=observed.project(center)
-        duplicate=(lower-4<=distance<=upper+4 and center.distance(observed)<=max(6,math.sqrt(shape.area)/2))
+        stations=[observed.project(Point(p.x,p.y)) for p in marker.polygon]
+        lower,upper=min(stations),max(stations)
+        # A survey may miss a real doorway between two that it can read. Only
+        # replace markers overlapping an actual new opening, not every marker
+        # inside the envelope of the entire entrance bank. A wide coarse bank
+        # still gets replaced when it covers an individual verified opening.
+        duplicate=(center.distance(observed)<=max(6,math.sqrt(shape.area)/2) and any(
+            min(upper,end)-max(lower,start) > .5*min(upper-lower,end-start)
+            for start,end in intervals))
         if marker.id!=marker_id and not duplicate:kept.append(marker)
     for index,(a,b) in enumerate(openings):
         length=math.dist(a,b);nx,ny=-(b[1]-a[1])/length,(b[0]-a[0])/length

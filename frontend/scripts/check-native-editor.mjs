@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {doorEnds, moveGeometry, nativeLayout, pixelPoint, wallShape, withNativeLayout, worldPoint} from "../src/lib/native-editor.ts";
+import {doorEnds, exitDoorEnds, moveGeometry, nativeLayout, pixelPoint, wallShape, withNativeLayout, worldPoint} from "../src/lib/native-editor.ts";
 import {validatePlan} from "../src/lib/plan-validation.ts";
 
 const layout=JSON.parse(readFileSync(new URL("../../examples/editable_office.json",import.meta.url),"utf8"));
 const base={id:"editor-test",name:"Editor test",width:900,height:600,area:160,items:[],walls:[],exits:[],
   native:{layout,transform:{pixels_per_metre:40,offset_x:100,offset_y:500},floors:[[{x:100,y:500},{x:740,y:500},{x:740,y:100},{x:100,y:100}]],walls:[],exit_zones:[]}};
 const plan=withNativeLayout(base,layout);
+assert.deepEqual(plan.exits.map(exit=>exit.label),["Exit 1","Exit 2"],
+  "Door labels must match the canvas numbering instead of exposing extraction IDs");
 for (const area of [14813.587936797483, 1e12])
   assert.equal(validatePlan({...plan,area}).area,area,"Large finite floor areas must remain importable");
 for (const [changes,message] of [
@@ -35,6 +37,12 @@ const exit=moveGeometry(plan,{kind:"exit",id:"exit-west"},[0,6]);
 assert.equal(nativeLayout(exit).exits[0].edge_index,3);
 assert.equal(nativeLayout(exit).exits[0].offset,4);
 assert.equal(exit.exits[0].y,260);
+const exitDoor=nativeLayout(exit).exits[0];
+const opening=exitDoorEnds(nativeLayout(exit),exitDoor);
+assert.ok(Math.abs(Math.hypot(opening[1][0]-opening[0][0],opening[1][1]-opening[0][1])-exitDoor.width)<1e-9,
+  "The displayed opening must match the physical door width, independent of the selection marker");
+assert.deepEqual(exitDoorEnds(nativeLayout(exit),{...exitDoor,floor_id:"missing"}),[],
+  "An invalid draft exit attachment must not draw an invented opening");
 const resized=moveGeometry(plan,{kind:"wall",id:"partition"},[8,1],"start");
 assert.deepEqual(nativeLayout(resized).walls[0].start,[8,1]);
 assert.equal(JSON.stringify(plan),before,"Editing must not mutate prior history or baseline plans");

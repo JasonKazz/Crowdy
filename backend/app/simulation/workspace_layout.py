@@ -84,9 +84,10 @@ def native_to_editor(data, strict=True):
     furniture_ids = {region.id for region in layout.furniture}
     exits = []
     zones = []
+    exit_labels = {door.id: f"Exit {index + 1}" for index, door in enumerate(layout.exits)}
     for region in exit_regions:
         centre = Polygon(region.polygon).centroid
-        exits.append({"id": region.id, "label": region.id[:80], **pixel_point((centre.x, centre.y), transform)})
+        exits.append({"id": region.id, "label": exit_labels[region.id], **pixel_point((centre.x, centre.y), transform)})
         zones.append({"id": region.id, "polygon": pixels(region.polygon)})
     # Invalid exterior doors must remain selectable in the editor even if a
     # valid outside removal strip cannot yet be generated.
@@ -94,7 +95,7 @@ def native_to_editor(data, strict=True):
         if not any(item["id"] == door.id for item in exits) and isinstance(door, ExitDoor):
             floor = next((f for f in layout.walkable_areas if f.id == door.floor_id), None)
             point = floor.polygon[door.edge_index % len(floor.polygon)] if floor else (0, 0)
-            exits.append({"id": door.id, "label": door.id[:80], **pixel_point(point, transform)})
+            exits.append({"id": door.id, "label": exit_labels[door.id], **pixel_point(point, transform)})
     source = layout.source_image
     image = None
     if source:

@@ -27,6 +27,8 @@ from app.services.floorplans.interactive import (
     INTERACTIVE_REVIEW_WARNING, check_extraction_time, extraction_mode, extraction_scope,
     review_interactive_structure, validate_interactive_observations,
 )
+from app.services.floorplans.interactive_exits import review_interactive_exits
+from app.services.floorplans.interactive_doors import review_interactive_doors
 from app.services.floorplans.calibration import calibrate, calibrate_drawing
 from app.services.floorplans.storage import read_artifact, write_artifact
 
@@ -289,7 +291,7 @@ def drawing_to_layout(drawing: ExtractedDrawing, source: SourceImage, provider: 
             exits.append(marker)
             continue
         try:
-            opening = exit_from_marker(marker, floors)
+            opening = exit_from_marker(marker, floors, jamb_tolerance=2 * source.meters_per_pixel)
         except ValueError:
             info.warnings.insert(0,f"Review required: exit '{item.id}' does not align with a usable exterior edge; omitted from the draft. Add/correct it over the image.")
             continue
@@ -366,6 +368,14 @@ def _extract_image(request: ExtractionRequest, root: Path, progress, *, mode: st
                                                                drawing, progress)
                 if review is not None:
                     write_artifact(root, directory / "structure-review.json", json.dumps(review, indent=2).encode())
+                drawing, door_review = review_interactive_doors(
+                    provider, image, original.width_px, original.height_px, drawing, progress)
+                if door_review is not None:
+                    write_artifact(root, directory / "door-source-review.json", json.dumps(door_review, indent=2).encode())
+                drawing, entrance_review = review_interactive_exits(
+                    provider, image, original.width_px, original.height_px, drawing, progress)
+                if entrance_review is not None:
+                    write_artifact(root, directory / "entrance-review.json", json.dumps(entrance_review, indent=2).encode())
             check_extraction_time(deadline, cancelled)
             if progress:
                 progress("Checking extracted geometry and scale")
@@ -409,8 +419,17 @@ def save_candidate(drawing, source, info, people_count, directory, root):
         staged = True
     except FileNotFoundError:
         staged = False
+    try:
+        entrance_review = json.loads(read_artifact(root, directory / "entrance-review.json"))
+        surveyed = entrance_review.get("verified_openings", 0) > 0
+    except FileNotFoundError:
+        surveyed = False
     layout = drawing_to_layout(drawing, source, info.provider, info, people_count,
-                               allow_review=staged)
+                               allow_review=staged or surveyed)
+    if surveyed:
+        layout.extraction.warnings.insert(0,
+            f"{entrance_review['verified_openings']} doorway observations checked at source resolution; "
+            f"{len(layout.exits)} usable exterior exit openings mapped to the floor boundary.")
     notes = list(layout.extraction.warnings)
     if source.calibration and source.calibration.method == "estimated":
         notes.append("Scale estimated from assumed object sizes. Use Edit scale to replace it with a known measurement.")

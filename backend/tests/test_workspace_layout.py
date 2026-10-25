@@ -66,6 +66,8 @@ class WorkspaceLayoutTests(unittest.TestCase):
             self.assertLess(Polygon(old["polygon"]).symmetric_difference(Polygon(new.polygon)).area, 1e-10)
         self.assertTrue(plan["native"]["walls"])
         self.assertEqual(len(plan["native"]["exit_zones"]), 2)
+        self.assertEqual([exit["label"] for exit in plan["exits"]], ["Exit 1", "Exit 2"])
+        self.assertEqual([exit["id"] for exit in plan["exits"]], [exit["id"] for exit in self.source["exits"]])
         self.assertEqual(len(self.source["occupants"]), 40)
 
     def test_editor_comparison_preserves_people_and_allows_all_exits_blocked(self):

@@ -435,7 +435,7 @@ export default function Workspace({
   function acceptImport(data: {plan: unknown;warnings?:string[]}) {
     const next=validatePlan(data.plan);
     editPlan(next);setBaseline(null);setResult(null);setPopulationPreview(null);setScenario({...scenario,blockedExitIds:[],distribution:"normal",population:{}});setSelectedId(null);setGeometrySelection(null);setGeometryTool("select");
-    setMode("layout");setModal(null);setPendingCalibration(null);setCalibratingExisting(false);setError("");setRunError("");
+    setMode("layout");setZoom(1);setModal(null);setPendingCalibration(null);setCalibratingExisting(false);setError("");setRunError("");
     const calibration=next.native?nativeLayout(next).source_image?.calibration:null;
     setNotice((calibration?.method==="automatic"?`Scale detected from ${calibration.label}. `:
       calibration?.method==="estimated"?"Scale estimated from doors and furniture. Edit scale to adjust it. ":"")+
@@ -466,14 +466,31 @@ export default function Workspace({
     finally{setBusy(false);}
   }
 
+  function editScale() {
+    if(busy||!plan.native?.image)return;
+    const source=nativeLayout(plan).source_image;
+    if(!source)return;
+    setCalibratingExisting(true);
+    setError("");
+    setPendingCalibration({needs_scale:true,extraction_id:"recalibrate",image_id:source.id,
+      width_px:source.width_px,height_px:source.height_px,
+      current_width_m:source.width_px*source.meters_per_pixel,
+      reason:"Mark a known distance or enter the full image width to correct the current scale. Your wall, door, and furniture edits will be preserved."});
+    setModal("upload");
+  }
+
   function inspectPlacementGeometry() {
     setSidebarTab("editing");
     setPlaying(false);
     setSelectedId(null);
-    const wallId = /Wall '([^']+)'/.exec(placement.error)?.[1];
-    if (plan.native && wallId && nativeLayout(plan).walls.some(wall => wall.id === wallId)) {
-      setGeometrySelection({kind: "wall", id: wallId});
-      setGeometryTool("select");
+    const match = /\b(Wall|Door|Exit) '([^']+)'/i.exec(placement.error);
+    if (plan.native && match) {
+      const kind=match[1].toLowerCase() as "wall"|"door"|"exit";
+      const elements=nativeLayout(plan)[kind==="wall"?"walls":kind==="door"?"doors":"exits"];
+      if(elements.some(element=>element.id===match[2])) {
+        setGeometrySelection({kind,id:match[2]});
+        setGeometryTool("select");
+      }
     }
     requestAnimationFrame(() => {
       geometryPanelRef.current?.scrollIntoView({block: "nearest"});
@@ -821,21 +838,7 @@ export default function Workspace({
                 <button
                   className="text-button"
                   disabled={busy}
-                  onClick={() => {
-                    const source = nativeLayout(plan).source_image!;
-                    setCalibratingExisting(true);
-                    setError("");
-                    setPendingCalibration({
-                      needs_scale: true,
-                      extraction_id: "recalibrate",
-                      image_id: source.id,
-                      width_px: source.width_px,
-                      height_px: source.height_px,
-                      current_width_m: source.width_px * source.meters_per_pixel,
-                      reason: "Mark a known distance or enter the full image width to correct the current scale. Your wall, door, and furniture edits will be preserved.",
-                    });
-                    setModal("upload");
-                  }}
+                  onClick={editScale}
                 >
                   Edit scale
                 </button>
@@ -1247,9 +1250,13 @@ export default function Workspace({
           </div>
           {mode === "layout" && placement.error && (
             <div className="placement-preview-error" role="alert">
-              <p><strong>People preview unavailable.</strong> {scenario.occupancy} requested; no people placed. Review the layout or retry.</p>
+              <div className="placement-preview-message">
+                <p><strong>People preview unavailable.</strong> {scenario.occupancy} requested; no people placed.</p>
+                <p>{placement.error}</p>
+              </div>
               <div>
                 <button type="button" className="text-button" disabled={busy} onClick={inspectPlacementGeometry}>{plan.native ? "Check walls & doors" : "Review layout"}</button>
+                {plan.native?.image&&<button type="button" className="text-button" disabled={busy} onClick={editScale}>Edit scale</button>}
                 <button type="button" className="text-button" disabled={busy} onClick={() => {
                   setPlacementStatus({key: populationKey, loading: true, error: ""});
                   setPlacementRetry(previous => previous + 1);

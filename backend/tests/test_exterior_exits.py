@@ -104,6 +104,66 @@ class ExteriorExitTests(unittest.TestCase):
             self.assertEqual(observed.edge_index,door.edge_index)
             self.assertAlmostEqual(observed.width,door.width)
 
+    def test_marker_crossing_a_short_boundary_chord_requires_review(self):
+        floor = Region(id="curved-hall", polygon=[
+            (0, 0), (10, 0), (10, 4.8), (10.2, 5), (10, 5.2), (10, 10), (0, 10),
+        ])
+        marker = Region(id="observed-door", polygon=[
+            (10.05, 4.6), (10.15, 4.6), (10.15, 5.4), (10.05, 5.4),
+        ])
+        # Mapping it to an adjacent vertical edge would preserve width but move
+        # the doorway centre by 60 cm onto a different part of the wall.
+        with self.assertRaisesRegex(ValueError, "not near a usable exterior edge"):
+            exit_from_marker(marker, [floor])
+
+    def test_marker_cannot_be_shifted_far_along_an_edge_to_make_it_fit(self):
+        floor = Region(id="floor", polygon=[(0, 0), (10, 0), (10, 10), (0, 10)])
+        marker = Region(id="oversized-corner-door", polygon=[
+            (9.95, -.5), (10.05, -.5), (10.05, 2.5), (9.95, 2.5),
+        ])
+        # Its centre is on the east edge, but fitting the full 3 m opening would
+        # move that centre 50 cm away from the actual observation.
+        with self.assertRaisesRegex(ValueError, "not near a usable exterior edge"):
+            exit_from_marker(marker, [floor])
+
+    def test_source_pixel_roundoff_at_a_jamb_is_scale_independent(self):
+        for factor in (1, 4):
+            data = room().model_dump(mode="json")
+            data["walkable_areas"][0]["polygon"] = [
+                [x * factor, y * factor] for x, y in data["walkable_areas"][0]["polygon"]
+            ]
+            data["exits"] = [{"id": "rounded-jamb", "polygon": [
+                [x * factor, y * factor] for x, y in [(9.99, -.03), (10.01, -.03), (10.01, .97), (9.99, .97)]
+            ]}]
+            data["source_image"] = {"id": "a" * 32, "width_px": 500, "height_px": 400,
+                                    "meters_per_pixel": .02 * factor, "scale_confirmed": True}
+            data["extraction"] = info().model_dump(mode="json")
+            observed = load_layout(data).exits[0]
+            self.assertEqual(observed.edge_index, 1)
+            self.assertAlmostEqual(observed.width, factor)
+            self.assertAlmostEqual(observed.offset, .5 * factor)
+            # Three source pixels of error must stay a review issue.
+            data["exits"][0]["polygon"][0][1] = -.06 * factor
+            data["exits"][0]["polygon"][1][1] = -.06 * factor
+            with self.assertRaisesRegex(ValueError, "not near a usable exterior edge"):
+                load_layout(data)
+
+    def test_legacy_deep_exit_marker_keeps_its_nearest_wall_and_width(self):
+        floor = Region(id="floor", polygon=[(0, 0), (10, 0), (10, 10), (0, 10)])
+        marker = Region(id="legacy-marker", polygon=[(8.9, 4.5), (10.9, 4.5), (10.9, 5.5), (8.9, 5.5)])
+        observed = exit_from_marker(marker, [floor])
+        self.assertEqual(observed.edge_index, 1)
+        self.assertAlmostEqual(observed.width, 1)
+        self.assertAlmostEqual(observed.offset, 5)
+
+    def test_marker_does_not_fall_back_to_a_distant_fitting_edge(self):
+        floor = Region(id="narrow-floor", polygon=[(0, 0), (.4, 0), (.4, 10), (0, 10)])
+        marker = Region(id="wide-observation", polygon=[
+            (-.3, 11), (.7, 11), (.7, 11.1), (-.3, 11.1),
+        ])
+        with self.assertRaisesRegex(ValueError, "not near a usable exterior edge"):
+            exit_from_marker(marker, [floor])
+
     def test_angled_boundary_uses_outward_normal(self):
         layout = room()
         layout.walkable_areas[0].polygon = [(0, 0), (10, 0), (12, 8), (2, 8)]

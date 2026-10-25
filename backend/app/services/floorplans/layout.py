@@ -22,24 +22,26 @@ def wall_polygon(wall: Wall, start: float, end: float) -> list[tuple[float, floa
             (b[0] - nx, b[1] - ny), (a[0] - nx, a[1] - ny)]
 
 
-def _only_boundary_endcaps_protrude(wall: Wall, footprint, floor) -> bool:
+def _only_boundary_endcaps_protrude(wall: Wall, footprint, floor, endpoint_tolerance=GEOMETRY_TOLERANCE) -> bool:
     """Allow a local thickness overhang where an interior wall meets an edge."""
     centerline = LineString([wall.start, wall.end])
-    if not floor.buffer(GEOMETRY_TOLERANCE).covers(centerline):
+    if not floor.buffer(endpoint_tolerance).covers(centerline):
         return False
     endpoints = [Point(wall.start), Point(wall.end)]
     contacts = [point for point in endpoints
-                if point.distance(floor.boundary) <= wall.thickness / 2 + GEOMETRY_TOLERANCE]
+                if point.distance(floor.boundary) <= wall.thickness / 2 + endpoint_tolerance]
     if not contacts:
         return False
     # A centerline on the exterior edge is still an invalid interior wall.
     # Intermediate boundary contacts (including a concave notch) need review.
-    endpoint_tolerance = unary_union([point.buffer(GEOMETRY_TOLERANCE) for point in endpoints])
-    if not centerline.intersection(floor.boundary).difference(endpoint_tolerance).is_empty:
+    endpoint_regions = unary_union([point.buffer(endpoint_tolerance) for point in endpoints])
+    if not centerline.intersection(floor.boundary).difference(endpoint_regions).is_empty:
+        return False
+    if not centerline.difference(floor.buffer(GEOMETRY_TOLERANCE)).difference(endpoint_regions).is_empty:
         return False
     # Reject long strips along a nearby boundary. Clipping is limited to one
     # physical wall thickness around an endpoint whose thickness reaches an edge.
-    caps = unary_union([point.buffer(wall.thickness + GEOMETRY_TOLERANCE) for point in contacts])
+    caps = unary_union([point.buffer(wall.thickness + endpoint_tolerance) for point in contacts])
     return caps.covers(footprint.difference(floor.buffer(GEOMETRY_TOLERANCE)))
 
 
@@ -115,7 +117,16 @@ def compile_layout(layout: Layout) -> Scenario:
             id=wall.id, polygon=wall_polygon(wall, 0, math.dist(wall.start, wall.end)),
         ))
         clip_endcaps = not floor.covers(full_wall) and not floor.buffer(GEOMETRY_TOLERANCE).covers(full_wall)
-        if clip_endcaps and not _only_boundary_endcaps_protrude(wall, full_wall, floor):
+        # Independently observed image coordinates can differ by a fraction of
+        # one source pixel at a shared junction. Permit that rounding only at
+        # the wall endpoints, capped at 2 cm and a quarter of its thickness.
+        # Keep the floor and editable centerlines intact; only outside solids
+        # are clipped. Interior crossings and longer boundary strips still fail.
+        endpoint_tolerance = GEOMETRY_TOLERANCE
+        if layout.source_image and layout.extraction:
+            endpoint_tolerance = max(endpoint_tolerance, min(
+                .5 * layout.source_image.meters_per_pixel, wall.thickness / 4, .02))
+        if clip_endcaps and not _only_boundary_endcaps_protrude(wall, full_wall, floor, endpoint_tolerance):
             raise ValueError(f"Wall '{wall.id}' extends outside the floor. "
                              "Move or remove this wall in Walls & doors, or correct the floor outline.")
         cursor = 0.0

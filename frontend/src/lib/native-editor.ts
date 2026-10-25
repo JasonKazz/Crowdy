@@ -59,6 +59,13 @@ export function exitEdge(layout: NativeLayout, exit: NativeExit) {
   return {a,b,length,normal:[sign*(b[1]-a[1])/length,-sign*(b[0]-a[0])/length] as XY};
 }
 
+/** The real doorway span on the floor outline, before its outside landing. */
+export function exitDoorEnds(layout: NativeLayout, exit: NativeExit): XY[] {
+  const edge=exitEdge(layout,exit);
+  return edge ? [along(edge.a,edge.b,exit.offset-exit.width/2),
+    along(edge.a,edge.b,exit.offset+exit.width/2)] : [];
+}
+
 /** A drawing preview only. The Python compiler validates every actual run. */
 export function withNativeLayout(plan: FloorPlan, layout: NativeLayout): FloorPlan {
   const next=structuredClone(plan), native=next.native!;
@@ -77,21 +84,22 @@ export function withNativeLayout(plan: FloorPlan, layout: NativeLayout): FloorPl
     }
   }
   native.exit_zones=[];
-  next.exits=layout.exits.map(exit=>{
+  next.exits=layout.exits.map((exit,index)=>{
+    const label=`Exit ${index+1}`;
     if("polygon" in exit) {
       const polygon=pixels(exit.polygon);
       native.exit_zones.push({id:exit.id,polygon});
-      return {id:exit.id,label:exit.id,x:polygon.reduce((s,p)=>s+p.x,0)/polygon.length,y:polygon.reduce((s,p)=>s+p.y,0)/polygon.length};
+      return {id:exit.id,label,x:polygon.reduce((s,p)=>s+p.x,0)/polygon.length,y:polygon.reduce((s,p)=>s+p.y,0)/polygon.length};
     }
     const edge=exitEdge(layout,exit);
-    if(!edge) return {id:exit.id,label:exit.id,x:0,y:0};
+    if(!edge) return {id:exit.id,label,x:0,y:0};
     const centre=along(edge.a,edge.b,exit.offset);
     const position=(offset:number,depth:number):XY=>{const p=along(edge.a,edge.b,offset);return [p[0]+edge.normal[0]*depth,p[1]+edge.normal[1]*depth];};
     const r=layout.agent_defaults.radius;
     native.exit_zones.push({id:exit.id,polygon:pixels([
       position(exit.offset-exit.width/2+.01,r+.02),position(exit.offset+exit.width/2-.01,r+.02),
       position(exit.offset+exit.width/2-.01,r+.20),position(exit.offset-exit.width/2+.01,r+.20)])});
-    return {id:exit.id,label:exit.id,...pixelPoint(next,centre)};
+    return {id:exit.id,label,...pixelPoint(next,centre)};
   });
   return next;
 }

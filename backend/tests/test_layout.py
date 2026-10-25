@@ -8,6 +8,7 @@ from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
 from app.schemas.layout import Layout, load_layout
+from app.schemas.extraction import ExtractionInfo, SourceImage
 from app.schemas.scenario import Occupant, Region, Scenario
 from app.services.floorplans.layout import compile_layout, wall_polygon
 from app.simulation.animate import render_html
@@ -32,7 +33,49 @@ def angled_boundary_office():
     return layout
 
 
+def image_office():
+    layout = angled_boundary_office()
+    layout.source_image = SourceImage(id="a" * 32, width_px=1600, height_px=1000,
+                                      meters_per_pixel=.02, scale_confirmed=True)
+    layout.extraction = ExtractionInfo(id="b" * 32, provider="claude", model="test", elapsed_seconds=0, warnings=[])
+    return layout
+
+
 class LayoutTests(unittest.TestCase):
+    def test_image_subpixel_endpoint_rounding_clips_only_outside_solids(self):
+        layout = image_office()
+        layout.walls[0].end = (14.002, 8.002)
+        before = layout.model_dump()
+        wall = layout.walls[0]
+        floor = Polygon(layout.walkable_areas[0].polygon)
+        centerline = LineString([wall.start, wall.end])
+        self.assertFalse(floor.covers(centerline))
+        full_wall = Polygon(wall_polygon(wall, 0, centerline.length))
+        door = layout.doors[0]
+        opening = Polygon(wall_polygon(wall, door.offset - door.width / 2, door.offset + door.width / 2))
+        expected = full_wall.difference(opening).intersection(floor)
+        scenario = compile_layout(layout)
+        solids = unary_union([Polygon(item.polygon) for item in scenario.obstacles])
+        self.assertLess(solids.symmetric_difference(expected).area, 1e-12)
+        self.assertEqual(layout.model_dump(), before)
+
+    def test_image_rounding_never_allows_real_overshoot_or_interior_boundary_crossing(self):
+        for endpoint in ((14.02, 8.02), (14.2, 8.2)):
+            layout = image_office()
+            layout.walls[0].end = endpoint
+            with self.subTest(endpoint=endpoint), self.assertRaisesRegex(ValueError, "Wall.*outside"):
+                compile_layout(layout)
+        layout = angled_boundary_office()
+        layout.walls[0].end = (14.002, 8.002)
+        with self.assertRaisesRegex(ValueError, "Wall.*outside"):
+            compile_layout(layout)
+        layout = image_office()
+        layout.walkable_areas[0].polygon = [(0, 0), (16, 0), (16, 10), (10, 10), (10, 7.999), (8, 7.999), (8, 10), (0, 10)]
+        layout.walls[0].start, layout.walls[0].end = (6, 8), (12, 8)
+        layout.exits[0].edge_index = 7
+        with self.assertRaisesRegex(ValueError, "Wall.*outside"):
+            compile_layout(layout)
+
     def test_original_scenario_import_preserves_simulation_inputs(self):
         for name in ("simple_room.json", "two_exit_room.json"):
             original = Scenario.model_validate_json((EXAMPLES / name).read_text())

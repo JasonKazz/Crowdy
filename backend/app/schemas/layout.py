@@ -47,7 +47,7 @@ class ExitDoor(InputModel):
     outside_width: float | None = Field(default=None, gt=0)
 
 
-def exit_from_marker(marker: Region, floors: list[Region]) -> ExitDoor:
+def exit_from_marker(marker: Region, floors: list[Region], *, jamb_tolerance: float = 1e-8) -> ExitDoor:
     """Upgrade an image observation to an opening, preserving its observed width.
 
     The model's rectangle only locates the door. Its projection along the nearest
@@ -68,15 +68,22 @@ def exit_from_marker(marker: Region, floors: list[Region]) -> ExitDoor:
             offset = min(length, max(0, projection))
             distance = math.dist(center, (start[0] + ux * offset, start[1] + uy * offset))
             spans = [(x - start[0]) * ux + (y - start[1]) * uy for x, y in marker.polygon]
-            choices.append((distance, floor.id, index, offset, max(spans) - min(spans), length))
+            choices.append((distance, floor.id, index, min(spans), max(spans), length))
     if not choices:
         raise ValueError(f"Exit '{marker.id}' has no usable floor boundary")
-    distance, floor_id, index, offset, width, length = min(choices)
-    if distance > 0.75 or width < 1e-6 or width > length + 1e-8:
+    distance, floor_id, index, lower, upper, length = min(choices)
+    width = upper - lower
+    # Keep the observed jambs on their nearest wall. A short chord or a real
+    # corner needs source review rather than moving the door onto another edge.
+    # Only source-pixel rounding (or numerical roundoff without a source image)
+    # may be clamped at an endpoint; the 0.75 m proximity limit is not permission
+    # to slide an opening that far along the wall.
+    if distance > 0.75 or width < 1e-6 or lower < -jamb_tolerance or upper > length + jamb_tolerance:
         raise ValueError(f"Exit '{marker.id}' is not near a usable exterior edge. Add an exterior exit door manually.")
-    width = min(width, length)  # Floating-point projection at exact jamb vertices.
+    width = min(width, length)
+    offset = min(length - width / 2, max(width / 2, (lower + upper) / 2))
     return ExitDoor(id=marker.id, floor_id=floor_id, edge_index=index,
-                    offset=min(length - width / 2, max(width / 2, offset)), width=width)
+                    offset=offset, width=width)
 
 
 class Layout(InputModel):
@@ -112,7 +119,8 @@ class Layout(InputModel):
         if self.source_image and self.extraction:
             # Also upgrades previously exported image layouts without another
             # model call. Never reinterpret legacy simulation scenario exits.
-            self.exits = [exit_from_marker(item, self.walkable_areas) if isinstance(item, Region)
+            self.exits = [exit_from_marker(item, self.walkable_areas,
+                                          jamb_tolerance=max(1e-8, 2 * self.source_image.meters_per_pixel)) if isinstance(item, Region)
                           else item for item in self.exits]
         return self
 
