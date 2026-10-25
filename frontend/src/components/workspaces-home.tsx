@@ -5,6 +5,7 @@ import WorkspaceLink from "./workspace-link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import Icon from "./icon";
+import BrandLogo from "./brand-logo";
 import { SAMPLE_PLAN, type FloorPlan } from "@/lib/simulation";
 import {
   createWorkspace,
@@ -407,11 +408,25 @@ export default function WorkspacesHome() {
 
   return (
     <main className={styles.home}>
+      <section className={styles.intro} aria-labelledby="intro-title">
+        <div className={styles.introCopy}>
+          <h1 id="intro-title"><span>Plan what’s next.</span></h1>
+          <p className={styles.introDescription}>
+            Test evacuation plans for safer spaces.
+          </p>
+        </div>
+        <div className={styles.introArt} aria-hidden="true">
+          <span className={styles.orbit} />
+          <span className={styles.orbitInner} />
+          <BrandLogo variant="symbol" alt="" className={styles.heroSymbol} />
+        </div>
+      </section>
+
       <div className={styles.heading}>
         <div>
-          <h1 id="workspaces-title">
+          <h2 id="workspaces-title">
             {!isLoading && ownerId ? "Your workspaces" : "Workspaces"}
-          </h1>
+          </h2>
           <p>
             {isLoading
               ? "Checking your account…"

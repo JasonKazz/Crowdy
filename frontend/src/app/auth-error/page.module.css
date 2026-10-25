@@ -7,12 +7,12 @@
 .message {
   max-width: 440px;
   padding: 32px;
-  background: #fdfefa;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 7px;
 }
 .label {
-  color: #627455;
+  color: var(--muted);
   font-size: 10px;
   letter-spacing: 1.4px;
 }
@@ -24,7 +24,7 @@
 }
 .message p {
   margin-top: 12px;
-  color: #627455;
+  color: var(--muted);
   font-size: 13px;
   line-height: 1.8;
 }

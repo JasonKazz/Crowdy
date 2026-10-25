@@ -1,0 +1,45 @@
+.logo {
+  position: relative;
+  display: block;
+  flex-shrink: 0;
+  overflow: hidden;
+  /* Keep the supplied artwork intact while its light paper blends into the UI. */
+  mix-blend-mode: multiply;
+}
+
+.logo > img {
+  position: absolute;
+  display: block;
+  max-width: none;
+  height: auto;
+  pointer-events: none;
+  user-select: none;
+}
+
+.wordmark {
+  width: 144px;
+  aspect-ratio: 1205 / 378;
+}
+
+.wordmark > img {
+  width: 127.4689%;
+  left: -13.8589%;
+  top: -88.3598%;
+}
+
+.symbol {
+  width: 168px;
+  aspect-ratio: 927 / 762;
+}
+
+.symbol > img {
+  width: 135.2751%;
+  left: -17.5836%;
+  top: -30.315%;
+}
+
+@media (max-width: 700px) {
+  .wordmark {
+    width: 118px;
+  }
+}
